@@ -54,23 +54,33 @@ export function parseTranscriptItems(content: string): { at: string; items: Tran
         turns.push(current);
         continue;
       }
-      // tool_result 数组：补对应工具条目的完成态
-      if (Array.isArray(message.content) && current) {
-        for (const it of message.content as Record<string, unknown>[]) {
-          if (it.type !== "tool_result" || typeof it.tool_use_id !== "string") continue;
-          const key = `tool:${it.tool_use_id}`;
-          const owner = current.items.find((x) => x.dedupeKeys.includes(key));
-          if (owner && !owner.seeds.some((s) => s.seed.type === "tool_completed")) {
-            owner.seeds.push({
-              seed: {
-                type: "tool_completed",
-                itemId: it.tool_use_id,
-                status: "completed",
-                durationMs: 0,
-                output: flattenContent(it.content),
-              },
-              at,
-            });
+      // 数组形态用户行：含 text 块 = 新一轮（claude 2.1.317 起用户输入也写为 text 块数组）；
+      // 仅 tool_result 的数组行不另起轮（在既有轮内补对应工具条目的完成态）
+      if (Array.isArray(message.content)) {
+        const blocks = message.content as Record<string, unknown>[];
+        const hasText = blocks.some((b) => b.type === "text" && typeof b.text === "string" && b.text.length > 0);
+        if (hasText) {
+          current = { at, items: [] };
+          turns.push(current);
+          continue;
+        }
+        if (current) {
+          for (const it of blocks) {
+            if (it.type !== "tool_result" || typeof it.tool_use_id !== "string") continue;
+            const key = `tool:${it.tool_use_id}`;
+            const owner = current.items.find((x) => x.dedupeKeys.includes(key));
+            if (owner && !owner.seeds.some((s) => s.seed.type === "tool_completed")) {
+              owner.seeds.push({
+                seed: {
+                  type: "tool_completed",
+                  itemId: it.tool_use_id,
+                  status: "completed",
+                  durationMs: 0,
+                  output: flattenContent(it.content),
+                },
+                at,
+              });
+            }
           }
         }
       }

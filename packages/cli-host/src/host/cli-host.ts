@@ -11,6 +11,7 @@ export type HostCommand =
   | { kind: "resolveApproval"; sessionId: string; requestId: string; decision: string }
   | { kind: "readHistory"; sessionId: string }
   | { kind: "resume"; sessionId: string }
+  | { kind: "adoptSession"; sessionId: string; nativeSessionId: string; cwd: string; cli: string; permMode?: string; model?: string }
   | { kind: "dispose"; sessionId?: string };
 
 /** 命令结果载荷（createSession 附 sessionId/nativeSessionId；readHistory 附事件数组；其余 void） */
@@ -73,6 +74,16 @@ export class CliHost {
         return { events: await this.router.readHistory(cmd.sessionId) };
       case "resume":
         await this.router.resume(cmd.sessionId);
+        return {};
+      case "adoptSession":
+        await this.router.adoptSession({
+          sessionId: cmd.sessionId,
+          nativeSessionId: cmd.nativeSessionId,
+          cwd: cmd.cwd,
+          permMode: cmd.permMode as never,
+          model: cmd.model,
+          cli: cmd.cli,
+        });
         return {};
       case "dispose":
         await this.router.dispose(cmd.sessionId ? { sessionId: cmd.sessionId } : undefined);

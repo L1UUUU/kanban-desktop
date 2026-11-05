@@ -14,19 +14,27 @@ export interface TerminalConfig {
   shell: string | null;
 }
 
+/** 退出序列配置（spec H：有限等待/受控终止的时长参数，不硬编码） */
+export interface ShutdownConfig {
+  /** 活跃会话有序取消后的有限等待上限 ms（等待各会话离开 running/waiting；缺省 3000） */
+  graceMs: number;
+}
+
 export interface AppConfig {
   cliExe: CliExeConfig;
   /** 当前项目 id（项目注册/切换时持久化，重启恢复；null=尚无项目） */
   currentProjectId: string | null;
   terminal: TerminalConfig;
+  shutdown: ShutdownConfig;
 }
 
-/** 默认配置：三 CLI exe 均为占位 null；终端 shell 自动探测 */
+/** 默认配置：三 CLI exe 均为占位 null；终端 shell 自动探测；退出等待 3s */
 export function defaultConfig(): AppConfig {
   return {
     cliExe: { codex: null, claude: null, opencode: null },
     currentProjectId: null,
     terminal: { shell: null },
+    shutdown: { graceMs: 3000 },
   };
 }
 
@@ -54,6 +62,10 @@ export function loadConfig(path: string): AppConfig {
   if (typeof current === "string" && current.length > 0) fallback.currentProjectId = current;
   const termShell = (raw as { terminal?: { shell?: unknown } }).terminal?.shell;
   if (typeof termShell === "string" && termShell.length > 0) fallback.terminal.shell = termShell;
+  const graceMs = (raw as { shutdown?: { graceMs?: unknown } }).shutdown?.graceMs;
+  if (typeof graceMs === "number" && Number.isFinite(graceMs) && graceMs > 0 && graceMs <= 60_000) {
+    fallback.shutdown.graceMs = Math.floor(graceMs);
+  }
   return fallback;
 }
 

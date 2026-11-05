@@ -61,7 +61,7 @@ describe("saveConfig / loadConfig 往返", () => {
   it("save 后 load 得到等值配置（含父目录自动创建）", () => {
     const dir = newTempDir();
     const path = join(dir, "nested", "config.json");
-    saveConfig(path, { cliExe: { codex: "C:/codex.exe", claude: null, opencode: "C:/oc.exe" }, currentProjectId: "p-9", terminal: { shell: null } });
+    saveConfig(path, { cliExe: { codex: "C:/codex.exe", claude: null, opencode: "C:/oc.exe" }, currentProjectId: "p-9", terminal: { shell: null }, shutdown: { graceMs: 3000 } });
     const loaded = loadConfig(path);
     expect(loaded.cliExe).toEqual({ codex: "C:/codex.exe", claude: null, opencode: "C:/oc.exe" });
     expect(loaded.currentProjectId).toBe("p-9");
@@ -71,5 +71,19 @@ describe("saveConfig / loadConfig 往返", () => {
 describe("detectCliExe（探测占位）", () => {
   it("返回三 CLI null 占位形状（真实探测由后续 Adapter 工单接入，spec G）", () => {
     expect(detectCliExe()).toEqual({ codex: null, claude: null, opencode: null });
+  });
+});
+
+describe("退出序列配置（#13/spec H 参数进 config 不硬编码）", () => {
+  it("缺省 graceMs=3000；合法值透传、非法值回退缺省", () => {
+    const dir = newTempDir();
+    const path = join(dir, "config.json");
+    expect(defaultConfig().shutdown.graceMs).toBe(3000);
+    writeFileSync(path, JSON.stringify({ shutdown: { graceMs: 1500 } }), "utf8");
+    expect(loadConfig(path).shutdown.graceMs).toBe(1500);
+    writeFileSync(path, JSON.stringify({ shutdown: { graceMs: -5 } }), "utf8");
+    expect(loadConfig(path).shutdown.graceMs).toBe(3000);
+    writeFileSync(path, JSON.stringify({ shutdown: { graceMs: "fast" } }), "utf8");
+    expect(loadConfig(path).shutdown.graceMs).toBe(3000);
   });
 });

@@ -23,6 +23,8 @@ export interface IpcDeps {
   pickDirectory(): Promise<string | null>;
   getCurrentProjectId(): string | null;
   setCurrentProjectId(id: string): void;
+  /** 退出序列门闸（true=正在退出，拒绝新请求，spec H 第 1 步；缺省恒 false 供旧测试） */
+  isShuttingDown?(): boolean;
 }
 
 // CLI 显示名（新建会话默认标题「新会话 · {名}」，原型 §3.6）
@@ -33,13 +35,19 @@ const CLI_LABELS: Record<string, string> = {
   opencode: "OpenCode",
 };
 
-/** 处理一条入站请求：校验 → 路由 → 错误码形状化（spec E：Main 强制校验，非法消息明确错误码） */
+/** 处理一条入站请求：校验 → 退出门闸 → 路由 → 错误码形状化（spec E：Main 强制校验，非法消息明确错误码；spec H：退出中拒新请求） */
 export async function handleIpc(deps: IpcDeps, raw: unknown): Promise<IpcResult> {
   const parsed = ipcRequestSchema.safeParse(raw);
   if (!parsed.success) {
     return {
       ok: false,
       error: { code: "E_SCHEMA", message: summarizeIssues(parsed.error.issues) },
+    };
+  }
+  if (deps.isShuttingDown?.()) {
+    return {
+      ok: false,
+      error: { code: "E_INTERNAL", message: "应用正在退出，已停止接收新请求" },
     };
   }
   try {

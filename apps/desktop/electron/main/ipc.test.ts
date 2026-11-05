@@ -434,3 +434,28 @@ describe("terminal 通道（#12：terminalApi × terminalId 参数化）", () =>
     }
   });
 });
+
+describe("退出序列 IPC 门闸（#13/spec H 停止接收新请求）", () => {
+  it("isShuttingDown=true：全部通道拒绝并返回可读错误；false 时正常", async () => {
+    const deps = makeDeps(new FakeAdapter());
+    let shuttingDown = false;
+    (deps as IpcDeps & { isShuttingDown: () => boolean }).isShuttingDown = () => shuttingDown;
+    const handle = (raw: unknown) => handleIpc(deps, raw);
+    shuttingDown = true;
+    for (const raw of [
+      { channel: "session:create", cli: "fake", cwd: "C:\\p" },
+      { channel: "session:send", sessionId: "s", text: "hi" },
+      { channel: "session:list" },
+      { channel: "project:list" },
+    ]) {
+      const res = await handle(raw);
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.error.code).toBe("E_INTERNAL");
+        expect(res.error.message).toContain("正在退出");
+      }
+    }
+    shuttingDown = false;
+    expect((await handle({ channel: "project:list" })).ok).toBe(true);
+  });
+});

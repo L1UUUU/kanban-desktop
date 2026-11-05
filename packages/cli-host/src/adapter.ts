@@ -41,6 +41,19 @@ export interface DisposeInput {
   sessionId?: string;
 }
 
+/** 会话收养输入（#13 恢复编排）：按 DB 持久化的 native id 重建会话状态（登记 disconnected，无进程；readHistory/resume 按需拉起） */
+export interface AdoptSessionInput {
+  /** 应用侧 sessionId（DB sessions 表 PK） */
+  sessionId: string;
+  /** 各 CLI 原生会话 id（sessions.native_session_id；Fake 等无原生 id 的实现忽略） */
+  nativeSessionId: string;
+  cwd: string;
+  permMode?: PermMode;
+  model?: string;
+  /** 目标 CLI（AdapterRouter 按 CLI 分发；单 Adapter 实现忽略） */
+  cli?: string;
+}
+
 /** Adapter 异常：code 形状由 ipc-schema 定义（不变量 6），宿主据此映射 IPC 错误 */
 export class AdapterError extends Error {
   constructor(
@@ -72,6 +85,8 @@ export interface CliAdapter {
   readHistory(sessionId: string): Promise<ChatEvent[]>;
   resume(sessionId: string): Promise<void>;
   dispose(input?: DisposeInput): Promise<void>;
+  /** 应用重启后的会话收养（可选能力，#13）：登记断开会话供 readHistory/resume 恢复；未实现时恢复编排落库为断开并报错引导 */
+  adoptSession?(input: AdoptSessionInput): Promise<void>;
   /** 订阅归一化事件流（ChatEvent ∪ SkillObservation），返回退订函数 */
   subscribe(handler: (event: AdapterEvent) => void): () => void;
 }

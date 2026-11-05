@@ -548,4 +548,21 @@ describe("ClaudeAdapter：readHistory transcript 直读回填", () => {
     // 回填轮（transcript 第 1 轮）+ 续问轮（实时）= 2 个 turn_completed
     expect(b.chat(created.sessionId).filter((e) => e.type === "turn_completed").length).toBe(2);
   });
+
+  it("数组形态用户行（claude 2.1.317+ transcript）：含 text 块即分轮，助手文本回填不丢失", async () => {
+    const ctx = makeAdapter();
+    hookRoots.push(ctx.hookDir);
+    const { sessionId, nativeSessionId } = await ctx.adapter.createSession({ cwd: realCwd });
+    writeTranscript(nativeSessionId!, [
+      // 用户输入为 text 块数组（真实 2.1.317 落盘形态）
+      { type: "user", timestamp: "2026-11-05T01:00:00.000Z", message: { role: "user", content: [{ type: "text", text: "埋暗号" }] } },
+      { type: "assistant", timestamp: "2026-11-05T01:00:05.000Z", message: { id: "msg-arr-1", role: "assistant", content: [{ type: "text", text: "暗号是紫鲸7号" }] } },
+      // 工具结果数组行：不另起轮
+      { type: "user", timestamp: "2026-11-05T01:00:06.000Z", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t-9", content: "ok" }] } },
+    ]);
+    ctx.stream().simulateExit(0); // 进程死亡：readHistory 走 transcript 直读回填
+    const history = await ctx.adapter.readHistory(sessionId);
+    expect(history.some((e) => e.type === "message_delta" && e.delta === "暗号是紫鲸7号")).toBe(true);
+    expect(history.some((e) => e.type === "turn_completed")).toBe(true);
+  });
 });

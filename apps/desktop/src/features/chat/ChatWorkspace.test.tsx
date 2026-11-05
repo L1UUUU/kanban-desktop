@@ -625,3 +625,60 @@ describe("断开会话「读取原生历史并恢复」（#9）", () => {
     expect(screen.getAllByText("基线全绿。现在把 chat 与 session 两个命名空间拆成独立文件，并在 index 里保持原导出面不变。")).toHaveLength(2);
   });
 });
+
+describe("主仓库并行冲突提示条（spec I-4/#13）", () => {
+  let tmpRoot = "";
+
+  afterEach(() => {
+    cleanup();
+    for (const db of openDbs.splice(0)) db.close();
+    if (tmpRoot) {
+      rmSync(tmpRoot, { recursive: true, force: true });
+      tmpRoot = "";
+    }
+  });
+
+  it("同目录 ≥2 会话运行中：聊天区顶部提示条出现（列出会话名/计数）；完成后消失；仅提示不阻止（composer 仍可用）", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "kb-ws-conflict-"));
+    const projDir = join(tmpRoot, "demo-repo");
+    mkdirSync(join(projDir, ".git"), { recursive: true });
+    const clock = new VirtualClock(); // 持有时钟驱动完成态（VirtualClock 不自动推进 → send 后保持 running）
+    const adapter = new FakeAdapter({ clock });
+    const transport = makeTransport(adapter, { dbPath: join(tmpRoot, "state.db"), pick: async () => projDir });
+    const t = mount(transport);
+    await t.flush();
+
+    // 注册项目 + 两个 Claude 会话（同一主仓库目录）
+    fireEvent.click(screen.getByRole("button", { name: "＋ 注册本地目录…" }));
+    await t.flush();
+    expect(await screen.findByText("demo-repo")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "＋" }));
+    fireEvent.click(screen.getByText("Claude"));
+    await t.flush();
+    expect(await screen.findByText("新会话 · Claude")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "＋" }));
+    fireEvent.click(screen.getAllByText("Claude")[0]);
+    await t.flush();
+    expect((await screen.findAllByText("新会话 · Claude")).length).toBe(2);
+
+    // 两个会话各跑一个 turn（VirtualClock 不自动推进 → 保持 running）
+    send("拆类型"); // 当前活跃（第二个会话）
+    const rows = screen.getAllByText("新会话 · Claude");
+    fireEvent.click(rows[0]); // 切到第一个会话并发送
+    send("拆类型");
+    await t.flush();
+    // 提示条出现：计数 2 + 会话名（同默认标题出现两次）
+    const banner = await screen.findByTestId("conflict-banner");
+    expect(banner.textContent).toContain("主仓库并行会话（2 个）");
+    expect(banner.textContent).toContain("新会话 · Claude、新会话 · Claude");
+    // 仅提示不阻止：composer 仍可用
+    expect(screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…")).toBeTruthy();
+
+    // 完成：全部 idle → 提示条消失
+    act(() => {
+      clock.runToIdle();
+    });
+    await t.flush();
+    expect(screen.queryByTestId("conflict-banner")).toBeNull();
+  });
+});

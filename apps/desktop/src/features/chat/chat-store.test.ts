@@ -225,3 +225,34 @@ describe("chat-store 断开会话恢复（#9：readHistory 快照 + 实时增量
     expect(store.getSession("s-1")!.status).toBe("idle");
   });
 });
+
+describe("chat-store CLI 异常退出终态化（#13/spec H：不崩溃、不自动继续、不宣称运行中）", () => {
+  it("session_exit：流式助手停光标、运行中工具置 interrupted、审批清理、明确报错；session_status disconnected 同样终态化", () => {
+    const store = makeStore();
+    // turn 进行中：助手流式 + 工具运行中 + 待决审批
+    store.applyEvent(ev(1, { type: "turn_started", turnId: "t1" }));
+    store.applyEvent(ev(2, { type: "message_delta", itemId: "m1", partId: "0", delta: "写到一半" }));
+    store.applyEvent(ev(3, { type: "tool_started", itemId: "tl1", tool: "commandExecution", argsSummary: "echo x" }));
+    store.applyEvent(ev(4, { type: "approval_requested", requestId: "ap1", itemId: "tl1", command: "echo x", suggestions: [] }));
+    // CLI 进程死亡：session_exit + disconnected（三 Adapter 的死亡链顺序）
+    store.applyEvent(ev(5, { type: "session_exit", exitCode: 1, reason: "codex app-server 已退出" }));
+    store.applyEvent(ev(6, { type: "session_status", status: "disconnected" }));
+    const s = store.getSession("s-1")!;
+    expect(s.items.find((i) => i.kind === "assistant")!.streaming).toBe(false); // 不宣称运行中
+    expect(s.items.find((i) => i.kind === "tool")).toMatchObject({ status: "interrupted" }); // 中断中的工具不自动继续
+    expect(s.pendingApproval).toBeNull();
+    expect(s.lastError?.code).toBe("E_SESSION_EXIT");
+    expect(s.lastError?.message).toContain("exit 1");
+    expect(s.status).toBe("disconnected");
+  });
+
+  it("disconnected 无 session_exit（OpenCode server 停等路径）：同样终态化但不伪造错误", () => {
+    const store = makeStore();
+    store.applyEvent(ev(1, { type: "turn_started", turnId: "t1" }));
+    store.applyEvent(ev(2, { type: "tool_started", itemId: "tl1", tool: "commandExecution", argsSummary: "x" }));
+    store.applyEvent(ev(3, { type: "session_status", status: "disconnected" }));
+    const s = store.getSession("s-1")!;
+    expect(s.items.find((i) => i.kind === "tool")).toMatchObject({ status: "interrupted" });
+    expect(s.lastError).toBeNull();
+  });
+});

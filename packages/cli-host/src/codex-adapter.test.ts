@@ -13,6 +13,10 @@ class FakeRpc implements CodexRpcClientLike {
   private threadN = 0;
   /** 测试钩子：thread/start 前置失败（模拟 rpc error） */
   failThreadStart: string | null = null;
+  /** 测试钩子：按 method 预置响应（thread/read、thread/resume 等，adoptSession 恢复链路） */
+  readonly responses: Record<string, unknown> = {};
+  /** 测试钩子：thread/read includeTurns 抛错（模拟未 materialized，t0-01 发现 5） */
+  failReadIncludeTurns = false;
 
   start(): void {
     /* 测试不 spawn */
@@ -23,6 +27,10 @@ class FakeRpc implements CodexRpcClientLike {
   async request(method: string, params?: unknown): Promise<unknown> {
     this.calls.push({ method, params });
     if (method === "initialize") return {};
+    if (method === "thread/read" && this.failReadIncludeTurns && (params as { includeTurns?: boolean } | undefined)?.includeTurns) {
+      throw new Error("thread is not materialized yet");
+    }
+    if (this.responses[method] !== undefined) return this.responses[method];
     if (method === "thread/start") {
       if (this.failThreadStart) throw new Error(`rpc -32602: ${this.failThreadStart}`);
       this.threadN += 1;
@@ -348,5 +356,86 @@ describe("CodexAdapter：interrupt 与退出", () => {
     await expect(a.adapter.sendTurn({ sessionId: s2.sessionId, text: "ok" })).resolves.toBeUndefined();
     await a.adapter.dispose();
     expect(a.rpc.dead).toBe(true);
+  });
+});
+
+describe("CodexAdapter：adoptSession 与跨进程恢复（#13）", () => {
+  const NATIVE = "th-old";
+  /** 预置 thread/read 原生历史：completed turn（userMessage+agentMessage+commandExecution）+ interrupted turn */
+  function seedNativeHistory(rpc: ReturnType<typeof makeAdapter>["rpc"]): void {
+    rpc.responses["thread/read"] = {
+      thread: {
+        id: NATIVE,
+        turns: [
+          {
+            id: "turn-1",
+            status: "completed",
+            items: [
+              { id: "u1", type: "userMessage", content: [{ type: "text", text: "记住暗号 KBL-CX" }] },
+              { id: "a1", type: "agentMessage", text: "收到暗号 KBL-CX" },
+              { id: "cmd1", type: "commandExecution", command: "echo hi", status: "completed", exitCode: 0, aggregatedOutput: "hi", durationMs: 12 },
+            ],
+          },
+          { id: "turn-2", status: "interrupted", items: [{ id: "a2", type: "agentMessage", text: "被打断的输出" }] },
+        ],
+      },
+    };
+  }
+
+  it("adoptSession：按 native thread id 登记 disconnected（无进程交互）", async () => {
+    const { rpc, adapter, chat } = makeAdapter();
+    await adapter.adoptSession({ sessionId: "s-adopt", nativeSessionId: NATIVE, cwd: CWD, permMode: "auto" });
+    expect(rpc.calls.length).toBe(0); // 不拉进程（登记即达）
+    expect(chat("s-adopt").at(-1)).toMatchObject({ type: "session_status", status: "disconnected" });
+    // 重复收养明确报错
+    await expect(adapter.adoptSession({ sessionId: "s-adopt", nativeSessionId: NATIVE, cwd: CWD })).rejects.toMatchObject({ code: "E_INTERNAL" });
+  });
+
+  it("readHistory（收养态）：thread/read includeTurns 回填 —— agentMessage 终文、工具终态、turn 终态（interrupted 在场不重放）、userMessage 不入流", async () => {
+    const ctx = makeAdapter();
+    seedNativeHistory(ctx.rpc);
+    await ctx.adapter.adoptSession({ sessionId: "s-adopt", nativeSessionId: NATIVE, cwd: CWD });
+    const history = await ctx.adapter.readHistory("s-adopt");
+    expect(ctx.rpc.callsOf("thread/read")[0]).toEqual({ threadId: NATIVE, includeTurns: true });
+    const deltas = history.filter((e): e is Extract<ChatEvent, { type: "message_delta" }> => e.type === "message_delta");
+    expect(deltas.map((d) => d.delta).join("")).toContain("收到暗号 KBL-CX");
+    expect(deltas.map((d) => d.delta).join("")).toContain("被打断的输出");
+    // userMessage 不进 ChatEvent（renderer 本地回显口径）
+    expect(deltas.length).toBe(2);
+    const toolDone = history.find((e): e is Extract<ChatEvent, { type: "tool_completed" }> => e.type === "tool_completed");
+    expect(toolDone).toMatchObject({ itemId: "cmd1", status: "completed", durationMs: 12, output: "hi" });
+    expect(history.filter((e) => e.type === "turn_completed").length).toBe(1);
+    const interrupted = history.find((e) => e.type === "turn_interrupted");
+    expect(interrupted).toBeDefined(); // 中断 turn 以 interrupted 终态在场（t0-01 发现 6）
+    // seq 严格单调（与实时流同键空间，不变量 4 的回填侧）
+    const seqs = history.map((e) => e.seq);
+    for (let i = 1; i < seqs.length; i++) expect(seqs[i]).toBeGreaterThan(seqs[i - 1]);
+    // 二次 readHistory 不重复回填
+    const again = await ctx.adapter.readHistory("s-adopt");
+    expect(again.length).toBe(history.length);
+  });
+
+  it("readHistory（未 materialized）：includeTurns 失败回退无参 read，历史为空不报错", async () => {
+    const ctx = makeAdapter();
+    ctx.rpc.failReadIncludeTurns = true;
+    ctx.rpc.responses["thread/read"] = { thread: { id: NATIVE } };
+    await ctx.adapter.adoptSession({ sessionId: "s-adopt", nativeSessionId: NATIVE, cwd: CWD });
+    const history = await ctx.adapter.readHistory("s-adopt");
+    expect(history.every((e) => e.type === "session_status")).toBe(true); // 仅登记事件，无历史条目
+    expect(ctx.rpc.callsOf("thread/read").length).toBe(2); // includeTurns 失败 → 无参重试
+  });
+
+  it("resume（收养态）：新进程 thread/resume 同 thread → idle；此后 sendTurn 可继续", async () => {
+    const ctx = makeAdapter();
+    seedNativeHistory(ctx.rpc);
+    ctx.rpc.responses["thread/resume"] = { thread: { id: NATIVE } };
+    await ctx.adapter.adoptSession({ sessionId: "s-adopt", nativeSessionId: NATIVE, cwd: CWD });
+    await ctx.adapter.resume("s-adopt");
+    expect(ctx.rpc.callsOf("thread/resume")[0]).toEqual({ threadId: NATIVE });
+    expect(ctx.chat("s-adopt").at(-1)).toMatchObject({ type: "session_status", status: "idle" });
+    // 恢复后可继续：sendTurn 不再报「进程已退出」
+    await expect(ctx.adapter.sendTurn({ sessionId: "s-adopt", text: "暗号是什么？" })).resolves.toBeUndefined();
+    expect(ctx.rpc.callsOf("turn/start").length).toBe(1);
+    expect(ctx.chat("s-adopt").some((e) => e.type === "turn_started")).toBe(true);
   });
 });

@@ -1,7 +1,7 @@
 // 用途：CodexAdapter —— C1 契约的真实 Codex 实现：spawn 直连 vendored codex.exe app-server（JSON-RPC/stdio，单进程多 thread），通知流映射 ChatEvent（poc-1/t0-01 实证 wire 行为）
 import { randomUUID } from "node:crypto";
 import type { AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, PermMode, SessionStatus } from "@kanban/ipc-schema";
-import { AdapterError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
+import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
 import { resolveCodexExe } from "./codex/exe";
 import { CodexRpcClient } from "./codex/rpc";
 import { createDefaultModelResolver, type ModelResolver } from "./codex/model-probe";
@@ -89,6 +89,10 @@ interface SessionState {
   /** agentMessage delta 累计（终文自愈依据） */
   agentAcc: Map<string, string>;
   dead: boolean;
+  /** 收养会话（#13）：历史权威在原生 thread（本地 log 仅含登记事件），readHistory/resume 驱动原生回填 */
+  adopted: boolean;
+  /** 已从原生 thread 历史回填过（防重复回填） */
+  backfilled: boolean;
 }
 
 export class CodexAdapter implements CliAdapter {
@@ -157,11 +161,43 @@ export class CodexAdapter implements CliAdapter {
       pendingApprovals: new Map(),
       agentAcc: new Map(),
       dead: false,
+      adopted: false,
+      backfilled: false,
     };
     this.sessions.set(s.sessionId, s);
     this.byThread.set(threadId, s);
     this.emit(s, { type: "session_status", status: "idle" });
     return { sessionId: s.sessionId, nativeSessionId: threadId };
+  }
+
+  /** 应用重启后的会话收养（#13 恢复编排）：按 DB thread id 重建状态（无进程；readHistory 拉起进程读原生历史，resume 后可续问） */
+  async adoptSession(input: AdoptSessionInput): Promise<void> {
+    if (this.sessions.has(input.sessionId)) throw new AdapterError("E_INTERNAL", `会话已存在：${input.sessionId}`);
+    if (!input.nativeSessionId) throw new AdapterError("E_INTERNAL", "收养 Codex 会话需要 native thread id");
+    const s: SessionState = {
+      sessionId: input.sessionId,
+      threadId: input.nativeSessionId,
+      cwd: input.cwd,
+      model: input.model,
+      permMode: input.permMode,
+      seq: 0,
+      log: [],
+      status: "disconnected",
+      turnActive: false,
+      currentTurnId: null,
+      interruptRequested: false,
+      interruptSent: false,
+      turnErrorSent: false,
+      queue: [],
+      pendingApprovals: new Map(),
+      agentAcc: new Map(),
+      dead: true,
+      adopted: true,
+      backfilled: false,
+    };
+    this.sessions.set(s.sessionId, s);
+    this.byThread.set(input.nativeSessionId, s);
+    this.emit(s, { type: "session_status", status: "disconnected" });
   }
 
   async sendTurn(input: SendTurnInput): Promise<void> {
@@ -203,14 +239,31 @@ export class CodexAdapter implements CliAdapter {
   }
 
   async readHistory(sessionId: string): Promise<ChatEvent[]> {
-    const s = this.requireSession(sessionId);
-    // 快照=本进程事件日志（与实时流同键同 seq；跨进程原生历史读取属恢复工单 #13）
+    const s = this.requireKnownSession(sessionId);
+    // 跨进程恢复（#13）：收养会话无本地日志 → 拉起 app-server 读原生 thread 历史（poc-1 g1：thread/read 无需 resume）
+    if (s.adopted && !s.backfilled) await this.backfillFromNative(s);
     return [...s.log];
   }
 
   async resume(sessionId: string): Promise<void> {
-    const s = this.requireSession(sessionId);
-    // 进程内存活期间状态连续；仅复位活动残留并通知空闲（跨进程 thread/resume 属恢复工单）
+    const s = this.requireKnownSession(sessionId);
+    if (s.dead) {
+      // 跨进程恢复（t0-01 T4 实证）：新进程 thread/resume 同 id → 上下文延续、已完成的 turn 全部在场、无重放
+      this.ensureStarted();
+      try {
+        await this.client!.request("thread/resume", { threadId: s.threadId });
+      } catch (e) {
+        throw new AdapterError("E_INTERNAL", `恢复 Codex 会话失败：${e instanceof Error ? e.message : String(e)}`);
+      }
+      if (!s.backfilled) {
+        // 历史回填 best-effort（resume 已成功；thread/read 失败不阻断恢复）
+        await this.backfillFromNative(s).catch((e) => this.log("restore", `历史回填失败：${e instanceof Error ? e.message : String(e)}`));
+      }
+      s.dead = false;
+      this.emit(s, { type: "session_status", status: "idle" });
+      return;
+    }
+    // 进程内存活期间状态连续；仅复位活动残留并通知空闲
     s.turnActive = false;
     s.currentTurnId = null;
     s.queue.length = 0;
@@ -464,6 +517,46 @@ export class CodexAdapter implements CliAdapter {
     this.emit(s, { type: "message_completed", itemId, partId: "0" });
   }
 
+  /** 跨进程历史回填（#13）：thread/read 原生 turns → ChatEvent 日志（复用实时流映射器，同键同格式；仅收养会话，一次） */
+  private async backfillFromNative(s: SessionState): Promise<void> {
+    if (s.backfilled || !s.adopted) return;
+    this.ensureStarted();
+    let turns: Array<Record<string, unknown>>;
+    try {
+      turns = await this.readNativeTurns(s, true);
+    } catch {
+      // 无 turn 会话未 materialized（t0-01 发现 5）：无 includeTurns 的 read 仅验证可用性，历史为空
+      turns = await this.readNativeTurns(s, false);
+    }
+    for (const turn of turns) {
+      const items = Array.isArray(turn.items) ? (turn.items as Array<Record<string, unknown>>) : [];
+      for (const item of items) {
+        if (item.type === "agentMessage") {
+          this.completeAgentMessage(s, String(item.id ?? ""), typeof item.text === "string" ? item.text : "");
+          continue;
+        }
+        // userMessage 不入 ChatEvent（renderer 本地回显，与实时流口径一致）
+        const started = this.mapToolStarted(item);
+        if (started) this.emit(s, started);
+        const done = this.mapToolCompleted(item);
+        if (done) this.emit(s, done);
+      }
+      const status = typeof turn.status === "string" ? turn.status : "completed";
+      // 中断/失败 turn 以 interrupted 终态在场（t0-01 发现 6：恢复历史应预期 interrupted 条目，不重放）
+      this.emit(s, status === "completed" ? { type: "turn_completed" } : { type: "turn_interrupted", reason: status });
+    }
+    s.backfilled = true;
+  }
+
+  /** thread/read（includeTurns 开关）；失败抛原始错误由调用方分流 */
+  private async readNativeTurns(s: SessionState, includeTurns: boolean): Promise<Array<Record<string, unknown>>> {
+    const params: Record<string, unknown> = { threadId: s.threadId };
+    if (includeTurns) params.includeTurns = true;
+    const r = (await this.client!.request("thread/read", params)) as { thread?: { turns?: unknown } };
+    if (!r?.thread) throw new AdapterError("E_INTERNAL", "thread/read 未返回 thread（协议异常）");
+    return Array.isArray(r.thread.turns) ? (r.thread.turns as Array<Record<string, unknown>>) : [];
+  }
+
   /** item/started → tool_started（commandExecution/fileChange/mcpToolCall） */
   private mapToolStarted(item: Record<string, unknown>): ChatEventSeed | null {
     const id = String(item.id ?? "");
@@ -544,6 +637,13 @@ export class CodexAdapter implements CliAdapter {
     if (s.dead) {
       throw new AdapterError("E_INTERNAL", "Codex 进程已退出，会话已断开（请读取原生历史恢复或新建会话）");
     }
+    return s;
+  }
+
+  /** 只查存在性（允许 dead）：readHistory/resume 是断开会话的恢复入口（#13） */
+  private requireKnownSession(sessionId: string): SessionState {
+    const s = this.sessions.get(sessionId);
+    if (!s) throw new AdapterError("E_SESSION_NOT_FOUND", `会话不存在：${sessionId}`);
     return s;
   }
 }

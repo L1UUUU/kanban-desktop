@@ -54,6 +54,37 @@ describe("CliHost seam（C5）", () => {
     await expect(host.command({ kind: "sendTurn", sessionId: "nope", text: "x" })).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
   });
 
+  it("adoptSession（#13 恢复编排）：按 cli 分发收养并登记路由，后续命令按 sessionId 可达", async () => {
+    const { host, events } = makeHost();
+    await host.command({
+      kind: "adoptSession",
+      sessionId: "s-restored",
+      nativeSessionId: "native-1",
+      cwd: "C:\\demo",
+      cli: "codex",
+      permMode: "auto",
+    });
+    // 收养事件（session_status disconnected）聚合到订阅
+    expect(events.some((e) => "type" in e && e.type === "session_status" && (e as { sessionId: string }).sessionId === "s-restored")).toBe(true);
+    // 路由登记：收养会话的 readHistory/resume/interruptTurn 可达（Fake 实现语义）
+    const history = await host.command({ kind: "readHistory", sessionId: "s-restored" });
+    expect(history.events).toBeDefined();
+    await host.command({ kind: "resume", sessionId: "s-restored" });
+    await host.command({ kind: "interruptTurn", sessionId: "s-restored" });
+    await expect(
+      host.command({ kind: "adoptSession", sessionId: "s-dup", nativeSessionId: "n", cwd: "C:\\demo", cli: "claude" }),
+    ).rejects.toMatchObject({ code: "E_INTERNAL" }); // 未支持 CLI
+  });
+
+  it("dispose 单会话命令：只终止该会话，其余会话与命令通道可用", async () => {
+    const { host } = makeHost();
+    const s1 = await host.command({ kind: "createSession", init: { cwd: "C:\\demo", cli: "fake" } });
+    const s2 = await host.command({ kind: "createSession", init: { cwd: "C:\\demo", cli: "fake" } });
+    await host.command({ kind: "dispose", sessionId: s1.sessionId! });
+    await expect(host.command({ kind: "readHistory", sessionId: s1.sessionId! })).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
+    await host.command({ kind: "sendTurn", sessionId: s2.sessionId!, text: "还在" }); // 其余会话不受影响
+  });
+
   it("shutdown：拒绝新命令并 dispose 全部 adapter", async () => {
     const { host, adapters } = makeHost();
     await host.command({ kind: "createSession", init: { cwd: "C:\\demo", cli: "fake" } });

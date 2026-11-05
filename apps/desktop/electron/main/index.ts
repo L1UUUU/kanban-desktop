@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import * as nodePty from "node-pty";
-import { appInfoSchema, terminalEventSchema } from "@kanban/ipc-schema";
+import { appInfoSchema, shutdownNoticeSchema, terminalEventSchema } from "@kanban/ipc-schema";
 import { AdapterRouter, createDesktopAdapterFactory, type CliAdapter } from "@kanban/cli-host";
 import { TrackerEngine } from "@kanban/tracker";
 import { defaultConfig, loadConfig, saveConfig, type AppConfig } from "./config";
@@ -15,6 +15,7 @@ import { handleIpc, type IpcDeps } from "./ipc";
 import { createPtyHost } from "./pty-host";
 import { ProjectStore } from "./project-store";
 import { SessionStore } from "./session-store";
+import { adoptRestoredSessions, createShutdownOrchestrator } from "./shutdown";
 
 /** CliHost 托管形态（ADR-0001：utilityProcess 崩溃隔离 + Job Object）；worker 产物缺失/fork 失败回退 Main 进程内（C5 降级路径，seam 不变） */
 function createHostedAdapter(appConfig: AppConfig): CliAdapter {
@@ -22,7 +23,7 @@ function createHostedAdapter(appConfig: AppConfig): CliAdapter {
   const workerPath = join(__dirname, "cli-host-worker.js");
   if (existsSync(workerPath)) {
     try {
-      return new CliHostClient({ workerPath, dataDir, codexExe: appConfig.cliExe.codex, claudeExe: appConfig.cliExe.claude, opencodeExe: appConfig.cliExe.opencode });
+      return new CliHostClient({ workerPath, dataDir, codexExe: appConfig.cliExe.codex, claudeExe: appConfig.cliExe.claude, opencodeExe: appConfig.cliExe.opencode, fullDisposeWaitMs: appConfig.shutdown.graceMs });
     } catch (e) {
       console.error(`[cli-host] utilityProcess 托管不可用，回退进程内：${e instanceof Error ? e.message : String(e)}`);
     }
@@ -77,7 +78,7 @@ function pickDirectory(): Promise<string | null> {
     .then((res) => (res.canceled || res.filePaths.length === 0 ? null : res.filePaths[0]));
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // 配置初始化：当前项目 id 持久化在同一 JSON（spec J：不硬编码、落应用数据目录）
   const configPath = join(app.getPath("userData"), "config.json");
   const appConfig: AppConfig = existsSync(configPath) ? loadConfig(configPath) : defaultConfig();
@@ -96,16 +97,22 @@ app.whenReady().then(() => {
   projects.refreshStatuses();
   // CliHost 托管 adapter（utilityProcess 优先；config 手动覆盖 exe + env 开关在工厂内生效）
   adapter = createHostedAdapter(appConfig);
-  app.on("quit", () => {
-    trackerEngine.close(); // 关闭 engine 与底层 DB 连接（唯一关闭点）
-    // 有序停止：worker 内 shutdown（停新命令→dispose→有限等待）→ kill 兜底；Job Object 覆盖崩溃场景（spec H）
-    void adapter.dispose();
-  });
 
-  // 应用退出前有序停止全部 PTY（#13 退出治理的 PTY 部分：killAll 幂等；#8 的 Job Object 属 cli-host 侧）
-  app.on("before-quit", () => {
-    ptyHost.killAll();
-  });
+  // Adapter 事件流：出站校验 + 会话状态落库 + SkillObservation 进 tracker 落库（#9）→ 转发 renderer；窗口不在时静默丢弃转发
+  adapter.subscribe(
+    createAdapterEventHandler({
+      sessions,
+      engine: trackerEngine,
+      send: (event) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("chat:event", event);
+        }
+      },
+    }),
+  );
+
+  // 重开恢复编排（#13/spec H）：DB 中 status 非 disconnected 的结构化会话收养登记 disconnected（readHistory/resume 可续），PTY 统一断开
+  await adoptRestoredSessions({ adapter, sessions, log: (k, d) => console.error(`[kanban:${k}] ${d}`) });
 
   // PTY 宿主装配：平台能力注入（shell/CLI exe 覆盖来自 config，不硬编码）；事件出站过 schema 校验并转发 renderer，
   // started/exit 顺带落 sessions 状态（PTY 活=空闲徽标，退出=已断开徽标）
@@ -144,6 +151,30 @@ app.whenReady().then(() => {
     },
   );
 
+  // 统一退出序列（#13/spec H §6.1）：停新请求（IPC 拒新 + UI 提示）→ 有序取消 → 有限等待（config.shutdown.graceMs）→
+  // Session 粒度受控终止 → 全量 dispose（worker shutdown/kill 兜底）→ PTY 全停；Job Object 覆盖强杀残留
+  const shutdown = createShutdownOrchestrator({
+    adapter,
+    pty: ptyHost,
+    sessions,
+    graceMs: appConfig.shutdown.graceMs,
+    notifyShutdown: (reason) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("app:shutdown", shutdownNoticeSchema.parse({ reason }));
+      }
+    },
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    log: (k, d) => console.error(`[kanban:${k}] ${d}`),
+  });
+  app.on("before-quit", (event) => {
+    if (shutdown.isShuttingDown()) return; // 序列已执行完毕，放行真实退出
+    event.preventDefault();
+    void shutdown.begin("app-quit").then(() => app.quit());
+  });
+  app.on("quit", () => {
+    trackerEngine.close(); // 关闭 engine 与底层 DB 连接（唯一关闭点）
+  });
+
   const deps: IpcDeps = {
     adapter,
     // PTY 宿主：node-pty 在 main 进程直接使用（main → ConPTY；utilityProcess 是 cli-host 的形态，spec F）
@@ -156,6 +187,7 @@ app.whenReady().then(() => {
       appConfig.currentProjectId = id;
       saveConfig(configPath, appConfig);
     },
+    isShuttingDown: () => shutdown.isShuttingDown(),
   };
 
   // 注册 IPC 处理器：app:getInfo 冒烟通道 + kanban:ipc 单通道路由（入站强制 zod 校验，spec E）
@@ -171,23 +203,10 @@ app.whenReady().then(() => {
   );
   ipcMain.handle("kanban:ipc", (_event, raw: unknown) => handleIpc(deps, raw));
 
-  // Adapter 事件流：出站校验 + 会话状态落库 + SkillObservation 进 tracker 落库（#9）→ 转发 renderer；窗口不在时静默丢弃转发
-  adapter.subscribe(
-    createAdapterEventHandler({
-      sessions,
-      engine: trackerEngine,
-      send: (event) => {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("chat:event", event);
-        }
-      },
-    }),
-  );
-
   createWindow();
 });
 
-// Windows 优先：关窗即退出（有序停止 CLI 进程的完整链路属后续工单，spec H）
+// Windows 优先：关窗即退出（before-quit 触发统一退出序列：停新请求→有序取消→有限等待→受控终止→PTY 停止，#13/spec H）
 app.on("window-all-closed", () => {
   app.quit();
 });

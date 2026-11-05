@@ -277,12 +277,16 @@ export class ChatStore {
         for (const i of s.items) if (i.kind === "assistant") i.streaming = false;
         break;
       case "turn_interrupted":
-        for (const i of s.items) if (i.kind === "assistant") i.streaming = false;
-        for (const i of s.items) if (i.kind === "tool" && i.status === "running") i.status = "interrupted";
+        this.finalizeLiveItems(s);
         s.pendingApproval = null;
         s.lastTurnInterrupted = true;
         break;
       case "session_status":
+        // 断开：终态化流式条目与运行中工具（不宣称运行中、不自动继续，spec H）——状态徽标与工具卡终态一致
+        if (event.status === "disconnected") {
+          this.finalizeLiveItems(s);
+          s.pendingApproval = null;
+        }
         s.status = event.status;
         break;
       case "session_error":
@@ -290,10 +294,24 @@ export class ChatStore {
         s.pendingApproval = null;
         break;
       case "session_exit":
-        // 会话退出：状态流转由 session_status 承载，这里不额外处理
+        // CLI 进程退出（异常或退出治理）：终态化 + 明确报错（不崩溃、不自动重放，spec H）
+        this.finalizeLiveItems(s);
+        s.pendingApproval = null;
+        if (!s.lastError) {
+          s.lastError = {
+            code: "E_SESSION_EXIT",
+            message: `CLI 进程已退出（exit ${event.exitCode}${event.reason ? `：${event.reason}` : ""}），会话已断开`,
+          };
+        }
         break;
     }
     this.changed();
+  }
+
+  /** 流式/运行中条目终态化：助手停光标、运行中工具置 interrupted（中断中的工具调用不自动继续、不宣称运行中） */
+  private finalizeLiveItems(s: SessionView): void {
+    for (const i of s.items) if (i.kind === "assistant") i.streaming = false;
+    for (const i of s.items) if (i.kind === "tool" && i.status === "running") i.status = "interrupted";
   }
 
   private findTool(s: SessionView, itemId: string): ToolItem | undefined {

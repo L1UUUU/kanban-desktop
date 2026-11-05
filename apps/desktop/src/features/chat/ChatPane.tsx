@@ -1,4 +1,4 @@
-// 用途：中央聊天区 —— 消息流 + 审批卡 + 取消/错误提示 + composer（grid: 1fr 消息 + auto composer；无会话时降级占位）
+// 用途：中央聊天区 —— 冲突提示条（主仓库 ≥2 活跃并行会话，spec I-4）+ 消息流 + 审批卡 + 取消/错误提示 + composer（flex 列：banner + 1fr 消息 + auto composer；无会话时降级占位）
 import { useEffect, useRef } from "react";
 import type { ApprovalDecision } from "@kanban/ipc-schema";
 import type { SessionView } from "./chat-store";
@@ -15,10 +15,13 @@ export interface ChatPaneActions extends ComposerActions {
 export function ChatPane({
   session,
   version,
+  conflictTitles,
   actions,
 }: {
   session: SessionView | null;
   version: number;
+  /** 主仓库并行冲突会话名（≥2 活跃时非空；仅提示不阻止，spec I-4） */
+  conflictTitles: string[] | null;
   actions: ChatPaneActions;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -53,8 +56,14 @@ export function ChatPane({
   }
 
   return (
-    <section className="grid min-h-0 min-w-0 grid-rows-[1fr_auto] bg-background">
-      <div ref={scrollRef} className="overflow-y-auto px-6 py-4">
+    <section className="flex min-h-0 min-w-0 flex-col bg-background">
+      {conflictTitles && conflictTitles.length >= 2 ? (
+        // 冲突提示条（原型一致项 4）：列出会话名，仅提示不阻止；会话数变化时随 store 快照动态增减
+        <div data-testid="conflict-banner" className="flex-none border-b border-warn/40 bg-warn/10 px-6 py-2 text-xs text-warn">
+          ⚠ 主仓库并行会话（{conflictTitles.length} 个）：{conflictTitles.join("、")} 正在同一目录运行，注意文件冲突
+        </div>
+      ) : null}
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
         <MessageList items={session.items} cli={session.cli} />
         {session.pendingApproval ? (
           <ApprovalCard approval={session.pendingApproval} onDecide={actions.onResolveApproval} />

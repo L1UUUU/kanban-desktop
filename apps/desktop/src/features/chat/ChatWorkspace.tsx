@@ -1,9 +1,10 @@
-// 用途：聊天工作区 —— useChatController + useTerminals + useProjects 接线侧栏与中央区（transport 可注入：生产 window.api，测试 FakeAdapter 直连；活跃会话为 PTY 时中央渲染终端面板）
+// 用途：聊天工作区 —— useChatController + useTerminals + useProjects 接线侧栏与中央区（transport 可注入：生产 window.api，测试 FakeAdapter 直连；活跃会话为 PTY 时中央渲染终端面板；主仓库并行冲突判据驱动提示条）
 import type { ReactNode } from "react";
 import { Sidebar } from "../../components/Sidebar";
 import type { ProjectsController } from "../projects/use-projects";
 import type { ChatTransport } from "../../lib/kanban-api";
 import { ChatPane } from "./ChatPane";
+import { detectMainRepoConflict } from "./conflict";
 import { FAKE_DEMO_CWD, useChatController, type ChatController } from "./use-chat";
 import { TerminalWorkspace } from "../terminal/TerminalWorkspace";
 import { useTerminals } from "../terminal/use-terminals";
@@ -30,6 +31,8 @@ export function ChatWorkspace({
 
   // 活跃会话为 PTY 终端时中央渲染终端面板（与结构化聊天区并列切换，spec I）
   const active = controller.activeSession;
+  // 主仓库并行冲突判据（spec I-4）：当前会话同目录 ≥2 活跃结构化会话 → 聊天区顶部提示条（仅提示不阻止，随快照动态更新）
+  const conflictTitles = detectMainRepoConflict(controller.sessions, controller.activeId);
 
   return (
     <div className="grid min-h-0 grid-cols-[240px_1fr]">
@@ -61,6 +64,7 @@ export function ChatWorkspace({
         <ChatPane
           session={controller.activeSession}
           version={controller.version}
+          conflictTitles={conflictTitles}
           actions={{
             onSend: controller.send,
             onInterrupt: controller.interrupt,

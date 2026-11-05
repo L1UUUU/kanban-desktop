@@ -139,6 +139,28 @@ describe("FakeAdapter 专属场景", () => {
     col.off();
   });
 
+  it("adoptSession（#13 重启恢复编排）：登记 disconnected，readHistory 空日志，resume 后 idle 且可继续发消息", async () => {
+    const clock = new VirtualClock();
+    const adapter = new FakeAdapter({ clock });
+    const col = createCollector(adapter);
+    await adapter.adoptSession({ sessionId: "s-restored", nativeSessionId: "", cwd: "C:\\demo", permMode: "auto" });
+    expect(col.chat("s-restored").at(-1)).toMatchObject({ type: "session_status", status: "disconnected" });
+    // Fake 无原生历史落盘：readHistory 为空日志（诚实行为，缓存不替代原生历史）
+    const history = await adapter.readHistory("s-restored");
+    expect(history.every((e) => e.type === "session_status")).toBe(true);
+    // 恢复：resume → idle；sendTurn 可继续（新 turn 正常流式）
+    await adapter.resume("s-restored");
+    await adapter.sendTurn({ sessionId: "s-restored", text: "默认演示" });
+    clock.runToIdle();
+    const chat = col.chat("s-restored");
+    expect(chat.some((e) => e.type === "turn_started")).toBe(true);
+    expect(chat.some((e) => e.type === "turn_completed")).toBe(true);
+    expect(chat.at(-1)).toMatchObject({ type: "session_status", status: "idle" });
+    // 重复收养明确报错
+    await expect(adapter.adoptSession({ sessionId: "s-restored", nativeSessionId: "", cwd: "C:\\demo" })).rejects.toMatchObject({ code: "E_INTERNAL" });
+    col.off();
+  });
+
   it("订阅退订：unsubscribe 后不再收到事件", async () => {
     const clock = new VirtualClock();
     const adapter = new FakeAdapter({ clock });

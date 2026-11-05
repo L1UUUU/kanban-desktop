@@ -1,6 +1,6 @@
 // 用途：FakeAdapter —— C1 契约的脚本化 mock 实现：事件溯源日志（readHistory=重放，天然满足不变量 4）、可注入时钟、演示脚本驱动（原型行为规格）
 import type { AdapterEvent, ChatEvent, ChatEventSeed, PermMode, SessionStatus, SkillObservation } from "@kanban/ipc-schema";
-import { AdapterError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
+import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
 import { SystemClock, type FakeClock } from "./clock";
 import { pickScript, type ScriptStep } from "./fake-scripts";
 
@@ -176,6 +176,30 @@ export class FakeAdapter implements CliAdapter {
     s.queue.length = 0;
     s.pendingApproval = null;
     this.emit(s, { type: "session_status", status: "idle" });
+  }
+
+  /** 应用重启收养（#13）：登记断开会话（Fake 无原生历史落盘，readHistory 返回空日志为诚实行为；resume 复位可续） */
+  async adoptSession(input: AdoptSessionInput): Promise<void> {
+    if (this.sessions.has(input.sessionId)) throw new AdapterError("E_INTERNAL", `会话已存在：${input.sessionId}`);
+    const s: SessionState = {
+      sessionId: input.sessionId,
+      cwd: input.cwd,
+      model: input.model,
+      permMode: input.permMode,
+      seq: 0,
+      log: [],
+      status: "disconnected",
+      script: null,
+      ix: 0,
+      stream: null,
+      lastToolItemId: null,
+      runningToolItemId: null,
+      pendingApproval: null,
+      skipApprovals: false,
+      queue: [],
+    };
+    this.sessions.set(input.sessionId, s);
+    this.emit(s, { type: "session_status", status: "disconnected" });
   }
 
   async dispose(input?: DisposeInput): Promise<void> {

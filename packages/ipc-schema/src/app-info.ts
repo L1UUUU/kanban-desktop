@@ -11,3 +11,9 @@ export const appInfoSchema = z.object({
 });
 
 export type AppInfo = z.infer<typeof appInfoSchema>;
+
+/** 退出通知（main→renderer 推送，通道 app:shutdown）：统一退出序列第 1 步「停止接收新请求」的 UI 提示载荷（#13/spec H） */
+export const shutdownNoticeSchema = z.object({
+  reason: z.string(),
+});
+export type ShutdownNotice = z.infer<typeof shutdownNoticeSchema>;

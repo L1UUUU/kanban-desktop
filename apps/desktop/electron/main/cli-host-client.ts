@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AdapterEvent, ChatEvent } from "@kanban/ipc-schema";
 import { utilityProcess, type UtilityProcess } from "electron";
-import { AdapterError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "@kanban/cli-host";
+import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "@kanban/cli-host";
 
 /** KILL_ON_JOB_CLOSE Job guard：等宿主(main)死亡后退出 → 句柄关 → OS 终止 job 内全部 CLI 进程（t0-01 T1 实证的 PowerShell 等价实现；ASCII-only 防 PS5.1 ANSI 解析坑） */
 const JOB_GUARD_PS = [
@@ -63,6 +63,8 @@ export interface CliHostClientOptions {
   claudeExe?: string | null;
   /** config cliExe.opencode 手动覆盖（经 env 传给 worker） */
   opencodeExe?: string | null;
+  /** 全量 dispose 后等 worker 自行退出的上限 ms（超时 kill 兜底；与退出序列 graceMs 对齐，缺省 3000） */
+  fullDisposeWaitMs?: number;
   /** 诊断日志 */
   log?: (kind: string, detail: string) => void;
 }
@@ -81,12 +83,14 @@ export class CliHostClient implements CliAdapter {
   };
   private proc: UtilityProcess;
   private nextId = 1;
+  private readonly fullDisposeWaitMs: number;
   private readonly pending = new Map<number | string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private readonly handlers = new Set<(event: AdapterEvent) => void>();
   private readonly log: (kind: string, detail: string) => void;
 
   constructor(options: CliHostClientOptions) {
     this.log = options.log ?? (() => {});
+    this.fullDisposeWaitMs = options.fullDisposeWaitMs ?? 3000;
     // env 传参：worker 侧 createDesktopAdapterFactory 读取（utilityProcess 继承父 env）
     process.env.KANBAN_DATA_DIR = options.dataDir;
     if (options.codexExe) process.env.KANBAN_CODEX_BIN = options.codexExe;
@@ -131,13 +135,37 @@ export class CliHostClient implements CliAdapter {
     await this.command({ kind: "resume", sessionId });
   }
 
+  async adoptSession(input: AdoptSessionInput): Promise<void> {
+    await this.command({
+      kind: "adoptSession",
+      sessionId: input.sessionId,
+      nativeSessionId: input.nativeSessionId,
+      cwd: input.cwd,
+      cli: input.cli ?? "fake",
+      permMode: input.permMode,
+      model: input.model,
+    });
+  }
+
   async dispose(input?: DisposeInput): Promise<void> {
-    // 有序停机：worker 内 shutdown（停止新命令→dispose 全部 adapter→有限等待）→ 超时兜底 kill
+    // Session 粒度：走命令往返（worker 内 router.dispose({sessionId})——只终止单会话，进程/其他会话保留，t0-01 T3）
+    if (input?.sessionId) {
+      await this.command({ kind: "dispose", sessionId: input.sessionId });
+      return;
+    }
+    // 全量有序停机：worker 内 shutdown（停止新命令→dispose 全部 adapter→有限等待）→ 等 worker 实际退出，超时 kill 兜底（Job Object 覆盖强杀场景）
     try {
-      this.proc.postMessage({ shutdown: { reason: input?.sessionId ? `dispose:${input.sessionId}` : "dispose" } });
-      if (!input?.sessionId) await new Promise((r) => setTimeout(r, 500));
+      this.proc.postMessage({ shutdown: { reason: "dispose" } });
+      await new Promise<void>((resolve) => {
+        const done = (): void => {
+          clearTimeout(timer);
+          resolve();
+        };
+        const timer = setTimeout(done, this.fullDisposeWaitMs);
+        this.proc.on("exit", done);
+      });
     } finally {
-      if (!input?.sessionId) this.proc.kill();
+      this.proc.kill();
     }
   }
 
