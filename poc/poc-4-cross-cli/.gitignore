@@ -1,0 +1,7 @@
+# 运行产物（数据库与 hook 捕获每次运行重新生成，证据 JSON 已单独保留）
+runs/*.db
+runs/*.db-journal
+runs/*.db-shm
+runs/*.db-wal
+fixture/proj/hook-events.jsonl
+node_modules/

@@ -1,0 +1,213 @@
+{
+  "startedAt": "2026-11-05T05:50:57.744Z",
+  "mode": "main",
+  "steps": [
+    {
+      "step": "S1 真实 Claude：/design-feature stub → hook verified → 自动建卡",
+      "at": "2026-11-05T05:50:57.759Z"
+    },
+    {
+      "step": "S2 真实 Codex：thread/start 自动关联 → 真实 turn + self_reported /implement-spec",
+      "at": "2026-11-05T05:51:53.777Z"
+    },
+    {
+      "step": "S3 合成 OpenCode：先执行 pr（simulated）后手动关联 → 按实际发生时间同步",
+      "at": "2026-11-05T05:52:17.749Z"
+    },
+    {
+      "step": "S4 混合流：手动修正 / 真实覆盖 / 重放 / 延迟旧事件 / 乱序并发回退",
+      "at": "2026-11-05T05:52:17.795Z"
+    },
+    {
+      "step": "S5a 解除关联：阶段保持、历史仍在",
+      "at": "2026-11-05T05:53:26.414Z"
+    }
+  ],
+  "modelCalls": {
+    "claude": 2,
+    "codexTurn": 1
+  },
+  "budget": 8,
+  "checks": [
+    {
+      "name": "Claude 真实会话建立（原生 session id）",
+      "pass": true,
+      "detail": "sessionId=6abd778a-2c2a-475c-9cb7-1b1eb6179a81 cli=2.1.317 cost=0.10477600000000001"
+    },
+    {
+      "name": "hook 捕获到 Skill 真调用（PreToolUse）",
+      "pass": true,
+      "detail": "hook:PreToolUse+PostToolUseSuccess eventId=hook:6abd778a-2c2a-475c-9cb7-1b1eb6179a81:design-feature:2026-11-05T05:51:38.736Z"
+    },
+    {
+      "name": "自动创建 REQ-001 并关联该 Session，阶段 Design",
+      "pass": true,
+      "detail": "REQ-001 stage=Design sessions=[\"6abd778a-2c2a-475c-9cb7-1b1eb6179a81\"] uncertain=false"
+    },
+    {
+      "name": "重复注入同一 hook 事件不重复建卡",
+      "pass": true,
+      "detail": "changes=0"
+    },
+    {
+      "name": "Codex app-server initialize",
+      "pass": true,
+      "detail": "{\"userAgent\":\"kanban-desktop-poc1/0.144.1 (Windows 10.0.26200; x86_64) xterm-256color (kanban-desktop-poc1; 0.1.0)\",\"cod"
+    },
+    {
+      "name": "从 REQ-001 创建 Codex 原生 Session（thread/start）",
+      "pass": true,
+      "detail": "threadId=01a1aa43-9b9b-76a3-84e2-3459d5382430 cwd=C:\\project2\\kanban-desktop\\poc\\poc-4-cross-cli\\fixture\\workdir"
+    },
+    {
+      "name": "Codex Session 自动关联 REQ-001",
+      "pass": true,
+      "detail": "changes=[\"session_linked\"]"
+    },
+    {
+      "name": "真实 turn 开始并完成（Session 可用）",
+      "pass": true,
+      "detail": "turnId=01a1aa43-b2d4-7741-ad3e-79fdf8abe7ed status=completed 答复=\"IMPLEMENT-TURN-OK\""
+    },
+    {
+      "name": "self_reported implement-spec 驱动阶段到 Implement 且标 uncertain",
+      "pass": true,
+      "detail": "stage=Implement uncertain=true basis={\"kind\":\"skill\",\"skill\":\"implement-spec\",\"cli\":\"codex\",\"evidenceLevel\":\"self_reported\",\"eventId\":\"codex-turn:01a1aa43-9b9b-76a3-84e2-3459d5382430:implement-spec:01a1aa43-b2d4-7741-ad3e-79fdf8abe7ed\",\"at\":\"2026-11-05T05:52:05.000Z\"}"
+    },
+    {
+      "name": "用户确认后 uncertain 转正（manual 立即生效）",
+      "pass": true,
+      "detail": "stage=Implement uncertain=false"
+    },
+    {
+      "name": "OpenCode 先执行 Skill（未关联）→ 只记活动不建卡不改阶段",
+      "pass": true,
+      "detail": "changes=0 cards=1"
+    },
+    {
+      "name": "手动关联后按 Skill 实际发生时间同步阶段到 PR",
+      "pass": true,
+      "detail": "stage=PR basis.at=2026-11-05T05:52:17.749Z（link 时间更晚但不冒充依据） uncertain=true"
+    },
+    {
+      "name": "simulated 依据 → 阶段标 uncertain",
+      "pass": true,
+      "detail": "uncertain=true"
+    },
+    {
+      "name": "手动修正立即生效 → Retro",
+      "pass": true,
+      "detail": "stage=Retro"
+    },
+    {
+      "name": "真实 Claude Session D 关联 REQ-001",
+      "pass": true,
+      "detail": "sessionD=d1318afc-6411-47cf-809a-0174c447807e"
+    },
+    {
+      "name": "新 verified 事件覆盖手动修正 → Implement（uncertain=false）",
+      "pass": true,
+      "detail": "stage=Implement uncertain=false basis=implement-spec@2026-11-05T05:53:07.508Z"
+    },
+    {
+      "name": "重放注入（同 eventId 原文）不改变任何状态",
+      "pass": true,
+      "detail": "duplicate_ignored"
+    },
+    {
+      "name": "延迟旧事件（occurredAt 早于依据）不覆盖",
+      "pass": true,
+      "detail": "stage=Implement changes=0"
+    },
+    {
+      "name": "多 Session 并发最新有效事件胜出，且允许 PR→Implement 回退",
+      "pass": true,
+      "detail": "t6=PR → t7=Implement"
+    },
+    {
+      "name": "解除关联不回退阶段",
+      "pass": true,
+      "detail": "stage=Implement"
+    },
+    {
+      "name": "解除关联后 session 从卡片移除",
+      "pass": true,
+      "detail": "sessions=[\"01a1aa43-9b9b-76a3-84e2-3459d5382430\",\"ses_opencode_sim_0001\",\"d1318afc-6411-47cf-809a-0174c447807e\"]"
+    },
+    {
+      "name": "解除关联不删历史（stage_events 仍可查）",
+      "pass": true,
+      "detail": "该 session 历史事件数=4"
+    }
+  ],
+  "snapshot": [
+    {
+      "id": "REQ-001",
+      "title": "待命名需求",
+      "stage": "Implement",
+      "stageBasis": {
+        "kind": "skill",
+        "skill": "implement-spec",
+        "cli": "claude-code",
+        "evidenceLevel": "simulated",
+        "eventId": "synth:claude-code:6abd778a-2c2a-475c-9cb7-1b1eb6179a81:implement-spec:2026-11-05T05:53:26.402Z:bc02cf32",
+        "at": "2026-11-05T05:53:26.402Z"
+      },
+      "uncertain": true,
+      "sessions": [
+        "01a1aa43-9b9b-76a3-84e2-3459d5382430",
+        "ses_opencode_sim_0001",
+        "d1318afc-6411-47cf-809a-0174c447807e"
+      ]
+    }
+  ],
+  "tables": {
+    "requirements": [
+      {
+        "id": "REQ-001",
+        "title": "待命名需求",
+        "stage": "Implement",
+        "stage_basis_at": 1793858006402,
+        "uncertain": 1
+      }
+    ],
+    "sessions": [
+      {
+        "session_id": "6abd778a-2c2a-475c-9cb7-1b1eb6179a81",
+        "cli": "claude-code",
+        "requirement_id": null
+      },
+      {
+        "session_id": "01a1aa43-9b9b-76a3-84e2-3459d5382430",
+        "cli": "codex",
+        "requirement_id": "REQ-001"
+      },
+      {
+        "session_id": "ses_opencode_sim_0001",
+        "cli": "opencode",
+        "requirement_id": "REQ-001"
+      },
+      {
+        "session_id": "d1318afc-6411-47cf-809a-0174c447807e",
+        "cli": "claude-code",
+        "requirement_id": "REQ-001"
+      }
+    ],
+    "stageEventCount": 13,
+    "eventsByEvidence": [
+      {
+        "evidence_level": "self_reported",
+        "n": 1
+      },
+      {
+        "evidence_level": "simulated",
+        "n": 4
+      },
+      {
+        "evidence_level": "verified",
+        "n": 8
+      }
+    ]
+  },
+  "finishedAt": "2026-11-05T05:53:26.425Z"
+}

@@ -1,0 +1,71 @@
+{
+  "snapshot": [
+    {
+      "id": "REQ-001",
+      "title": "待命名需求",
+      "stage": "Implement",
+      "stageBasis": {
+        "kind": "skill",
+        "skill": "implement-spec",
+        "cli": "claude-code",
+        "evidenceLevel": "simulated",
+        "eventId": "synth:claude-code:6abd778a-2c2a-475c-9cb7-1b1eb6179a81:implement-spec:2026-11-05T05:53:26.402Z:bc02cf32",
+        "at": "2026-11-05T05:53:26.402Z"
+      },
+      "uncertain": true,
+      "sessions": [
+        "01a1aa43-9b9b-76a3-84e2-3459d5382430",
+        "ses_opencode_sim_0001",
+        "d1318afc-6411-47cf-809a-0174c447807e"
+      ]
+    }
+  ],
+  "tables": {
+    "requirements": [
+      {
+        "id": "REQ-001",
+        "title": "待命名需求",
+        "stage": "Implement",
+        "stage_basis_at": 1793858006402,
+        "uncertain": 1
+      }
+    ],
+    "sessions": [
+      {
+        "session_id": "6abd778a-2c2a-475c-9cb7-1b1eb6179a81",
+        "cli": "claude-code",
+        "requirement_id": null
+      },
+      {
+        "session_id": "01a1aa43-9b9b-76a3-84e2-3459d5382430",
+        "cli": "codex",
+        "requirement_id": "REQ-001"
+      },
+      {
+        "session_id": "ses_opencode_sim_0001",
+        "cli": "opencode",
+        "requirement_id": "REQ-001"
+      },
+      {
+        "session_id": "d1318afc-6411-47cf-809a-0174c447807e",
+        "cli": "claude-code",
+        "requirement_id": "REQ-001"
+      }
+    ],
+    "stageEventCount": 13,
+    "eventsByEvidence": [
+      {
+        "evidence_level": "self_reported",
+        "n": 1
+      },
+      {
+        "evidence_level": "simulated",
+        "n": 4
+      },
+      {
+        "evidence_level": "verified",
+        "n": 8
+      }
+    ]
+  }
+}
