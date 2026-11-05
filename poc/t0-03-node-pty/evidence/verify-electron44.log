@@ -1,0 +1,19 @@
+
+=== STEP node-abi-smoke ===
+runtime: node v24.13.0 (modules ABI 137)
+first pty data received (prompt)
+echo round-trip OK, output tail: "m\u001b[HPS C:\\project2\\kb-wt\\s1-03\\poc\\t0-03-node-pty>\u001b[1C\u001b]0;C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\u0007\u001b[?25h\u001b[?25l\u001b[93mecho \u001b[37mT0NODEABI\r\n\u001b[?25h"
+PASS: node-pty prebuilt loads under pure Node and PTY echo round-trip works
+--- node-abi-smoke: PASS (exit=0)
+
+=== STEP electron-window-smoke ===
+
+electron 44.10.2 / node 24.22.2 (modules ABI 149) / chrome 152.0.7977.169
+renderer result: {"pass":true,"firstDataReceived":true,"echoReceived":true,"bufferHasToken":true,"rawSample":"\u001b[?9001h\u001b[?1004h\u001b[?25l\u001b[2J\u001b[m\u001b[HPS C:\\project2\\kb-wt\\s1-03\\poc\\t0-03-node-pty>\u001b[1C\u001b]0;C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\u0007\u001b[?25h\u001b[?25l\u001b[93mecho \u001b[37mT0ECHO_SMOKE\r\n\u001b[?25h\u001b[mT0ECHO_SMOKE\r\nPS C:\\project2\\kb-wt\\s1-03\\poc\\t0-03-node-pty> \u001b[93mecho \u001b[37mSMOKE_DONE\u001b[?25l\u001b[m\r\nSMOKE_DONE\r\nPS C:\\project2\\kb-wt\\s1-03\\poc\\t0-03-node-pty> \u001b[?25h"}
+finish: PASS reason=renderer assertions
+--- electron-window-smoke: PASS (exit=0)
+
+===== T0-03 SUMMARY =====
+PASS  node-abi-smoke
+PASS  electron-window-smoke
+OVERALL: PASS

@@ -1,0 +1,643 @@
+gyp info it worked if it ends with ok
+gyp info using node-gyp@12.4.0
+gyp info using node@24.13.0 | win32 | x64
+gyp info find Python using Python version 3.13.12 found at "C:\Users\liuy\AppData\Local\Programs\Python\Python313\python.exe"
+
+gyp info find VS using VS2026 (18.6.11822.322) found at:
+gyp info find VS "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools"
+gyp info find VS run with --verbose for detailed information
+gyp info spawn C:\Users\liuy\AppData\Local\Programs\Python\Python313\python.exe
+gyp info spawn args [
+gyp info spawn args 'C:\\Users\\liuy\\AppData\\Local\\npm-cache\\_npx\\c463d28440264a05\\node_modules\\node-gyp\\gyp\\gyp_main.py',
+gyp info spawn args 'binding.gyp',
+gyp info spawn args '-f',
+gyp info spawn args 'msvs',
+gyp info spawn args '-I',
+gyp info spawn args 'C:\\project2\\kb-wt\\s1-03\\poc\\t0-03-node-pty\\.srcbuild\\node-pty\\build\\config.gypi',
+gyp info spawn args '-I',
+gyp info spawn args 'C:\\Users\\liuy\\AppData\\Local\\npm-cache\\_npx\\c463d28440264a05\\node_modules\\node-gyp\\addon.gypi',
+gyp info spawn args '-I',
+gyp info spawn args 'C:\\Users\\liuy\\AppData\\Local\\node-gyp\\Cache\\24.13.0\\include\\node\\common.gypi',
+gyp info spawn args '-Dlibrary=shared_library',
+gyp info spawn args '-Dvisibility=default',
+gyp info spawn args '-Dnode_root_dir=C:\\Users\\liuy\\AppData\\Local\\node-gyp\\Cache\\24.13.0',
+gyp info spawn args '-Dnode_gyp_dir=C:\\Users\\liuy\\AppData\\Local\\npm-cache\\_npx\\c463d28440264a05\\node_modules\\node-gyp',
+gyp info spawn args '-Dnode_lib_file=C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\node-gyp\\\\Cache\\\\24.13.0\\\\<(target_arch)\\\\node.lib',
+gyp info spawn args '-Dmodule_root_dir=C:\\project2\\kb-wt\\s1-03\\poc\\t0-03-node-pty\\.srcbuild\\node-pty',
+gyp info spawn args '-Dnode_engine=v8',
+gyp info spawn args '--depth=.',
+gyp info spawn args '--no-parallel',
+gyp info spawn args '--generator-output',
+gyp info spawn args 'C:\\project2\\kb-wt\\s1-03\\poc\\t0-03-node-pty\\.srcbuild\\node-pty\\build',
+gyp info spawn args '-Goutput_dir=.'
+gyp info spawn args ]
+gyp info spawn C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\MSBuild\Current\Bin\MSBuild.exe
+gyp info spawn args [
+gyp info spawn args 'build/binding.sln',
+gyp info spawn args '/clp:Verbosity=minimal',
+gyp info spawn args '/nologo',
+gyp info spawn args '/nodeReuse:false',
+gyp info spawn args '/p:Configuration=Release;Platform=x64'
+gyp info spawn args ]
+
+  conpty.cc
+  path_util.cc
+  win_delay_load_hook.cc
+    正在创建库 C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\Release\conpty.lib 和对象 C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\Release\conpty.exp
+  conpty.vcxproj -> C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\Release\\conpty.node
+  conpty_console_list.cc
+  win_delay_load_hook.cc
+    正在创建库 C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\Release\conpty_console_list.lib 和对象 C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\Release\conpty_console_list.exp
+  conpty_console_list.vcxproj -> C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\Release\\conpty_console_list.node
+  Agent.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244: “参数”: 从“const _Ty”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244:             _Ty=int [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/Agent.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244: “参数”: 从“const _Ty”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244:             _Ty=int [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/Agent.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(94,26): warning C4244: “参数”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/Agent.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(93,26): warning C4244: “参数”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/Agent.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Agent.cc(162,42): warning C4244: “参数”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Agent.cc(162,29): warning C4244: “参数”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Agent.cc(445,80): warning C4267: “参数”: 从“size_t”转换到“DWORD”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Agent.cc(448,79): warning C4267: “参数”: 从“size_t”转换到“DWORD”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Agent.cc(564,31): warning C4244: “参数”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Agent.cc(564,25): warning C4244: “参数”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  AgentCreateDesktop.cc
+  ConsoleFont.cc
+  ConsoleInput.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244: “参数”: 从“const _Ty”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244:             _Ty=int [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/ConsoleInput.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244: “参数”: 从“const _Ty”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244:             _Ty=int [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/ConsoleInput.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(94,26): warning C4244: “参数”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/ConsoleInput.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(93,26): warning C4244: “参数”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/ConsoleInput.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\UnicodeEncoding.h(30,18): warning C4244: “=”: 从“uint32_t”转换到“char”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/ConsoleInput.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\UnicodeEncoding.h(67,18): warning C4244: “=”: 从“uint32_t”转换到“wchar_t”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/ConsoleInput.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\UnicodeEncoding.h(71,25): warning C4244: “=”: 从“uint32_t”转换到“wchar_t”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/ConsoleInput.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleInput.cc(121,24): warning C4244: “return”: 从“__int64”转换到“int”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleInput.cc(137,24): warning C4244: “return”: 从“__int64”转换到“int”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleInput.cc(150,50): warning C4244: “=”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleInput.cc(152,50): warning C4244: “=”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleInput.cc(155,24): warning C4244: “return”: 从“__int64”转换到“int”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleInput.cc(167,50): warning C4244: “=”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleInput.cc(169,50): warning C4244: “=”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleInput.cc(172,24): warning C4244: “return”: 从“__int64”转换到“int”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleInput.cc(340,74): warning C4267: “参数”: 从“size_t”转换到“int”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleInput.cc(355,66): warning C4267: “参数”: 从“size_t”转换到“DWORD”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleInput.cc(511,32): warning C4244: “=”: 从“_Ty”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleInput.cc(511,32): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleInput.cc(511,32): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleInput.cc(511,32): warning C4244:             _Ty=int [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleInput.cc(511,32): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleInput.cc(516,31): warning C4244: “=”: 从“_Ty”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleInput.cc(516,31): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleInput.cc(516,31): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleInput.cc(516,31): warning C4244:             _Ty=int [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleInput.cc(516,31): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleInput.cc(621,64): warning C4244: “参数”: 从“const uint32_t”转换到“WCHAR”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleInput.cc(838,26): warning C4244: “=”: 从“UINT”转换到“WORD”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244: “=”: 从“int”转换到“C”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:             C=char [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/ConsoleInput.cc”)
+      C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25):
+      模板实例化上下文(最早的实例化上下文)为
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleInput.cc(58,19):
+          查看对正在编译的 类 模板 实例化“GStringBuilder<char>”的引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(200,21):
+          在编译 类 模板 成员函数“GStringBuilder<char> &GStringBuilder<char>::operator <<(short)”时
+              C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleInput.cc(60,23):
+              请参阅 "`anonymous-namespace'::MouseRecord::toString" 中对 "GStringBuilder<char>::operator <<" 的第一个引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(200,72):
+          查看对正在编译的函数 模板 实例化“ValueString<C,8> gdecOfInt<C,short>(const I)”的引用
+          with
+          [
+              C=char,
+              I=short
+          ]
+  
+  ConsoleInputReencoding.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244: “参数”: 从“const _Ty”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244:             _Ty=int [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/ConsoleInputReencoding.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244: “参数”: 从“const _Ty”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244:             _Ty=int [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/ConsoleInputReencoding.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(94,26): warning C4244: “参数”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/ConsoleInputReencoding.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(93,26): warning C4244: “参数”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/ConsoleInputReencoding.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleInputReencoding.cc(88,29): warning C4244: “参数”: 从“int”转换到“wchar_t”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  ConsoleLine.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleLine.cc(127,58): warning C4267: “参数”: 从“size_t”转换到“const _Ty”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleLine.cc(127,58): warning C4267:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleLine.cc(127,58): warning C4267:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleLine.cc(127,58): warning C4267:             _Ty=int [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\ConsoleLine.cc(127,58): warning C4267:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  DebugShowInput.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244: “=”: 从“int”转换到“C”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:             C=char [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/DebugShowInput.cc”)
+      C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25):
+      模板实例化上下文(最早的实例化上下文)为
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\DebugShowInput.cc(77,17):
+          查看对正在编译的 类 模板 实例化“GStringBuilder<char>”的引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(201,21):
+          在编译 类 模板 成员函数“GStringBuilder<char> &GStringBuilder<char>::operator <<(unsigned short)”时
+              C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\DebugShowInput.cc(201,45):
+              请参阅 "debugShowInput" 中对 "GStringBuilder<char>::operator <<" 的第一个引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(201,72):
+          查看对正在编译的函数 模板 实例化“ValueString<C,8> gdecOfInt<C,unsigned short>(const I)”的引用
+          with
+          [
+              C=char,
+              I=unsigned short
+          ]
+  
+  DefaultInputMap.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\DefaultInputMap.cc(262,28): warning C4267: “参数”: 从“size_t”转换到“int”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\DefaultInputMap.cc(294,38): warning C4244: “参数”: 从“__int64”转换到“int”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\DefaultInputMap.cc(302,12): warning C4244: “return”: 从“int”转换到“uint16_t”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\DefaultInputMap.cc(358,24): warning C4244: “=”: 从“int”转换到“char”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+      C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\DefaultInputMap.cc(358,24):
+      模板实例化上下文(最早的实例化上下文)为
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\DefaultInputMap.cc(419,5):
+          查看对正在编译的函数 模板 实例化“void `anonymous-namespace'::addEscapes<false,64>(InputMap &,const `anonymous-namespace'::EscapeEncoding (&)[64])”的引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\DefaultInputMap.cc(412,9):
+          查看对正在编译的函数 模板 实例化“void `anonymous-namespace'::expandEncoding<false>(const `anonymous-namespace'::ExpandContext &)”的引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\DefaultInputMap.cc(399,9):
+          查看对正在编译的函数 模板 实例化“void `anonymous-namespace'::expandEncodingAfterAltPrefix<false>(const `anonymous-namespace'::ExpandContext &,char *,uint16_t)”的引用
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\DefaultInputMap.cc(370,28): warning C4244: “=”: 从“int”转换到“char”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\DefaultInputMap.cc(377,28): warning C4244: “=”: 从“int”转换到“char”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244: “=”: 从“int”转换到“char”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/DefaultInputMap.cc”)
+      C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25):
+      模板实例化上下文(最早的实例化上下文)为
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\DefaultInputMap.cc(399,9):
+          查看对正在编译的函数 模板 实例化“void `anonymous-namespace'::expandEncodingAfterAltPrefix<false>(const `anonymous-namespace'::ExpandContext &,char *,uint16_t)”的引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\DefaultInputMap.cc(334,28):
+          查看对正在编译的函数 模板 实例化“ValueString<char,5> decOfInt<char>(I)”的引用
+          with
+          [
+              I=char
+          ]
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(114,12):
+          查看对正在编译的函数 模板 实例化“ValueString<char,5> gdecOfInt<char,I>(const I)”的引用
+          with
+          [
+              I=char
+          ]
+  
+  EventLoop.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\EventLoop.cc(75,67): warning C4267: “参数”: 从“size_t”转换到“DWORD”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  InputMap.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\InputMap.cc(227,44): warning C4244: “参数”: 从“int”转换到“unsigned char”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\InputMap.cc(233,48): warning C4244: “参数”: 从“int”转换到“char”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  LargeConsoleRead.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244: “参数”: 从“const _Ty”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244:             _Ty=int [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/LargeConsoleRead.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244: “参数”: 从“const _Ty”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244:             _Ty=int [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/LargeConsoleRead.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(94,26): warning C4244: “参数”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/LargeConsoleRead.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(93,26): warning C4244: “参数”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/LargeConsoleRead.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\LargeConsoleRead.cc(61,25): warning C4244: “参数”: 从“const _Ty”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\LargeConsoleRead.cc(61,25): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\LargeConsoleRead.cc(61,25): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\LargeConsoleRead.cc(61,25): warning C4244:             _Ty=int [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\LargeConsoleRead.cc(61,25): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\LargeConsoleRead.cc(59,17): warning C4244: “参数”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  NamedPipe.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\NamedPipe.cc(191,31): warning C4267: “初始化”: 从“size_t”转换到“DWORD”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\NamedPipe.cc(191,31): warning C4267: “初始化”: 从“size_t”转换到“const DWORD”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  Scraper.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244: “参数”: 从“const _Ty”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244:             _Ty=int [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/Scraper.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244: “参数”: 从“const _Ty”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244:             _Ty=int [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/Scraper.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(94,26): warning C4244: “参数”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/Scraper.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(93,26): warning C4244: “参数”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/Scraper.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(230,17): warning C4244: “参数”: 从“const int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(225,13): warning C4244: “参数”: 从“const int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(247,47): warning C4244: “参数”: 从“const int”转换到“const _Ty”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(247,47): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(247,47): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(247,47): warning C4244:             _Ty=SHORT [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(247,47): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(248,47): warning C4244: “参数”: 从“const int”转换到“const _Ty”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(248,47): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(248,47): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(248,47): warning C4244:             _Ty=SHORT [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(248,47): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(263,13): warning C4244: “参数”: 从“const int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(262,13): warning C4244: “参数”: 从“const int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(260,26): warning C4244: “参数”: 从“const _Ty”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(260,26): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(260,26): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(260,26): warning C4244:             _Ty=int [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(260,26): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(284,26): warning C4244: “参数”: 从“const _Ty”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(284,26): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(284,26): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(284,26): warning C4244:             _Ty=int [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(284,26): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(302,37): warning C4244: “参数”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(560,59): warning C4244: “参数”: 从“int64_t”转换到“const _Ty”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(560,59): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(560,59): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(560,59): warning C4244:             _Ty=int [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(560,59): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(570,45): warning C4244: “参数”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(567,35): warning C4244: “参数”: 从“const int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(623,40): warning C4244: “参数”: 从“int64_t”转换到“int”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(668,39): warning C4244: “参数”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Scraper.cc(697,29): warning C4244: “参数”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  Terminal.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\UnicodeEncoding.h(30,18): warning C4244: “=”: 从“uint32_t”转换到“char”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/Terminal.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\UnicodeEncoding.h(67,18): warning C4244: “=”: 从“uint32_t”转换到“wchar_t”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/Terminal.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\UnicodeEncoding.h(71,25): warning C4244: “=”: 从“uint32_t”转换到“wchar_t”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/Terminal.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Terminal.cc(365,26): warning C4267: “初始化”: 从“size_t”转换到“int”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Terminal.cc(369,16): warning C4267: “初始化”: 从“size_t”转换到“int”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  Win32Console.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Win32Console.cc(73,59): warning C4267: “参数”: 从“size_t”转换到“DWORD”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  Win32ConsoleBuffer.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244: “参数”: 从“const _Ty”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244:             _Ty=int [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(96,34): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/Win32ConsoleBuffer.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244: “参数”: 从“const _Ty”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244:             _Ty=int [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(95,34): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/Win32ConsoleBuffer.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(94,26): warning C4244: “参数”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/Win32ConsoleBuffer.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\SmallRect.h(93,26): warning C4244: “参数”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/Win32ConsoleBuffer.cc”)
+  
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Win32ConsoleBuffer.cc(71,53): warning C4244: “参数”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Win32ConsoleBuffer.cc(76,67): warning C4244: “参数”: 从“int”转换到“SHORT”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244: “=”: 从“int”转换到“C”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:             C=char [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/agent/Win32ConsoleBuffer.cc”)
+      C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25):
+      模板实例化上下文(最早的实例化上下文)为
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Win32ConsoleBuffer.cc(162,23):
+          查看对正在编译的 类 模板 实例化“GStringBuilder<char>”的引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(200,21):
+          在编译 类 模板 成员函数“GStringBuilder<char> &GStringBuilder<char>::operator <<(short)”时
+              C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\agent\Win32ConsoleBuffer.cc(165,59):
+              请参阅 "Win32ConsoleBuffer::read::<lambda_1>::operator ()" 中对 "GStringBuilder<char>::operator <<" 的第一个引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(200,72):
+          查看对正在编译的函数 模板 实例化“ValueString<C,8> gdecOfInt<C,short>(const I)”的引用
+          with
+          [
+              C=char,
+              I=short
+          ]
+  
+  main.cc
+  BackgroundDesktop.cc
+  Buffer.cc
+  DebugClient.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\DebugClient.cc(79,47): warning C4267: “参数”: 从“size_t”转换到“DWORD”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  GenRandom.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\GenRandom.cc(71,42): warning C4267: “参数”: 从“size_t”转换到“ULONG”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\GenRandom.cc(78,41): warning C4267: “参数”: 从“size_t”转换到“DWORD”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244: “=”: 从“int”转换到“C”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:             C=wchar_t [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/shared/GenRandom.cc”)
+      C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25):
+      模板实例化上下文(最早的实例化上下文)为
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\GenRandom.cc(126,20):
+          查看对正在编译的 类 模板 实例化“GStringBuilder<wchar_t>”的引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(205,21):
+          在编译 类 模板 成员函数“GStringBuilder<wchar_t> &GStringBuilder<wchar_t>::operator <<(unsigned long)”时
+              C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\GenRandom.cc(129,16):
+              请参阅 "GenRandom::uniqueName" 中对 "GStringBuilder<wchar_t>::operator <<" 的第一个引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(205,72):
+          查看对正在编译的函数 模板 实例化“ValueString<C,14> gdecOfInt<C,unsigned long>(const I)”的引用
+          with
+          [
+              C=wchar_t,
+              I=unsigned long
+          ]
+  
+  OwnedHandle.cc
+  StringUtil.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringUtil.cc(42,33): warning C4267: “参数”: 从“size_t”转换到“int”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringUtil.cc(51,29): warning C4267: “参数”: 从“size_t”转换到“int”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringUtil.cc(50,33): warning C4267: “参数”: 从“size_t”转换到“int”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  WindowsSecurity.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\WindowsSecurity.cc(181,30): warning C4267: “参数”: 从“size_t”转换到“ULONG”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244: “=”: 从“int”转换到“C”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:             C=wchar_t [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/shared/WindowsSecurity.cc”)
+      C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25):
+      模板实例化上下文(最早的实例化上下文)为
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\WindowsSecurity.cc(185,28):
+          查看对正在编译的 类 模板 实例化“GStringBuilder<wchar_t>”的引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(205,21):
+          在编译 类 模板 成员函数“GStringBuilder<wchar_t> &GStringBuilder<wchar_t>::operator <<(unsigned long)”时
+              C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\WindowsSecurity.cc(187,47):
+              请参阅 "finishSecurityDescriptor" 中对 "GStringBuilder<wchar_t>::operator <<" 的第一个引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(205,72):
+          查看对正在编译的函数 模板 实例化“ValueString<C,14> gdecOfInt<C,unsigned long>(const I)”的引用
+          with
+          [
+              C=wchar_t,
+              I=unsigned long
+          ]
+  
+  WindowsVersion.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244: “=”: 从“int”转换到“C”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:             C=char [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/shared/WindowsVersion.cc”)
+      C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25):
+      模板实例化上下文(最早的实例化上下文)为
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\WindowsVersion.cc(150,19):
+          查看对正在编译的 类 模板 实例化“GStringBuilder<char>”的引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(205,21):
+          在编译 类 模板 成员函数“GStringBuilder<char> &GStringBuilder<char>::operator <<(unsigned long)”时
+              C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\WindowsVersion.cc(198,7):
+              请参阅 "dumpWindowsVersion" 中对 "GStringBuilder<char>::operator <<" 的第一个引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(205,72):
+          查看对正在编译的函数 模板 实例化“ValueString<C,14> gdecOfInt<C,unsigned long>(const I)”的引用
+          with
+          [
+              C=char,
+              I=unsigned long
+          ]
+  
+  WinptyAssert.cc
+  WinptyException.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244: “=”: 从“int”转换到“C”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:             C=wchar_t [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty-agent.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/shared/WinptyException.cc”)
+      C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25):
+      模板实例化上下文(最早的实例化上下文)为
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\WinptyException.cc(49,20):
+          查看对正在编译的 类 模板 实例化“GStringBuilder<wchar_t>”的引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(205,21):
+          在编译 类 模板 成员函数“GStringBuilder<wchar_t> &GStringBuilder<wchar_t>::operator <<(unsigned long)”时
+              C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\WinptyException.cc(55,29):
+              请参阅 "throwWindowsError" 中对 "GStringBuilder<wchar_t>::operator <<" 的第一个引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(205,72):
+          查看对正在编译的函数 模板 实例化“ValueString<C,14> gdecOfInt<C,unsigned long>(const I)”的引用
+          with
+          [
+              C=wchar_t,
+              I=unsigned long
+          ]
+  
+  WinptyVersion.cc
+  win_delay_load_hook.cc
+  winpty-agent.vcxproj -> C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\Release\\winpty-agent.exe
+  AgentLocation.cc
+  winpty.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\libwinpty\winpty.cc(305,58): warning C4267: “参数”: 从“size_t”转换到“DWORD”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\libwinpty\winpty.cc(333,57): warning C4267: “参数”: 从“size_t”转换到“DWORD”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244: “=”: 从“int”转换到“C”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:             C=wchar_t [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/libwinpty/winpty.cc”)
+      C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25):
+      模板实例化上下文(最早的实例化上下文)为
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\libwinpty\winpty.cc(480,24):
+          查看对正在编译的 类 模板 实例化“GStringBuilder<wchar_t>”的引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(207,21):
+          在编译 类 模板 成员函数“GStringBuilder<wchar_t> &GStringBuilder<wchar_t>::operator <<(unsigned __int64)”时
+              C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\libwinpty\winpty.cc(654,27):
+              请参阅 "winpty_open" 中对 "GStringBuilder<wchar_t>::operator <<" 的第一个引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(207,72):
+          查看对正在编译的函数 模板 实例化“ValueString<C,26> gdecOfInt<C,unsigned __int64>(const I)”的引用
+          with
+          [
+              C=wchar_t,
+              I=unsigned __int64
+          ]
+  
+  BackgroundDesktop.cc
+  Buffer.cc
+  DebugClient.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\DebugClient.cc(79,47): warning C4267: “参数”: 从“size_t”转换到“DWORD”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+  GenRandom.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\GenRandom.cc(71,42): warning C4267: “参数”: 从“size_t”转换到“ULONG”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\GenRandom.cc(78,41): warning C4267: “参数”: 从“size_t”转换到“DWORD”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244: “=”: 从“int”转换到“C”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:             C=wchar_t [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/shared/GenRandom.cc”)
+      C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25):
+      模板实例化上下文(最早的实例化上下文)为
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\GenRandom.cc(126,20):
+          查看对正在编译的 类 模板 实例化“GStringBuilder<wchar_t>”的引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(205,21):
+          在编译 类 模板 成员函数“GStringBuilder<wchar_t> &GStringBuilder<wchar_t>::operator <<(unsigned long)”时
+              C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\GenRandom.cc(129,16):
+              请参阅 "GenRandom::uniqueName" 中对 "GStringBuilder<wchar_t>::operator <<" 的第一个引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(205,72):
+          查看对正在编译的函数 模板 实例化“ValueString<C,14> gdecOfInt<C,unsigned long>(const I)”的引用
+          with
+          [
+              C=wchar_t,
+              I=unsigned long
+          ]
+  
+  OwnedHandle.cc
+  StringUtil.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringUtil.cc(42,33): warning C4267: “参数”: 从“size_t”转换到“int”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringUtil.cc(51,29): warning C4267: “参数”: 从“size_t”转换到“int”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringUtil.cc(50,33): warning C4267: “参数”: 从“size_t”转换到“int”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+  WindowsSecurity.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\WindowsSecurity.cc(181,30): warning C4267: “参数”: 从“size_t”转换到“ULONG”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244: “=”: 从“int”转换到“C”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:             C=wchar_t [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/shared/WindowsSecurity.cc”)
+      C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25):
+      模板实例化上下文(最早的实例化上下文)为
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\WindowsSecurity.cc(185,28):
+          查看对正在编译的 类 模板 实例化“GStringBuilder<wchar_t>”的引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(205,21):
+          在编译 类 模板 成员函数“GStringBuilder<wchar_t> &GStringBuilder<wchar_t>::operator <<(unsigned long)”时
+              C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\WindowsSecurity.cc(187,47):
+              请参阅 "finishSecurityDescriptor" 中对 "GStringBuilder<wchar_t>::operator <<" 的第一个引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(205,72):
+          查看对正在编译的函数 模板 实例化“ValueString<C,14> gdecOfInt<C,unsigned long>(const I)”的引用
+          with
+          [
+              C=wchar_t,
+              I=unsigned long
+          ]
+  
+  WindowsVersion.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244: “=”: 从“int”转换到“C”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:             C=char [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/shared/WindowsVersion.cc”)
+      C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25):
+      模板实例化上下文(最早的实例化上下文)为
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\WindowsVersion.cc(150,19):
+          查看对正在编译的 类 模板 实例化“GStringBuilder<char>”的引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(205,21):
+          在编译 类 模板 成员函数“GStringBuilder<char> &GStringBuilder<char>::operator <<(unsigned long)”时
+              C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\WindowsVersion.cc(198,7):
+              请参阅 "dumpWindowsVersion" 中对 "GStringBuilder<char>::operator <<" 的第一个引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(205,72):
+          查看对正在编译的函数 模板 实例化“ValueString<C,14> gdecOfInt<C,unsigned long>(const I)”的引用
+          with
+          [
+              C=char,
+              I=unsigned long
+          ]
+  
+  WinptyAssert.cc
+  WinptyException.cc
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244: “=”: 从“int”转换到“C”，可能丢失数据 [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         with [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         [ [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:             C=wchar_t [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25): warning C4244:         ] [C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\deps\winpty\src\winpty.vcxproj]
+  (编译源文件“../../../../deps/winpty/src/shared/WinptyException.cc”)
+      C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(101,25):
+      模板实例化上下文(最早的实例化上下文)为
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\WinptyException.cc(49,20):
+          查看对正在编译的 类 模板 实例化“GStringBuilder<wchar_t>”的引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(205,21):
+          在编译 类 模板 成员函数“GStringBuilder<wchar_t> &GStringBuilder<wchar_t>::operator <<(unsigned long)”时
+              C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\WinptyException.cc(55,29):
+              请参阅 "throwWindowsError" 中对 "GStringBuilder<wchar_t>::operator <<" 的第一个引用
+          C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\deps\winpty\src\shared\StringBuilder.h(205,72):
+          查看对正在编译的函数 模板 实例化“ValueString<C,14> gdecOfInt<C,unsigned long>(const I)”的引用
+          with
+          [
+              C=wchar_t,
+              I=unsigned long
+          ]
+  
+  WinptyVersion.cc
+  win_delay_load_hook.cc
+    正在创建库 C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\Release\winpty.lib 和对象 C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\Release\winpty.exp
+  winpty.vcxproj -> C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\Release\\winpty.dll
+  winpty.cc
+  path_util.cc
+  win_delay_load_hook.cc
+    正在创建库 C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\Release\pty.lib 和对象 C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\Release\pty.exp
+  pty.vcxproj -> C:\project2\kb-wt\s1-03\poc\t0-03-node-pty\.srcbuild\node-pty\build\Release\\pty.node
+gyp info ok 
+loaded source-built node-pty from scratch copy
+source-built module echo round-trip OK: "node-pty>\u001b[1C\u001b]0;C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\u0007\u001b[?25h\u001b[?25l\u001b[93mecho \u001b[37mSRCBUILD42\r\n\u001b[?25h"
+PASS: source-compiled node-pty (VS BuildTools + node headers via npmmirror) works

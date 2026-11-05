@@ -1,0 +1,25 @@
+{
+  "name": "t0-03-node-pty",
+  "private": true,
+  "version": "0.0.0",
+  "description": "T0 前置验证 (issue 4): node-pty 在 Electron 44 (Windows) 的原生编译/加载与最小终端冒烟（Electron 42 为同 ABI 对照）",
+  "scripts": {
+    "verify": "node verify.mjs",
+    "smoke:node": "node verify-node-abi.mjs",
+    "smoke:electron": "electron smoke-main.js"
+  },
+  "dependencies": {
+    "node-pty": "1.1.0"
+  },
+  "devDependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "electron": "44.10.2"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "node-pty"
+    ]
+  }
+}
