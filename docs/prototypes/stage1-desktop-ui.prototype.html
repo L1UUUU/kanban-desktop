@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<!-- 一次性 UI 原型（非产品代码）：Kanban Desktop V1 阶段 1 主界面三个结构性变体，经 #variant=A/B/C 切换，←/→ 键或底部悬浮条切换。回答的问题：主界面布局、控件形态与关键状态呈现哪种合适。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kanban Desktop — 阶段 1 主界面原型（一次性）</title>
+<style>
+  :root {
+    --bg: #0f1117; --bg2: #161a23; --bg3: #1d222e; --line: #2a3040;
+    --fg: #e6e9f0; --fg-dim: #9aa3b5; --fg-faint: #5d6575;
+    --accent: #4f8cff; --accent2: #7aa5ff;
+    --codex: #3fb27f; --claude: #d97757; --opencode: #8b7cf6; --pty: #d4a72c;
+    --ok: #3fb27f; --warn: #e5b567; --err: #e0705f;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--fg); font: 13px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif; height: 100vh; overflow: hidden; }
+  #app { height: 100vh; }
+  button { font: inherit; color: inherit; background: var(--bg3); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--fg-dim); }
+  .st-running { color: var(--ok); border-color: var(--ok); }
+  .st-waiting { color: var(--warn); border-color: var(--warn); }
+  .st-interrupted { color: var(--err); border-color: var(--err); }
+  .st-disconnected { color: var(--fg-dim); }
+  .cli-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; flex: none; }
+  .dot-codex { background: var(--codex); } .dot-claude { background: var(--claude); } .dot-opencode { background: var(--opencode); } .dot-pty { background: var(--pty); }
+  .dir-badge { font-size: 11px; padding: 0 6px; border-radius: 4px; margin-left: 6px; cursor: help; flex: none; }
+  .dir-main { color: var(--ok); border: 1px solid rgba(63,178,127,.5); }
+  .dir-wt { color: var(--accent2); border: 1px solid rgba(122,165,255,.5); }
+
+  /* ===== 变体 A：经典三栏 ===== */
+  .vA-root { display: grid; grid-template-rows: 42px 1fr; height: 100vh; }
+  .vA-top { display: flex; align-items: center; gap: 12px; padding: 0 14px; background: var(--bg2); border-bottom: 1px solid var(--line); }
+  .vA-main { display: grid; grid-template-columns: 240px 1fr; min-height: 0; }
+  .vA-side { background: var(--bg2); border-right: 1px solid var(--line); overflow-y: auto; padding: 10px 0; }
+  .vA-side h4 { font-size: 11px; color: var(--fg-dim); padding: 6px 14px 2px; letter-spacing: .5px; }
+  .vA-proj { display: flex; align-items: center; gap: 8px; padding: 6px 14px; cursor: pointer; position: relative; }
+  .vA-proj.on { background: var(--bg3); }
+  .vA-proj .pname { flex: 1; }
+  .proj-add { display: none; width: 24px; height: 24px; padding: 0; border-radius: 6px; line-height: 1; color: var(--fg-dim); align-items: center; justify-content: center; }
+  .vA-proj:hover .proj-add { display: inline-flex; }
+  .proj-add:hover { color: var(--accent); border-color: var(--accent); }
+  .conflictnote { max-width: 860px; margin: 14px auto 0; font-size: 12px; color: var(--warn); background: rgba(229,181,103,.08); border: 1px solid rgba(229,181,103,.4); border-radius: 8px; padding: 7px 12px; }
+  .vA-newwrap { position: relative; padding: 4px 10px; }
+  .vA-newmenu { position: absolute; top: 100%; left: 10px; z-index: 30; background: var(--bg3); border: 1px solid var(--line); border-radius: 8px; padding: 4px; display: none; box-shadow: 0 8px 24px rgba(0,0,0,.5); min-width: 150px; }
+  .vA-newmenu.open { display: block; }
+  .vA-newmenu div { padding: 5px 10px; border-radius: 5px; cursor: pointer; display: flex; align-items: center; }
+  .vA-newmenu div:hover { background: var(--bg2); }
+  .vA-sess { display: flex; align-items: center; gap: 4px; padding: 6px 14px; cursor: pointer; border-left: 2px solid transparent; }
+  .vA-sess:hover { background: var(--bg3); }
+  .vA-sess.on { background: var(--bg3); border-left-color: var(--accent); }
+  .vA-sess .t { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .vA-chat { display: grid; grid-template-rows: 1fr auto; min-width: 0; min-height: 0; }
+  .vA-msgs { overflow-y: auto; padding: 18px 26px; }
+  .vA-msg { max-width: 860px; margin: 0 auto 14px; }
+  .vA-msg .who { font-size: 11px; color: var(--fg-dim); margin-bottom: 3px; }
+  .vA-msg.user .bubble { background: var(--bg3); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; display: inline-block; }
+  .vA-msg.assistant .bubble { white-space: pre-wrap; }
+  .vA-streaming::after { content: "▍"; animation: blink 1s steps(1) infinite; color: var(--accent); }
+  @keyframes blink { 50% { opacity: 0; } }
+  /* 输入区：统一 composer（三变体共用） */
+  .composer { border-top: 1px solid var(--line); background: var(--bg2); padding: 12px 26px 16px; }
+  .composer .wrap { max-width: 860px; margin: 0 auto; background: var(--bg3); border: 1px solid var(--line); border-radius: 14px; padding: 10px 14px 8px; transition: border-color .15s; }
+  .composer .wrap:focus-within { border-color: var(--accent); }
+  .composer textarea { width: 100%; background: transparent; color: var(--fg); border: none; outline: none; font: inherit; resize: none; min-height: 46px; max-height: 160px; display: block; }
+  .composer textarea::placeholder { color: #5d6575; }
+  .composer textarea:disabled { color: var(--fg-dim); }
+  .composer .bar { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .composer .spacer { flex: 1; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--fg-dim); background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; cursor: pointer; height: 28px; }
+  .chip:hover { color: var(--fg); border-color: var(--accent); }
+  .chip.locked { color: var(--warn); border-color: rgba(229,181,103,.55); }
+  .chip.locked:hover { border-color: var(--warn); }
+  .chip.auto { color: var(--ok); border-color: rgba(63,178,127,.5); }
+  .chip.auto:hover { border-color: var(--ok); }
+  select.chip option { background: var(--bg3); color: var(--fg); }
+  .sendbtn { background: var(--accent); border-color: var(--accent); color: #fff; border-radius: 999px; padding: 0 16px; height: 30px; font-size: 13px; }
+  .sendbtn:hover { background: var(--accent2); border-color: var(--accent2); }
+  .stopbtn { border-color: var(--err); color: var(--err); border-radius: 999px; height: 30px; }
+  .permwrap { position: relative; display: inline-flex; }
+  .permmenu-item b { display: block; }
+  .permnote { max-width: 860px; margin: 7px auto 0; font-size: 11px; color: #5d6575; }
+
+  /* 工具卡片 / 审批卡片（各变体复用形态、独立命名空间由变体容器着色） */
+  .toolcard { max-width: 860px; margin: 0 auto 14px; background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .toolcard .hd { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-family: Consolas, monospace; font-size: 12px; cursor: pointer; }
+  .toolcard .hd .tool { color: var(--accent2); font-weight: 600; }
+  .toolcard .hd .spin { width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--ok); border-radius: 50%; animation: rot .8s linear infinite; flex: none; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  .toolcard .hd .dur { margin-left: auto; color: var(--fg-dim); font-size: 11px; }
+  .toolcard .args { padding: 0 12px 8px 34px; color: var(--fg-dim); font-family: Consolas, monospace; font-size: 11px; white-space: pre-wrap; }
+  .toolcard .out { border-top: 1px dashed var(--line); padding: 8px 12px; font-family: Consolas, monospace; font-size: 12px; color: var(--fg-dim); white-space: pre-wrap; max-height: 140px; overflow-y: auto; }
+  .toolcard.denied { border-color: var(--err); }
+  .approncard { max-width: 860px; margin: 0 auto 14px; background: #241f14; border: 1px solid var(--warn); border-radius: 10px; padding: 12px 14px; }
+  .approncard .q { font-family: Consolas, monospace; font-size: 12px; margin-bottom: 6px; }
+  .approncard .sug { font-size: 12px; color: var(--fg-dim); margin-bottom: 10px; }
+  .approncard .sug b { color: var(--fg); font-weight: 500; }
+  .approncard .btns { display: flex; gap: 8px; }
+  .approncard .btns .yes { border-color: var(--ok); color: var(--ok); }
+  .approncard .btns .no { border-color: var(--err); color: var(--err); }
+  .turnnote { max-width: 860px; margin: 0 auto 14px; text-align: center; color: var(--fg-dim); font-size: 12px; }
+
+  /* PTY 终端面板 */
+  .ptypanel { background: #0a0c10; border: 1px solid var(--line); border-radius: 10px; margin: 18px auto; max-width: 960px; font-family: Consolas, "Courier New", monospace; font-size: 12.5px; padding: 10px 12px; color: #cdd3e0; }
+  .ptypanel .line { white-space: pre-wrap; }
+  .ptypanel .green { color: #57c98a; } .ptypanel .dim { color: #6b7280; } .ptypanel .yellow { color: #e5b567; }
+
+  /* ===== 变体 B：会话标签页 + 右侧活动面板 ===== */
+  .vB-root { display: grid; grid-template-rows: 42px 40px 1fr; height: 100vh; }
+  .vB-top { display: flex; align-items: center; gap: 12px; padding: 0 14px; background: var(--bg2); border-bottom: 1px solid var(--line); }
+  .vB-tabs { display: flex; align-items: stretch; background: var(--bg2); border-bottom: 1px solid var(--line); padding: 0 8px; gap: 2px; overflow-x: auto; }
+  .vB-tab { display: flex; align-items: center; gap: 7px; padding: 0 14px; border-right: 1px solid var(--line); cursor: pointer; color: var(--fg-dim); white-space: nowrap; }
+  .vB-tab.on { background: var(--bg); color: var(--fg); box-shadow: inset 0 2px 0 var(--accent); }
+  .vB-tab .live { width: 7px; height: 7px; border-radius: 50%; }
+  .vB-main { display: grid; grid-template-columns: 1fr 300px; min-height: 0; }
+  .vB-chat { display: grid; grid-template-rows: 1fr auto; min-width: 0; border-right: 1px solid var(--line); }
+  .vB-msgs { overflow-y: auto; padding: 18px 22px; }
+  .vB-act { background: var(--bg2); overflow-y: auto; padding: 12px; }
+  .vB-act h4 { font-size: 11px; color: var(--fg-dim); letter-spacing: .5px; margin-bottom: 8px; }
+  .vB-actcard { background: var(--bg3); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; font-size: 12px; }
+  .vB-actcard .cmd { font-family: Consolas, monospace; color: var(--accent2); }
+  .vB-side { display: none; }
+
+  /* ===== 变体 C：预览侧栏 + 顶部审批横幅 ===== */
+  .vC-root { display: grid; grid-template-rows: 42px 1fr; height: 100vh; }
+  .vC-top { display: flex; align-items: center; gap: 12px; padding: 0 14px; background: var(--bg2); border-bottom: 1px solid var(--line); }
+  .vC-main { display: grid; grid-template-columns: 280px 1fr; min-height: 0; }
+  .vC-side { background: var(--bg2); border-right: 1px solid var(--line); overflow-y: auto; }
+  .vC-sess { padding: 9px 14px; cursor: pointer; border-bottom: 1px solid rgba(42,48,64,.5); }
+  .vC-sess:hover { background: var(--bg3); }
+  .vC-sess.on { background: var(--bg3); box-shadow: inset 2px 0 0 var(--accent); }
+  .vC-sess .row1 { display: flex; align-items: center; gap: 6px; }
+  .vC-sess .title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+  .vC-sess .preview { color: var(--fg-dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+  .vC-chat { display: grid; grid-template-rows: auto 1fr auto; min-width: 0; min-height: 0; }
+  .vC-banner { display: flex; align-items: center; gap: 12px; background: #241f14; border-bottom: 1px solid var(--warn); padding: 10px 20px; }
+  .vC-banner .cmd { font-family: Consolas, monospace; font-size: 12px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .vC-msgs { overflow-y: auto; padding: 16px 26px; }  .vC-msg { max-width: 820px; margin: 0 auto 12px; }
+  .vC-msg .who { font-size: 11px; color: var(--fg-dim); margin-bottom: 2px; }
+  .vC-msg .bubble { white-space: pre-wrap; }
+  .vC-msg.user .bubble { color: var(--accent2); }
+  .vC-toolchip { max-width: 820px; margin: 0 auto 10px; display: flex; align-items: center; gap: 8px; background: var(--bg2); border: 1px solid var(--line); border-radius: 999px; padding: 4px 14px; font-family: Consolas, monospace; font-size: 12px; cursor: pointer; width: fit-content; }
+  .vC-tooldrawer { max-width: 820px; margin: 0 auto 10px; background: var(--bg2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; font-family: Consolas, monospace; font-size: 12px; color: var(--fg-dim); white-space: pre-wrap; display: none; }
+  .vC-tooldrawer.open { display: block; }
+  /* ===== 浮动切换条（原型专用，非设计的一部分） ===== */
+  #switcher { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 99; display: flex; align-items: center; gap: 10px; background: #000; color: #fff; border: 1px solid #555; border-radius: 999px; padding: 6px 14px; box-shadow: 0 6px 20px rgba(0,0,0,.6); font-size: 12px; }
+  #switcher button { background: #222; border-color: #555; color: #fff; border-radius: 999px; padding: 2px 10px; }
+  #switcher .label b { color: #ffd479; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="switcher">
+  <button id="swPrev">←</button>
+  <span class="label" id="swLabel"></span>
+  <button id="swNext">→</button>
+</div>
+<script>
+"use strict";
+/* ============ Mock 引擎：会话数据 + 脚本驱动（三变体共享；切换会话不停止脚本） ============ */
+
+const CLIS = { codex: "Codex", claude: "Claude", opencode: "OpenCode", pty: "终端" };
+
+function mkSession(o) {
+  return Object.assign({ kind: "chat", status: "idle", permMode: "auto", msgs: [], script: null, si: 0, turnText: "",
+    pendingApproval: null, lastActivity: "—" }, o);
+}
+
+let uid = 100;
+const state = {
+  project: { name: "kanban-desktop", path: "C:\\project2\\kanban-desktop" },
+  ui: { newMenu: false, permMenu: false }, // 菜单开合状态入 state：500ms tick 全量重渲染不会打断用户操作
+  sessions: [
+    mkSession({ id: ++uid, cli: "codex", title: "实现 IPC schema 包", cwd: "C:\\project2\\kanban-desktop", status: "idle" }),
+    mkSession({ id: ++uid, cli: "claude", title: "需求设计讨论", cwd: "C:\\project2\\kanban-desktop", status: "waiting",
+      msgs: [
+        { role: "user", text: "帮我把 ipc-schema 包的类型拆成独立文件" },
+        { role: "assistant", text: "我先看一下当前 schema 文件的结构。" },
+        { type: "tool", tool: "Read", args: "packages/ipc-schema/src/index.ts", status: "completed", dur: "0.4s",
+          out: "（86 行）export * from \"./chat\";\nexport * from \"./session\"; …" },
+        { role: "assistant", text: "结构清楚了，我会新增 src/session/create.ts 并改写 index.ts 的导出。" },
+        { type: "tool", tool: "Edit", args: "packages/ipc-schema/src/index.ts（写入 86 行）", status: "running", out: "" },
+      ],
+      pendingApproval: { cmd: "Edit packages/ipc-schema/src/index.ts（写入 86 行）", suggestions: [
+        { kind: "addRules", label: "允许规则", detail: "Edit(src/**) 后续免询问" },
+        { kind: "addDirectories", label: "允许目录", detail: "packages/ipc-schema/** 整目录" },
+      ] } }),
+    mkSession({ id: ++uid, cli: "opencode", title: "修 README typo", cwd: "C:\\project2\\demo-shop", status: "idle",
+      msgs: [ { role: "user", text: "README 第三段有错别字，帮我修掉" },
+              { role: "assistant", text: "已修正「兼容性」→「兼容性」以外的错字并提交。" } ] }),
+    mkSession({ id: ++uid, cli: "codex", title: "调研 Vite 配置", cwd: "C:\\project2\\.worktrees\\kanban-desktop\\poc7", wt: "poc7", status: "interrupted",
+      msgs: [ { role: "user", text: "对比一下 electron-vite 和手工配 Vite" },
+              { role: "assistant", text: "electron-vite 把主进程/渲染进程/preload 三份构建合并成一条命令，手工配则要维护三个 tsconfig 和两条 dev script。对于本仓库的三包结构……" } ],
+      lastActivity: "输出被用户中断" }),
+    mkSession({ id: ++uid, cli: "claude", title: "昨日会话 · 认证网关", cwd: "C:\\project2\\kanban-desktop", status: "disconnected",
+      msgs: [], lastActivity: "应用上次退出时保留" }),
+    mkSession({ id: ++uid, cli: "pty", kind: "pty", title: "终端 · claude TUI", cwd: "C:\\project2\\kanban-desktop", status: "running",
+      lines: ["Welcome to Claude Code TUI", "", "╭──────────────────────────────╮", "│ > 输入提示词，或 /help 查看命令 │", "╰──────────────────────────────╯", ""] }),
+  ],
+  active: null,
+};
+
+// 会话 1 的演示脚本：用户发送后 → 助手流式 → 工具运行 → 完成 → 总结
+const TURN_SCRIPT = (prompt) => [
+  { t: "user", text: prompt },
+  { t: "wait", ms: 600 },
+  { t: "assistant", text: "好的，我先跑一遍现有测试确认基线，然后开始拆分。" },
+  { t: "tool", tool: "Bash", args: "pnpm vitest run --filter ipc-schema", status: "running" },
+  { t: "toolout", ix: -1, chunk: "$ pnpm vitest run --filter ipc-schema\n", },
+  { t: "toolout", ix: -1, chunk: " ✓ src/chat.test.ts (8) 2.1s\n ✓ src/session.test.ts (5) 1.4s\n" },
+  { t: "tooldone", ix: -1, dur: "3.6s", exit: 0, out: " Test Files  2 passed\n      Tests  13 passed" },
+  { t: "assistant", text: "基线全绿。现在把 chat 与 session 两个命名空间拆成独立文件，并在 index 里保持原导出面不变。" },
+  { t: "turnend" },
+];
+
+// 会话 2 的审批脚本：从当前状态继续 → 工具触发审批 → 等用户决定 → 分支
+const APPROVAL_SCRIPT = [
+  { t: "assistant", text: "结构清楚了，我会新增 src/session/create.ts 并改写 index.ts 的导出。" },
+  { t: "tool", tool: "Edit", args: "packages/ipc-schema/src/index.ts（写入 86 行）", status: "running" },
+  { t: "approval", cmd: "Edit packages/ipc-schema/src/index.ts", suggestions: [
+      { kind: "addRules", label: "允许规则", detail: "Edit(src/**) 后续免询问" },
+      { kind: "addDirectories", label: "允许目录", detail: "packages/ipc-schema/** 整目录" },
+    ] },
+];
+
+function startTurn(sess, prompt) {
+  sess.status = "running";
+  sess.msgs = sess.msgs.filter(m => m.type !== "approval"); // 清理旧审批残留
+  // 会话 2（需求设计讨论）固定演示审批分支；其余会话走完整 turn 脚本
+  sess.script = sess.id === state.sessions[1].id ? APPROVAL_SCRIPT.slice() : TURN_SCRIPT(prompt).slice();
+  sess.si = 0; sess.waitMs = 0;
+}
+
+// 引擎 tick：推进所有会话脚本（与当前激活会话无关 —— 切换不停止）
+setInterval(() => {
+  for (const s of state.sessions) {
+    if (!s.script) continue;
+    if (s.pendingApproval) continue; // 等待用户审批决定
+    if (s.waitMs > 0) { s.waitMs -= 500; continue; }
+    const step = s.script[s.si++];
+    if (!step) { s.script = null; continue; }
+    applyStep(s, step);
+  }
+  render();
+}, 500);
+
+function applyStep(s, st) {
+  if (st.t === "user") s.msgs.push({ role: "user", text: st.text });
+  else if (st.t === "wait") s.waitMs = st.ms;
+  else if (st.t === "assistant") { s.msgs.push({ role: "assistant", text: "" }); s.turnText = st.text; s.charIx = 0; s.streaming = true; }
+  else if (st.t === "tool") s.msgs.push({ type: "tool", tool: st.tool, args: st.args, status: "running", out: "" });
+  else if (st.t === "toolout") { const m = lastTool(s); if (m) m.out += st.chunk; }
+  else if (st.t === "tooldone") { const m = lastTool(s); if (m) { m.status = "completed"; m.dur = st.dur; m.exit = st.exit; m.out += "\n" + st.out; } }
+  else if (st.t === "approval") { s.status = "waiting"; s.pendingApproval = { cmd: st.cmd, suggestions: st.suggestions }; s.script.splice(s.si); s.si = s.script.length; }
+  else if (st.t === "turnend") { s.status = "idle"; if (s.turnText) { const m = [...s.msgs].reverse().find(x => x.role === "assistant"); if (m) m.text = s.turnText; } s.streaming = false; s.lastActivity = "刚完成一轮"; }
+}
+function lastTool(s) { for (let i = s.msgs.length - 1; i >= 0; i--) if (s.msgs[i].type === "tool") return s.msgs[i]; return null; }
+
+// 流式字符推进（独立于 500ms tick，视觉更平滑）
+setInterval(() => {
+  let dirty = false;
+  for (const s of state.sessions) {
+    if (!s.streaming || !s.turnText) continue;
+    const m = [...s.msgs].reverse().find(x => x.role === "assistant");
+    if (!m) continue;
+    m.text = s.turnText.slice(0, (s.charIx += 3));
+    if (s.charIx >= s.turnText.length) { s.streaming = false; m.text = s.turnText; }
+    dirty = true;
+  }
+  if (dirty) render();
+}, 60);
+
+function decide(sess, decision) {
+  const ap = sess.pendingApproval; if (!ap) return;
+  sess.pendingApproval = null; sess.status = "running";
+  const m = lastTool(sess);
+  if (m) {
+    if (decision === "deny") { m.status = "denied"; sess.msgs.push({ role: "assistant", text: "好的，我不改这个文件。需要我先列出计划再逐条确认吗？" }); sess.status = "idle"; }
+    else { m.status = "completed"; m.dur = "0.8s"; m.exit = 0; m.out = "已写入（" + (decision === "always" ? "记住规则，后续同类不再询问" : "仅本次允许") + "）";
+      sess.script = [ { t: "assistant", text: "拆分完成，index.ts 的导出面保持不变，测试仍然全绿。" }, { t: "turnend" } ]; sess.si = 0; }
+  }
+}
+
+function stopTurn(sess) {
+  if (sess.streaming) { sess.streaming = false; const m = [...sess.msgs].reverse().find(x => x.role === "assistant"); if (m) m.text += " …"; }
+  sess.script = null; sess.status = "interrupted"; sess.lastActivity = "输出被用户中断";
+  const m = lastTool(sess); if (m && m.status === "running") m.status = "中断";
+}
+
+function resumeHistory(sess) { sess.status = "idle"; sess.msgs = [
+  { role: "user", text: "（历史已读取）昨天网关认证的结论是什么？" },
+  { role: "assistant", text: "结论：会话级 --settings 注入与用户级认证 env 是叠加关系（PoC 7 T6 实证），--setting-sources project 才会切断认证。" } ]; sess.lastActivity = "已从原生历史恢复"; }
+
+// 目录身份徽标：主仓库（绿）/ worktree:xxx（蓝）；worktree 天然隔离，不参与主仓库冲突计数
+function dirBadgeHtml(x) {
+  return x.wt
+    ? `<span class="dir-badge dir-wt" title="工作在独立 worktree（${esc(x.cwd)}），与其他会话文件隔离">worktree: ${esc(x.wt)}</span>`
+    : `<span class="dir-badge dir-main" title="工作在主仓库（${esc(x.cwd)}）">主仓库</span>`;
+}
+// 主仓库冲突：同一主仓库 cwd 下、非断开的会话 ≥2 时提示（worktree 会话不计入）
+function mainRepoPeers(sess) {
+  if (sess.wt || sess.status === "disconnected") return [];
+  return state.sessions.filter(o => o !== sess && !o.wt && o.cwd === sess.cwd && o.status !== "disconnected");
+}
+function cwdConflicted(sess) {
+  return mainRepoPeers(sess).length > 0;
+}
+
+/* ============ 渲染公共件 ============ */
+const app = document.getElementById("app");
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function statusBadge(st) { const zh = { idle: "空闲", running: "运行中", waiting: "等待审批", interrupted: "已中断", disconnected: "已断开" }[st]; return `<span class="badge st-${st}">${zh}</span>`; }
+function cliName(c) { return CLIS[c]; }
+
+function toolCardHTML(m) {
+  const icon = m.status === "running" ? `<span class="spin"></span>` : m.status === "denied" ? "✕" : m.status === "中断" ? "⏹" : "✓";
+  const stat = { running: "运行中", completed: `完成 · ${m.dur ?? ""}`, denied: "已拒绝", "中断": "已中断" }[m.status] ?? m.status;
+  return `<div class="toolcard${m.status === "denied" ? " denied" : ""}">
+    <div class="hd">${icon}<span class="tool">${esc(m.tool)}</span><span style="color:var(--fg-dim)">${esc(m.args)}</span><span class="dur">${stat}</span></div>
+    ${m.out ? `<div class="out">${esc(m.out)}</div>` : ""}
+  </div>`;
+}
+function approvalHTML(sess, inline) {
+  const ap = sess.pendingApproval; if (!ap) return "";
+  const inner = `<div class="q">⚙ 需要审批：${esc(ap.cmd)}</div>
+    <div class="sug">建议：${ap.suggestions.map(s => `<b>${esc(s.label)}</b> ${esc(s.detail)}`).join(" · ")}</div>
+    <div class="btns"><button class="yes" onclick="decideById(${sess.id},'once')">允许一次</button><button class="yes" onclick="decideById(${sess.id},'always')">总是允许</button><button class="no" onclick="decideById(${sess.id},'deny')">拒绝</button></div>`;
+  return inline ? `<div class="approncard">${inner}</div>` : inner;
+}
+function msgList(sess, cls) {
+  let h = "";
+  for (const m of sess.msgs) {
+    if (m.role === "user") h += `<div class="${cls} user"><div class="who">你</div><div class="bubble">${esc(m.text)}</div></div>`;
+    else if (m.role === "assistant") h += `<div class="${cls} assistant${m === sess.msgs[sess.msgs.length-1] && sess.streaming ? " streaming" : ""}"><div class="who">${cliName(sess.cli)}</div><div class="bubble">${esc(m.text)}</div></div>`;
+    else if (m.type === "tool") h += toolCardHTML(m);
+  }
+  if (sess.streaming) h = h.replace('class="' + cls + ' assistant"', 'class="' + cls + ' assistant streaming"').replace(/streaming streaming/, "streaming");
+  return h;
+}
+function composerHtml(sess) {
+  const running = sess.status === "running";
+  const perm = sess.permMode ?? "auto";
+  const isOC = sess.cli === "opencode";
+  const PERMS = {
+    ask:  { icon: "🔒", label: "请求", desc: "所有工具调用前弹出审批卡片" },
+    auto: { icon: "⚡", label: "自动", desc: "安全操作放行，风险操作（写文件/命令）弹审批" },
+    full: { icon: "🔓", label: "完全访问", desc: isOC ? "等同 OpenCode 原生默认 *:*:allow，全放行不问" : "全部自动放行，不弹任何审批" },
+  };
+  const p = PERMS[perm];
+  return `<div class="composer"><div class="wrap">
+    <textarea id="promptBox" placeholder="输入消息，/ 开头触发 Skill…" ${running ? "disabled" : ""}></textarea>
+    <div class="bar">
+      <span class="permwrap">
+        <button class="chip ${perm === "full" ? "" : perm === "ask" ? "locked" : "auto"}" onclick="togglePerm(event)" title="权限档位：由 Adapter 映射到各 CLI 原生审批机制">${p.icon} 权限：${p.label} ▾</button>
+        <div class="vA-newmenu${state.ui.permMenu ? " open" : ""}" id="permMenu" style="left:0;min-width:280px">
+          <div class="permmenu-item" onclick="setPerm(${sess.id},'ask')"><b>🔒 请求</b><span style="font-size:11px;color:var(--fg-dim)">${PERMS.ask.desc}</span></div>
+          <div class="permmenu-item" onclick="setPerm(${sess.id},'auto')"><b>⚡ 自动（推荐）</b><span style="font-size:11px;color:var(--fg-dim)">${PERMS.auto.desc}</span></div>
+          <div class="permmenu-item" onclick="setPerm(${sess.id},'full')"><b>🔓 完全访问</b><span style="font-size:11px;color:var(--fg-dim)">${PERMS.full.desc}</span></div>
+        </div>
+      </span>
+      <select class="chip"><option>gpt-5.6-luna</option><option>默认模型</option></select>
+      <span class="spacer"></span>
+      ${running ? `<button class="stopbtn" onclick="stopById(${sess.id})">⏹ 停止输出</button>` : `<button class="sendbtn" onclick="sendById(${sess.id})">发送 ➤</button>`}
+    </div>
+  </div>${isOC ? `<div class="permnote">OpenCode 权限档位为 server 级（同项目下会话共享）；切换后新会话生效</div>` : ""}</div>`;
+}
+function cliMenuItems() {
+  return `
+      <div onclick="newSession('codex')"><span class="cli-dot dot-codex"></span>Codex</div>
+      <div onclick="newSession('claude')"><span class="cli-dot dot-claude"></span>Claude</div>
+      <div onclick="newSession('opencode')"><span class="cli-dot dot-opencode"></span>OpenCode</div>
+      <div onclick="newSession('pty')"><span class="cli-dot dot-pty"></span>PTY 终端</div>`;
+}
+function newSessMenuHtml(host) {
+  return `<div class="vA-newwrap"><button onclick="toggleMenu(event)">＋ 新建会话 ▾</button>
+    <div class="vA-newmenu${state.ui.newMenu ? " open" : ""}" id="newMenu">${cliMenuItems()}
+    </div></div>`;
+}
+function ptyHTML(sess) {
+  return `<div class="ptypanel">${sess.lines.map(l => `<div class="line ${l.startsWith("$") ? "green" : l.startsWith("╭") || l.startsWith("│") || l.startsWith("╰") ? "yellow" : ""}">${esc(l)}</div>`).join("")}
+  <div class="line dim">— PTY 会话：独立 TUI，与结构化会话并列；关闭标签不停止 CLI（mock）—</div></div>`;
+}
+
+/* ============ 全局动作（onclick 入口） ============ */
+window.toggleMenu = (e) => { e.stopPropagation(); state.ui.newMenu = !state.ui.newMenu; state.ui.permMenu = false; render(); };
+window.togglePerm = (e) => { e.stopPropagation(); state.ui.permMenu = !state.ui.permMenu; state.ui.newMenu = false; render(); };
+document.addEventListener("click", () => { if (state.ui.newMenu || state.ui.permMenu) { state.ui.newMenu = false; state.ui.permMenu = false; render(); } });
+window.setPerm = (id, mode) => { const s = state.sessions.find(x => x.id === id); if (s) s.permMode = mode; state.ui.permMenu = false; render(); };
+window.newSession = (cli) => {
+  const s = mkSession({ id: ++uid, cli, kind: cli === "pty" ? "pty" : "chat", title: (cli === "pty" ? "终端 · " + CLIS[cli] : "新会话 · " + cliName(cli)), cwd: state.project.path, status: "idle" });
+  state.sessions.push(s); state.active = s.id; state.ui.newMenu = false; render();
+};
+window.activate = (id) => { state.active = id; render(); };
+window.decideById = (id, d) => decide(state.sessions.find(s => s.id === id), d);
+window.stopById = (id) => stopTurn(state.sessions.find(s => s.id === id));
+window.sendById = (id) => {
+  const s = state.sessions.find(x => x.id === id);
+  const box = document.getElementById("promptBox");
+  const p = (box && box.value.trim()) || "把 ipc-schema 的类型拆成独立文件";
+  startTurn(s, p); render();
+};
+window.resumeById = (id) => resumeHistory(state.sessions.find(s => s.id === id));
+
+/* ============ 变体 A：经典三栏 ============ */
+function renderA() {
+  const s = state.sessions.find(x => x.id === state.active) ?? state.sessions[0]; state.active = s.id;
+  let side = `<h4>项目</h4>
+    <div class="vA-proj on"><span class="pname">📁 ${esc(state.project.name)}</span>
+      <button class="proj-add" onclick="toggleMenu(event)" title="新建会话（选择 CLI）">＋</button>
+      <div class="vA-newmenu${state.ui.newMenu ? " open" : ""}" id="newMenu" style="left:14px">${cliMenuItems()}</div>
+    </div>
+    <h4>结构化会话</h4>`;
+  for (const x of state.sessions.filter(x => x.kind === "chat")) side += sessRowA(x);
+  side += `<h4>PTY 终端</h4>`;
+  for (const x of state.sessions.filter(x => x.kind === "pty")) side += sessRowA(x);
+  function sessRowA(x) {
+    return `<div class="vA-sess${x.id === s.id ? " on" : ""}" onclick="activate(${x.id})">
+      <span class="cli-dot dot-${x.cli}"></span><span class="t">${esc(x.title)}</span>${dirBadgeHtml(x)}${statusBadge(x.status)}</div>`;
+  }
+  let chat = "";
+  if (s.kind === "pty") chat = ptyHTML(s);
+  else if (s.status === "disconnected") chat = `<div class="turnnote">该会话来自上次运行（CLI 已退出）。缓存不替代原生历史。</div>
+    <div style="max-width:860px;margin:0 auto;text-align:center"><button onclick="resumeById(${s.id})">读取原生历史并恢复</button></div>`;
+  else {
+    const peers = mainRepoPeers(s);
+    chat = (peers.length ? `<div class="conflictnote">⚠ 主仓库并行 ${peers.length + 1} 个会话（${[s, ...peers].map(p => esc(p.title)).join("、")}），同时修改同一批文件可能冲突；仅提示，不阻止执行。worktree 会话已隔离，不在此列</div>` : "")
+      + msgList(s, "vA-msg ") + approvalHTML(s, true);
+    if (s.status === "interrupted") chat += `<div class="turnnote">— 本轮已取消，会话保留，可继续发消息 —</div>`;
+  }
+  app.innerHTML = `<div class="vA-root">
+    <div class="vA-top"><b>Kanban Desktop</b><span class="badge">${esc(state.project.name)}</span><span style="margin-left:auto;color:var(--fg-dim);font-size:12px">设置</span></div>
+    <div class="vA-main"><div class="vA-side">${side}</div>
+      <div class="vA-chat"><div class="vA-msgs">${chat}</div>${s.kind === "chat" ? composerHtml(s) : ""}</div></div></div>`;
+}
+
+/* ============ 变体 B：标签页 + 右侧活动面板 ============ */
+function renderB() {
+  const s = state.sessions.find(x => x.id === state.active) ?? state.sessions[0]; state.active = s.id;
+  let tabs = "";
+  for (const x of state.sessions) tabs += `<div class="vB-tab${x.id === s.id ? " on" : ""}" onclick="activate(${x.id})">
+    <span class="cli-dot dot-${x.cli}"></span>${esc(x.title)}${cwdConflicted(x) ? `<span class="cwd-conflict">⚠</span>` : ""}
+    ${x.status !== "idle" ? `<span class="live" style="background:${{running:"var(--ok)",waiting:"var(--warn)",interrupted:"var(--err)",disconnected:"var(--fg-dim)"}[x.status]}"></span>` : ""}${x.wt ? dirBadgeHtml(x) : ""}</div>`;
+  // 右侧活动面板：当前 turn 的工具时间线 + 审批停靠
+  const tools = s.msgs.filter(m => m.type === "tool");
+  let act = `<h4>本轮活动</h4>`;
+  if (!tools.length && !s.pendingApproval) act += `<div style="color:var(--fg-dim);font-size:12px">暂无工具调用</div>`;
+  for (const m of tools) act += `<div class="vB-actcard"><div class="cmd">${esc(m.tool)} ${esc(m.args)}</div>
+    <div style="margin-top:4px">${statusBadge(m.status === "running" ? "running" : m.status === "denied" ? "interrupted" : "idle")} ${m.dur ?? ""}</div></div>`;
+  if (s.pendingApproval) act += `<h4>待审批</h4>` + approvalHTML(s, false);
+  let chat = "";
+  if (s.kind === "pty") chat = ptyHTML(s);
+  else if (s.status === "disconnected") chat = `<div class="turnnote">会话已断开</div><div style="text-align:center"><button onclick="resumeById(${s.id})">读取原生历史并恢复</button></div>`;
+  else { chat = msgList(s, "vA-msg "); if (s.status === "interrupted") chat += `<div class="turnnote">— 已取消 —</div>`; }
+  app.innerHTML = `<div class="vB-root">
+    <div class="vB-top"><b>Kanban Desktop</b><span class="badge">${esc(state.project.name)}</span>
+      <span style="margin-left:auto;display:flex;gap:8px;align-items:center">${newSessMenuHtml()}<span style="color:var(--fg-dim);font-size:12px">设置</span></span></div>
+    <div class="vB-tabs">${tabs}</div>
+    <div class="vB-main"><div class="vB-chat"><div class="vB-msgs">${chat}</div>${s.kind === "chat" ? composerHtml(s) : ""}</div>
+      <div class="vB-act">${act}</div></div></div>`;
+}
+
+/* ============ 变体 C：预览侧栏 + 顶部审批横幅 ============ */
+function renderC() {
+  const s = state.sessions.find(x => x.id === state.active) ?? state.sessions[0]; state.active = s.id;
+  let side = newSessMenuHtml();
+  for (const x of state.sessions) {
+    const prev = x.kind === "pty" ? "TUI 会话 · 关闭不停止" :
+      x.status === "disconnected" ? "上次运行保留 · 可恢复" :
+      (x.msgs.filter(m => m.role === "assistant").slice(-1)[0]?.text ?? "（暂无消息）").slice(0, 34);
+    side += `<div class="vC-sess${x.id === s.id ? " on" : ""}" onclick="activate(${x.id})">
+      <div class="row1"><span class="cli-dot dot-${x.cli}"></span><span class="title">${esc(x.title)}</span>${dirBadgeHtml(x)}${statusBadge(x.status)}</div>
+      <div class="preview">${esc(prev)}</div></div>`;
+  }
+  let banner = "";
+  if (s.pendingApproval) banner = `<div class="vC-banner"><b style="color:var(--warn)">审批</b><span class="cmd">${esc(s.pendingApproval.cmd)}</span>
+    <span style="font-size:12px;color:var(--fg-dim)">建议：${esc(s.pendingApproval.suggestions.map(x => x.label).join(" / "))}</span>
+    <button class="approncard-btns yes" style="border-color:var(--ok);color:var(--ok)" onclick="decideById(${s.id},'once')">允许一次</button>
+    <button style="border-color:var(--ok);color:var(--ok)" onclick="decideById(${s.id},'always')">总是允许</button>
+    <button style="border-color:var(--err);color:var(--err)" onclick="decideById(${s.id},'deny')">拒绝</button></div>`;
+  let chat = "";
+  if (s.kind === "pty") chat = ptyHTML(s);
+  else if (s.status === "disconnected") chat = `<div class="turnnote">会话已断开 · 缓存不替代原生历史</div><div style="text-align:center;margin-top:12px"><button onclick="resumeById(${s.id})">读取原生历史并恢复</button></div>`;
+  else {
+    for (const m of s.msgs) {
+      if (m.role === "user") chat += `<div class="vC-msg user"><div class="who">你</div><div class="bubble">${esc(m.text)}</div></div>`;
+      else if (m.role === "assistant") chat += `<div class="vC-msg assistant"><div class="who">${cliName(s.cli)}</div><div class="bubble">${esc(m.text)}</div></div>`;
+      else if (m.type === "tool") chat += `<div class="vC-toolchip" onclick="this.nextElementSibling.classList.toggle('open')">${m.status === "running" ? "◉" : m.status === "denied" ? "✕" : "✓"} ${esc(m.tool)} · ${esc(String(m.args).slice(0, 42))}…<span style="margin-left:auto;color:var(--fg-dim)">${m.dur ?? ""}</span></div>
+        <div class="vC-tooldrawer">${esc((m.args || "") + "\n" + (m.out || ""))}</div>`;
+    }
+    if (s.status === "interrupted") chat += `<div class="turnnote">— 本轮已取消 —</div>`;
+  }
+  app.innerHTML = `<div class="vC-root">
+    <div class="vC-top"><b>Kanban Desktop</b><span class="badge">${esc(state.project.name)}</span><span style="margin-left:auto;color:var(--fg-dim);font-size:12px">设置</span></div>
+    <div class="vC-main"><div class="vC-side">${side}</div>
+      <div class="vC-chat">${banner}<div class="vC-msgs">${chat}</div>${s.kind === "chat" ? composerHtml(s) : ""}</div></div></div>`;
+}
+
+/* ============ 变体注册与切换条 ============ */
+const VARIANTS = [
+  { key: "A", name: "经典三栏（左会话导航）", render: renderA },
+  { key: "B", name: "标签页 + 右侧活动面板", render: renderB },
+  { key: "C", name: "预览侧栏 + 顶部审批横幅", render: renderC },
+];
+function currentIx() {
+  const k = (location.hash.replace("#variant=", "") || "A").toUpperCase();
+  const ix = VARIANTS.findIndex(v => v.key === k);
+  return ix < 0 ? 0 : ix;
+}
+function render() { VARIANTS[currentIx()].render(); }
+function switchTo(ix) {
+  ix = (ix + VARIANTS.length) % VARIANTS.length;
+  location.hash = "variant=" + VARIANTS[ix].key;
+  document.getElementById("swLabel").innerHTML = `变体 <b>${VARIANTS[ix].key}</b>（${VARIANTS[ix].name}）— ${ix + 1}/${VARIANTS.length}`;
+  render();
+}
+document.getElementById("swPrev").onclick = () => switchTo(currentIx() - 1);
+document.getElementById("swNext").onclick = () => switchTo(currentIx() + 1);
+document.addEventListener("keydown", (e) => {
+  if (/INPUT|TEXTAREA/.test(document.activeElement?.tagName ?? "")) return;
+  if (e.key === "ArrowLeft") switchTo(currentIx() - 1);
+  if (e.key === "ArrowRight") switchTo(currentIx() + 1);
+});
+window.addEventListener("hashchange", () => switchTo(currentIx()));
+// 初始激活会话 1（演示脚本入口：点发送看流式与工具卡片；会话 2 直接停在待审批）
+state.active = state.sessions[1].id;
+switchTo(currentIx());
+</script>
+</body>
+</html>
