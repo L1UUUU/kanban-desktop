@@ -1,0 +1,1 @@
+2026-11-05T05:14:06.285Z QUERY FAILED: Claude Code process aborted by user

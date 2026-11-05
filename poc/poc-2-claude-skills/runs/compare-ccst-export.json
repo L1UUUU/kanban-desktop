@@ -1,0 +1,41 @@
+[
+  {
+    "v": 3,
+    "id": "call_cd825d756d2947699d959c1a",
+    "timestamp": "2026-11-05T04:42:55.927Z",
+    "sessionId": "2fab6393-eb66-45b6-8260-c27c7b879c07",
+    "skillName": "design-feature",
+    "source": "claude",
+    "triggerMessage": "<system-reminder>\nCodebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.\n\nContents of C:\\Users\\liuy\\.claude\\CLAUDE.md (user's private global instructions for all",
+    "injectedTokens": 8,
+    "cwd": "C:\\project2\\kanban-desktop\\poc\\poc-2-claude-skills\\fixture\\proj",
+    "gitBranch": "main",
+    "recordedVia": "scan"
+  },
+  {
+    "v": 3,
+    "id": "call_f9d8e8f1864b4fcda4fcb7d3",
+    "timestamp": "2026-11-05T05:16:19.743Z",
+    "sessionId": "e62a3618-5203-4fe4-bcfb-fbccc5605fbb",
+    "skillName": "design-feature",
+    "source": "claude",
+    "triggerMessage": "<system-reminder>\nCodebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.\n\nContents of C:\\Users\\liuy\\.claude\\CLAUDE.md (user's private global instructions for all",
+    "injectedTokens": 8,
+    "cwd": "C:\\project2\\kanban-desktop\\poc\\poc-2-claude-skills\\fixture\\proj",
+    "gitBranch": "main",
+    "recordedVia": "scan"
+  },
+  {
+    "v": 3,
+    "id": "call_ef7f8d517ed94a7f9788e485",
+    "timestamp": "2026-11-05T05:17:22.888Z",
+    "sessionId": "05b0533e-0077-4040-ba99-2e49351db2c6",
+    "skillName": "design-feature",
+    "source": "claude",
+    "triggerMessage": "<system-reminder>\nCodebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.\n\nContents of C:\\Users\\liuy\\.claude\\CLAUDE.md (user's private global instructions for all",
+    "injectedTokens": 8,
+    "cwd": "C:\\project2\\kanban-desktop\\poc\\poc-2-claude-skills\\fixture\\proj",
+    "gitBranch": "main",
+    "recordedVia": "scan"
+  }
+]

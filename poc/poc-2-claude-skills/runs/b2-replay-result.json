@@ -1,0 +1,108 @@
+{
+  "hookEventLines": 36,
+  "sessionsObserved": 8,
+  "sessionsWithVerifiedSkill": 3,
+  "verifiedSkillEvents": 3,
+  "changes": [
+    {
+      "type": "requirement_created",
+      "requirementId": "REQ-001",
+      "stage": "Design"
+    },
+    {
+      "type": "requirement_created",
+      "requirementId": "REQ-002",
+      "stage": "Design"
+    },
+    {
+      "type": "requirement_created",
+      "requirementId": "REQ-003",
+      "stage": "Design"
+    }
+  ],
+  "requirements": [
+    {
+      "id": "REQ-001",
+      "title": "待命名需求",
+      "stage": "Design",
+      "stageBasis": {
+        "kind": "skill",
+        "skill": "design-feature",
+        "eventId": "hook:2fab6393-eb66-45b6-8260-c27c7b879c07:design-feature:2026-11-05T04:42:56.470Z",
+        "at": "2026-11-05T04:42:56.470Z"
+      },
+      "uncertain": false,
+      "sessions": [
+        "2fab6393-eb66-45b6-8260-c27c7b879c07"
+      ],
+      "activityCount": 0
+    },
+    {
+      "id": "REQ-002",
+      "title": "待命名需求",
+      "stage": "Design",
+      "stageBasis": {
+        "kind": "skill",
+        "skill": "design-feature",
+        "eventId": "hook:e62a3618-5203-4fe4-bcfb-fbccc5605fbb:design-feature:2026-11-05T05:16:20.428Z",
+        "at": "2026-11-05T05:16:20.428Z"
+      },
+      "uncertain": false,
+      "sessions": [
+        "e62a3618-5203-4fe4-bcfb-fbccc5605fbb"
+      ],
+      "activityCount": 0
+    },
+    {
+      "id": "REQ-003",
+      "title": "待命名需求",
+      "stage": "Design",
+      "stageBasis": {
+        "kind": "skill",
+        "skill": "design-feature",
+        "eventId": "hook:05b0533e-0077-4040-ba99-2e49351db2c6:design-feature:2026-11-05T05:17:23.477Z",
+        "at": "2026-11-05T05:17:23.477Z"
+      },
+      "uncertain": false,
+      "sessions": [
+        "05b0533e-0077-4040-ba99-2e49351db2c6"
+      ],
+      "activityCount": 0
+    }
+  ],
+  "decisions": [
+    {
+      "decision": "create_requirement",
+      "requirementId": "REQ-001",
+      "sessionId": "2fab6393-eb66-45b6-8260-c27c7b879c07"
+    },
+    {
+      "decision": "auto_create",
+      "requirementId": "REQ-001",
+      "sessionId": "2fab6393-eb66-45b6-8260-c27c7b879c07",
+      "skill": "design-feature"
+    },
+    {
+      "decision": "create_requirement",
+      "requirementId": "REQ-002",
+      "sessionId": "e62a3618-5203-4fe4-bcfb-fbccc5605fbb"
+    },
+    {
+      "decision": "auto_create",
+      "requirementId": "REQ-002",
+      "sessionId": "e62a3618-5203-4fe4-bcfb-fbccc5605fbb",
+      "skill": "design-feature"
+    },
+    {
+      "decision": "create_requirement",
+      "requirementId": "REQ-003",
+      "sessionId": "05b0533e-0077-4040-ba99-2e49351db2c6"
+    },
+    {
+      "decision": "auto_create",
+      "requirementId": "REQ-003",
+      "sessionId": "05b0533e-0077-4040-ba99-2e49351db2c6",
+      "skill": "design-feature"
+    }
+  ]
+}
