@@ -76,7 +76,7 @@ PoC 5 全过（6/6），三条硬边界写入 MVP：
 
 ## 6. Renderer 与 UI 复用
 
-- **直接复用**：旧 Kanban terminal 全链路（TerminalPanel + terminalApi 契约 + 注入式 PTY 宿主 + IPC 薄层；已 0 diff 抽离 + mock PTY 浏览器实测跑通）。前置：node-pty 在 Windows Electron 的原生编译验证（§7-3）。
+- **直接复用**：旧 Kanban terminal 全链路（TerminalPanel + terminalApi 契约 + 注入式 PTY 宿主 + IPC 薄层；已 0 diff 抽离 + mock PTY 浏览器实测跑通）。前置：node-pty 在 Windows Electron 的原生编译验证（§7-3）——**已通过**（T0-03，node-pty 1.1.0 随包 N-API prebuilt 在 Electron 42/44 与纯 Node 下加载 + 窗口回显冒烟全过，见 `poc/t0-03-node-pty/RESULT.md`）。
 - **改造后复用**：旧 Kanban project-switcher / git-viewer（受控组件，替换 `@kanban/core` 类型依赖）。
 - **仅借鉴交互，自研实现**：PI-Desktop 的聊天/工具卡片/Session 导航/Diff（LGPL-3.0 阻断源码复用）；工具卡片与 Diff 按 poc-6 的 review-change 契约思路自实现。
 - **否决引入**：PI-Desktop Rust Host Core 与插件系统；旧 Kanban Go daemon；任何带 dispatch/worktree/自动推进的开源 Kanban 执行模型（§8.4 边界）。
@@ -87,7 +87,7 @@ PoC 5 全过（6/6），三条硬边界写入 MVP：
 |---|---|---|
 | 1 | Worker 进程管理实测：Windows Job Object、取消 Turn 不杀 Session、按 Session 粒度有序终止、子进程（Skill 的 Subagent）清理 | §8.6 + PoC 1 发现 #4 |
 | 2 | Agent SDK Windows bug 跟进：锁可用版本或正式弃用改协议直连 | PoC 2 发现 #4 |
-| 3 | node-pty 在 Windows Electron 原生编译验证（terminal 链复用前置） | PoC 6 风险项 |
+| 3 | node-pty 在 Windows Electron 原生编译验证（terminal 链复用前置）——**已完成（T0-03，PASS）**：Node 24 · Electron 44.10.2（42 对照同过）· node-pty 1.1.0 随包 N-API prebuilt，无需编译/electron-rebuild；pnpm 10 须放行构建脚本；源码编译回退路线亦验证可用（详见 `poc/t0-03-node-pty/RESULT.md`） | PoC 6 风险项 |
 | 4 | 同名 skill 冲突的产品策略（项目级/用户级同名提示或前缀） | PoC 2 发现 #3 |
 | 5 | 认证 env 注入策略（保留网关认证的隔离方案） | PoC 2 发现 #4 |
 | 6 | Codex 协议版本探针与降级（experimental v2，锁版本 + generate-ts diff） | PoC 1 发现 #1 |

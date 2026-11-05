@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<!-- 冒烟渲染页：xterm 渲染 PTY 流，程序化发送输入并断言回显 + xterm 缓冲区内容 -->
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>t0-03 node-pty Electron smoke</title>
+  <link rel="stylesheet" href="node_modules/@xterm/xterm/css/xterm.css">
+  <style>
+    body { margin: 0; background: #1e1e1e; }
+    #terminal { padding: 8px; }
+    #status { color: #9cdcfe; font: 12px monospace; padding: 4px 8px; }
+  </style>
+</head>
+<body>
+  <div id="status">waiting for pty…</div>
+  <div id="terminal"></div>
+  <script src="node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script>
+    const TOKEN = 'T0ECHO_SMOKE';
+    const statusEl = document.getElementById('status');
+    const term = new window.Terminal({ theme: { background: '#1e1e1e' } });
+    const fit = new window.FitAddon.FitAddon();
+    term.loadAddon(fit);
+    term.open(document.getElementById('terminal'));
+    fit.fit();
+
+    let raw = '';
+    let sawFirstData = false;
+    const startedAt = Date.now();
+    const setStatus = (t) => { statusEl.textContent = t; };
+
+    // 在 xterm 缓冲区里找 token：证明 PTY 流真正写进了 xterm 显示层
+    function bufferHasToken() {
+      const buf = term.buffer.active;
+      for (let i = 0; i < buf.length; i++) {
+        const line = buf.getLine(i);
+        if (line && line.translateToString(true).includes(TOKEN)) return true;
+      }
+      return false;
+    }
+
+    function waitUntil(pred, onDone, what) {
+      if (pred()) return onDone();
+      if (Date.now() - startedAt > 50000) {
+        setStatus('FAIL: timeout waiting for ' + what);
+        return window.terminalApi.report({ pass: false, reason: 'timeout waiting for ' + what, rawSample: raw.slice(-400) });
+      }
+      setTimeout(() => waitUntil(pred, onDone, what), 100);
+    }
+
+    window.terminalApi.onData((d) => {
+      if (!sawFirstData) { sawFirstData = true; setStatus('pty connected, sending input…'); }
+      raw += d;
+      term.write(d);
+    });
+
+    window.terminalApi.spawn().then(() => {
+      // 第一步：等提示符出现（PTY 通道建立）
+      waitUntil(() => sawFirstData, () => {
+        // 第二步：程序化输入，等回显往返
+        window.terminalApi.write('echo ' + TOKEN + '\r');
+        waitUntil(() => raw.includes(TOKEN), () => {
+          setStatus('echo round-trip OK');
+          // 第三步：再打一行标记命令让截图呈现完整状态，随后断言并上报
+          window.terminalApi.write('echo SMOKE_DONE\r');
+          waitUntil(() => raw.includes('SMOKE_DONE'), () => {
+            const bufferHit = bufferHasToken();
+            setStatus(bufferHit ? 'PASS: echo + xterm buffer verified' : 'FAIL: token not in xterm buffer');
+            setTimeout(() => window.terminalApi.report({
+              pass: bufferHit,
+              firstDataReceived: sawFirstData,
+              echoReceived: raw.includes(TOKEN),
+              bufferHasToken: bufferHit,
+              rawSample: raw.slice(-400),
+            }), 700);
+          }, 'SMOKE_DONE echo');
+        }, 'echo of ' + TOKEN);
+      }, 'first pty data');
+    }).catch((e) => {
+      setStatus('FAIL: spawn error ' + e);
+      window.terminalApi.report({ pass: false, reason: 'spawn error: ' + e });
+    });
+  </script>
+</body>
+</html>

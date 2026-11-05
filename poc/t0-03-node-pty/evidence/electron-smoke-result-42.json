@@ -1,0 +1,7 @@
+{
+  "pass": true,
+  "firstDataReceived": true,
+  "echoReceived": true,
+  "bufferHasToken": true,
+  "rawSample": "l\u001b[2J\u001b[m\u001b[HPS C:\\project2\\kb-wt\\s1-03\\poc\\t0-03-node-pty>\u001b[1C\u001b]0;C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\u0007\u001b[?25h\u001b[?25l\u001b[93mecho \u001b[37mT0ECHO4\u001b[?25h\u001b[?25l\u001b[m\u001b[93m\u001b[1;48Hecho \u001b[37mT0ECHO42\r\n\u001b[?25h\u001b[mT0ECHO42\r\nPS C:\\project2\\kb-wt\\s1-03\\poc\\t0-03-node-pty> \u001b[93mecho \u001b[37mSMOK\u001b[?25l\u001b[m\u001b[93m\u001b[3;48Hecho \u001b[37mSMOKE_DONE\u001b[m\r\nSMOKE_DONE\r\nPS C:\\project2\\kb-wt\\s1-03\\poc\\t0-03-node-pty> \u001b[?25h"
+}
