@@ -1,0 +1,11 @@
+{
+  "results": [
+    {
+      "id": "a",
+      "name": "启动：指定 cwd thread/start 拿原生 id",
+      "status": "PASS",
+      "notes": "threadId=01a1aa12-921b-7f10-b52d-2953ac799e41 cwd=C:\\project2\\kanban-desktop\\poc\\poc-1-codex-appserver\\fixture\\workdir path=C:\\Users\\liuy\\.codex\\sessions\\2026\\11\\05\\rollout-2026-11-05T12-58-31-01a1aa12-921b-7f10-b52d-2953ac799e41.jsonl"
+    }
+  ],
+  "modelCallCount": 0
+}

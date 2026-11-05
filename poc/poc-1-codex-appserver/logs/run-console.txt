@@ -1,0 +1,27 @@
+codex command: {"cmd":"C:\\Users\\liuy\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe","shell":false}
+workdir: C:\project2\kanban-desktop\poc\poc-1-codex-appserver\fixture\workdir
+(node:56652) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[PASS] a 启动：指定 cwd thread/start 拿原生 id — threadId=01a1aa0b-7ea0-74a1-9c2b-c85ec6a3b918 cwd=C:\project2\kanban-desktop\poc\poc-1-codex-appserver\fixture\workdir path=C:\Users\liuy\.codex\sessions\2026\11\05\rollout-2026-11-05T12-50-47-01a1aa0b-7ea0-74a1-9c2b-c85ec6a3b918.jsonl
+[FAIL] b 聊天：≥2 轮流式无重复丢失 — turn1=completed turn2=completed 暗号复现=true delta一致=false itemId=msg_08737d87a46f4ad1016aec0b56873887d0ab8f6cde0e4a9418 拼接(68字)!=最终(34字)
+[PASS] c 工具：命令调用开始/参数/输出/结束 — cmd=""C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command 'echo poc-tool-ok'" exit=0 out="poc-tool-ok"
+[FAIL] d1 审批 approve：收到请求→accept→执行完成 — 审批请求数=0 turn=completed echo输出=(无)
+[FAIL] d2 审批 deny：decline 后不执行、turn 正常收尾 — 新审批请求=0 turn=completed 被拒命令输出="deny-flow-should-not-run"
+[PASS] e1 取消：interrupt 后 turn 状态 interrupted — turn=interrupted
+[PASS] e2 取消后：同 thread 新 turn 正常继续 — turn=completed（作为并发 t0 完成）
+[PASS] f 并发：3 thread 同时运行互不干扰 — t0=completed:"recovered" ; t1=completed:"banana" ; t2=completed:"cherry"
+[PASS] g 恢复：read 历史 + resume + 上下文延续 — read含暗号=true(turns=2) resume=true 回答含暗号=true("ZEBRA-47")
+[PASS] h 异常：kill 后明确报错、不自动重放 — dead=true 首个请求错误="app-server exited unexpectedly: code=null signal=SIGKILL (pending rpc aborted)" 后续请求错误="client is dead: app-server not running"
+
+==== 汇总 ====
+PASS   a   启动：指定 cwd thread/start 拿原生 id
+FAIL   b   聊天：≥2 轮流式无重复丢失
+PASS   c   工具：命令调用开始/参数/输出/结束
+FAIL   d1  审批 approve：收到请求→accept→执行完成
+FAIL   d2  审批 deny：decline 后不执行、turn 正常收尾
+PASS   e1  取消：interrupt 后 turn 状态 interrupted
+PASS   e2  取消后：同 thread 新 turn 正常继续
+PASS   f   并发：3 thread 同时运行互不干扰
+PASS   g   恢复：read 历史 + resume + 上下文延续
+PASS   h   异常：kill 后明确报错、不自动重放
+真实模型 turn 调用次数：9（上限 10）

@@ -1,0 +1,20 @@
+{
+  "source": "abc-startup-chat-tools.leaky-run.log",
+  "agentMessages": [
+    {
+      "itemId": "msg_09b038e6",
+      "finalLen": 26,
+      "joinedLen": 26,
+      "consistent": true
+    },
+    {
+      "itemId": "msg_08737d87",
+      "finalLen": 34,
+      "joinedLen": 34,
+      "consistent": true
+    }
+  ],
+  "allConsistent": true,
+  "magicInFinals": true,
+  "verdict": "PASS"
+}

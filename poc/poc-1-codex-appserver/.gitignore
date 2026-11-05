@@ -1,0 +1,3 @@
+# 排除本地依赖与超大产物（本 PoC 零依赖，防御性配置）
+node_modules/
+*.log.tmp
