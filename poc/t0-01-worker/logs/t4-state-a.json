@@ -1,0 +1,17 @@
+{
+  "hostPid": 56940,
+  "guardPid": null,
+  "jobName": null,
+  "useJob": false,
+  "children": [
+    {
+      "type": "opencode",
+      "label": "opencode-40221",
+      "pid": 55676,
+      "port": 40221,
+      "spawnAt": "2026-11-05T10:32:44.491Z"
+    }
+  ],
+  "grandchildren": [],
+  "readyAt": "2026-11-05T10:32:44.491Z"
+}

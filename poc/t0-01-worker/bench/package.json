@@ -1,0 +1,13 @@
+{
+  "name": "t0-01-bench",
+  "private": true,
+  "version": "0.1.0",
+  "description": "CliHost 托管形态 benchmark：Electron utilityProcess MessagePort 吞吐/延迟 vs Main 进程内直调",
+  "main": "main.cjs",
+  "scripts": {
+    "bench": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^42.11.18"
+  }
+}

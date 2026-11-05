@@ -1,0 +1,11 @@
+[T2 2026-11-05T10:30:13.171Z] app-server started {"pid":9836}
+[codex 2026-11-05T10:30:18.179Z] stderr [2m2026-11-05T10:30:18.179952Z[0m [31mERROR[0m [2mcodex_models_manager::manager[0m[2m:[0m failed to refresh available models: timeout waiting for child process to exit
+[codex 2026-11-05T10:30:18.216Z] stderr [2m2026-11-05T10:30:18.216738Z[0m [31mERROR[0m [2mcodex_models_manager::manager[0m[2m:[0m failed to refresh available models: timeout waiting for child process to exit
+[T2 2026-11-05T10:30:24.577Z] thread started {"threadId":"01a1ab42-6769-73d0-bf9b-10d648e4173f","model":"gpt-5.6-luna"}
+[codex 2026-11-05T10:30:53.807Z] stderr [2m2026-11-05T10:30:53.807732Z[0m [31mERROR[0m [2mcodex_models_manager::manager[0m[2m:[0m failed to refresh available models: timeout waiting for child process to exit
+[T2 2026-11-05T10:30:53.842Z] turn/interrupt accepted {}
+[T2 2026-11-05T10:30:54.649Z] turn1 finished {"turnStatus":"interrupted","deltasBeforeKill":81,"deltasAfterEnd":0,"procAliveAfterInterrupt":true}
+[codex 2026-11-05T10:30:59.710Z] stderr [2m2026-11-05T10:30:59.710380Z[0m [31mERROR[0m [2mcodex_models_manager::manager[0m[2m:[0m failed to refresh available models: timeout waiting for child process to exit
+[codex 2026-11-05T10:31:09.717Z] stderr [2m2026-11-05T10:31:09.717691Z[0m [31mERROR[0m [2mcodex_models_manager::manager[0m[2m:[0m failed to refresh available models: timeout waiting for child process to exit
+[T2 2026-11-05T10:31:09.756Z] turn2 finished {"turnStatus":"completed","text":"收到"}
+T2_VERDICT PASS {"name":"取消 Turn ≠ 杀 Session（codex app-server 实测）","pass":true,"evidence":{"interruptClean":true,"turn1Status":"interrupted","turn1ErrorEvent":null,"pidUnchanged":true,"sessionReusable":true,"turn2Status":"completed","turn2ErrorEvent":null,"procAliveAtEnd":true,"deltasBeforeKill":81,"deltasAfterInterrupt":0}}

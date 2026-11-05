@@ -1,0 +1,16 @@
+{
+  "name": "取消 Turn ≠ 杀 Session（codex app-server 实测）",
+  "pass": true,
+  "evidence": {
+    "interruptClean": true,
+    "turn1Status": "interrupted",
+    "turn1ErrorEvent": null,
+    "pidUnchanged": true,
+    "sessionReusable": true,
+    "turn2Status": "completed",
+    "turn2ErrorEvent": null,
+    "procAliveAtEnd": true,
+    "deltasBeforeKill": 81,
+    "deltasAfterInterrupt": 0
+  }
+}

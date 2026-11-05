@@ -1,0 +1,23 @@
+{
+  "t3": {
+    "name": "多会话按 Session 粒度逐会话有序终止、互不影响",
+    "pass": true,
+    "steps": {
+      "step1_claudeA_graceful": true,
+      "step2_claudeB_usable": true,
+      "step3_claudeB_force": true,
+      "step4_codex_thread_granular": true,
+      "step5_codex_last_session_stops_process": true,
+      "step6_oc_refcount_stop_server1": true,
+      "step7_oc_last_session_stops_server2": true
+    },
+    "order": [
+      "claude-A(dispose graceful, exit=0)",
+      "claude-B(dispose force, gone=true)",
+      "codex-t1(logical dispose, process kept)",
+      "codex-t2(dispose last → process stop, gone=true)",
+      "opencode-s1(dispose → server1 stop, gone=true)",
+      "opencode-s2(dispose last → server2 stop, gone=true)"
+    ]
+  }
+}

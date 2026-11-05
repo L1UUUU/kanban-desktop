@@ -1,0 +1,74 @@
+{
+  "env": {
+    "electron": "42.11.18",
+    "node": "24.19.0",
+    "platform": "win32"
+  },
+  "payloadBytes": 1069,
+  "items": [
+    {
+      "mode": "utilityProcess MessagePort 往返(管线5000并发)",
+      "n": 5000,
+      "eventsPerSec": 49522.8,
+      "wallMs": 101,
+      "latencyMs": {
+        "n": 5000,
+        "avg": 49.941,
+        "p50": 46.632,
+        "p95": 62.38,
+        "max": 65.846
+      }
+    },
+    {
+      "mode": "utilityProcess MessagePort 串行往返(单命令延迟)",
+      "n": 200,
+      "eventsPerSec": 4916.8,
+      "wallMs": 40.7,
+      "latencyMs": {
+        "n": 200,
+        "avg": 0.202,
+        "p50": 0.11,
+        "p95": 0.582,
+        "max": 5.94
+      }
+    },
+    {
+      "mode": "utilityProcess MessagePort 单向突发(worker→main)",
+      "n": 20000,
+      "eventsPerSec": 34474.7,
+      "firstEventMs": 0.342,
+      "wallMs": 580.1
+    },
+    {
+      "mode": "Main 进程内直调（引用传递）",
+      "n": 5000,
+      "eventsPerSec": 494628.3,
+      "latencyMs": {
+        "n": 5000,
+        "avg": 0.002,
+        "p50": 0.001,
+        "p95": 0.002,
+        "max": 0.501
+      }
+    },
+    {
+      "mode": "Main 进程内 + JSON 序列化往返",
+      "n": 5000,
+      "eventsPerSec": 148340.7,
+      "latencyMs": {
+        "n": 5000,
+        "avg": 0.006,
+        "p50": 0.005,
+        "p95": 0.009,
+        "max": 0.404
+      }
+    },
+    {
+      "mode": "Main 进程内 EventEmitter 单向突发",
+      "n": 20000,
+      "eventsPerSec": 712073.2,
+      "wallMs": 28.1,
+      "received": 20000
+    }
+  ]
+}

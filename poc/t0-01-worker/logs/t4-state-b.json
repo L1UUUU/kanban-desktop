@@ -1,0 +1,16 @@
+{
+  "hostPid": 33240,
+  "magic": "T4-XV1JVW",
+  "phase": "counting",
+  "deltas": 320,
+  "threadId": "01a1ab45-01c0-77f1-b272-e5961688c0e2",
+  "turn1Status": "completed",
+  "preCrashTurns": [
+    {
+      "id": "01a1ab45-1af1-7840-8278-533643fc952e",
+      "status": "completed"
+    }
+  ],
+  "codexPid": 29144,
+  "codexSpawnAt": "2026-11-05T10:33:03.572Z"
+}

@@ -1,0 +1,32 @@
+{
+  "entries": [
+    {
+      "createdAt": "2026-11-05T10:32:48.167Z",
+      "kind": "opencode-server",
+      "exe": "C:\\Users\\liuy\\AppData\\Roaming\\npm\\node_modules\\opencode-ai\\bin\\opencode.exe",
+      "port": 40221,
+      "pid": 55676,
+      "spawnAt": "2026-11-05T10:32:44.491Z",
+      "cmdSignature": [
+        "serve",
+        "--port",
+        "40221"
+      ],
+      "reattachable": true,
+      "project": "p-A",
+      "adopted": true
+    },
+    {
+      "createdAt": "2026-11-05T10:34:00.608Z",
+      "kind": "codex-appserver",
+      "exe": "C:\\Users\\liuy\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe",
+      "pid": 29144,
+      "spawnAt": "2026-11-05T10:33:03.572Z",
+      "cmdSignature": [
+        "app-server"
+      ],
+      "reattachable": false,
+      "threadId": "01a1ab45-01c0-77f1-b272-e5961688c0e2"
+    }
+  ]
+}
