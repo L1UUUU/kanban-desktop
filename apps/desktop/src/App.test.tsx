@@ -23,6 +23,6 @@ describe("App 三区布局骨架（原型一致项 1）", () => {
     render(<App />);
     expect(screen.getByText(/聊天区占位/)).toBeTruthy();
     expect(screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…")).toBeTruthy();
-    expect(screen.getByText(/运行信息不可用|运行信息：/)).toBeTruthy();
+    expect(screen.getAllByText(/运行信息不可用|运行信息：/).length).toBeGreaterThan(0);
   });
 });

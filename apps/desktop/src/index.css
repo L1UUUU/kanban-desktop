@@ -22,6 +22,18 @@
   --color-warn: #e5b567; /* --warn waiting/审批 */
 }
 
+/* 流式光标：▍ 闪烁（原型 .vA-streaming::after） */
+.stream-cursor {
+  color: var(--color-primary);
+  animation: kb-blink 1s steps(1) infinite;
+}
+
+@keyframes kb-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
 /* 全局基调：13px/1.6 Segoe UI + Microsoft YaHei，应用不滚动（各区内部滚） */
 @layer base {
   html,

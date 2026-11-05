@@ -1,0 +1,76 @@
+// 用途：C1 Adapter 统一契约（spec B 冻结）—— 方法面 + capabilities + 带错误码的异常；实现侧（Fake/三 CLI）与宿主（CliHost/Main 路由）共同依赖
+import type {
+  ApprovalDecision,
+  ApprovalSuggestion,
+  AdapterEvent,
+  ChatEvent,
+  ErrorCode,
+  PermMode,
+} from "@kanban/ipc-schema";
+
+/** 能力声明：未实证能力 UI 不暴露控件（spec B capabilities） */
+export interface AdapterCapabilities {
+  approval: boolean;
+  interrupt: boolean;
+  resume: boolean;
+  readHistory: boolean;
+  skillSignal: boolean;
+}
+
+/** createSession 输入（cwd 必填；model/permMode 由 Adapter 映射到各 CLI 原生机制） */
+export interface CreateSessionInput {
+  cwd: string;
+  model?: string;
+  permMode?: PermMode;
+}
+
+export interface SendTurnInput {
+  sessionId: string;
+  text: string;
+}
+
+export interface ResolveApprovalInput {
+  sessionId: string;
+  requestId: string;
+  decision: ApprovalDecision;
+}
+
+export interface DisposeInput {
+  sessionId?: string;
+}
+
+/** Adapter 异常：code 形状由 ipc-schema 定义（不变量 6），宿主据此映射 IPC 错误 */
+export class AdapterError extends Error {
+  constructor(
+    readonly code: ErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = "AdapterError";
+  }
+}
+
+/**
+ * C1 统一接口（全部方法异步；订阅为同步注册返回退订函数）。
+ * 六不变量（spec B，强制）：
+ * 1. 内容一律经事件流返回，sendTurn 只表达「已提交」；
+ * 2. 审批语义不换写（统一枚举映射各 CLI 原生机制）；
+ * 3. 事件带可合并键（itemId/partId），流式增量无重复无丢失；
+ * 4. readHistory 快照与实时流同一合并键，快照后增量无缝拼接；
+ * 5. Adapter 独占 CLI 进程生命周期（宿主不触碰子进程）；
+ * 6. 忙态 sendTurn 排队 + interruptTurn 幂等；错误码形状由 ipc-schema 定义。
+ */
+export interface CliAdapter {
+  readonly capabilities: AdapterCapabilities;
+  createSession(init: CreateSessionInput): Promise<{ sessionId: string }>;
+  sendTurn(input: SendTurnInput): Promise<void>;
+  interruptTurn(sessionId: string): Promise<void>;
+  resolveApproval(input: ResolveApprovalInput): Promise<void>;
+  readHistory(sessionId: string): Promise<ChatEvent[]>;
+  resume(sessionId: string): Promise<void>;
+  dispose(input?: DisposeInput): Promise<void>;
+  /** 订阅归一化事件流（ChatEvent ∪ SkillObservation），返回退订函数 */
+  subscribe(handler: (event: AdapterEvent) => void): () => void;
+}
+
+export type { ApprovalDecision, ApprovalSuggestion, AdapterEvent, ChatEvent, PermMode };

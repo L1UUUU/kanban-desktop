@@ -1,16 +1,19 @@
-// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器、初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
+// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc 路由）、FakeAdapter 事件转发、初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
 import { app, BrowserWindow, ipcMain } from "electron";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { appInfoSchema } from "@kanban/ipc-schema";
-import { CLI_HOST_PLACEHOLDER } from "@kanban/cli-host";
+import { adapterEventSchema, appInfoSchema } from "@kanban/ipc-schema";
+import { FakeAdapter } from "@kanban/cli-host";
 import { TRACKER_PLACEHOLDER } from "@kanban/tracker";
 import { defaultConfig, loadConfig, saveConfig } from "./config";
 import { SQLITE_ENTRY, openDatabase } from "./db";
+import { handleIpc } from "./ipc";
 
-// 占位引用：确保依赖方向在构建图上成立（真实消费自 #6/阶段 2 接入）
-void CLI_HOST_PLACEHOLDER;
+// 占位引用：确保依赖方向在构建图上成立（真实消费自阶段 2 接入）
 void TRACKER_PLACEHOLDER;
+
+// FakeAdapter：#6 Fake 链路宿主（自建 SystemClock；真实三 CLI Adapter 自 #7/#9/#10 接入）
+const adapter = new FakeAdapter();
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -39,7 +42,7 @@ function createWindow(): void {
   }
 }
 
-/** 注册 IPC 处理器（本工单仅 app:getInfo 冒烟通道；入站校验按 spec E 自 #6 扩充） */
+/** 注册 IPC 处理器：app:getInfo 冒烟通道 + kanban:ipc 单通道路由（入站强制 zod 校验，spec E） */
 function registerIpc(): void {
   ipcMain.handle("app:getInfo", () =>
     appInfoSchema.parse({
@@ -51,6 +54,15 @@ function registerIpc(): void {
       sqliteEntry: SQLITE_ENTRY,
     }),
   );
+  ipcMain.handle("kanban:ipc", (_event, raw: unknown) => handleIpc(adapter, raw));
+
+  // Adapter 事件流 → renderer：出站也过 schema 校验（廉价，全量），窗口不在时静默丢弃
+  adapter.subscribe((event) => {
+    adapterEventSchema.parse(event);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("chat:event", event);
+    }
+  });
 }
 
 app.whenReady().then(() => {
@@ -64,7 +76,11 @@ app.whenReady().then(() => {
 
   // SQLite：打开应用数据目录下的数据库并按 C3 建五表（D2 冒烟已验证 node:sqlite 在 Electron 44 主进程可用）
   const db = openDatabase(join(app.getPath("userData"), "kanban.db"));
-  app.on("quit", () => db.close());
+  app.on("quit", () => {
+    db.close();
+    // 有序停止：Fake 时钟停泵（真实 CLI 进程有序终止链路属 #10，spec H）
+    void adapter.dispose();
+  });
 
   registerIpc();
   createWindow();
