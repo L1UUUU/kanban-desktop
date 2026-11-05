@@ -1,0 +1,5 @@
+# 临时提取 session 的隔离 cwd 内容（目录本身保留为空壳）
+extract-tmp/*
+!extract-tmp/.gitkeep
+# 运行产物中的临时文件
+*.tmp

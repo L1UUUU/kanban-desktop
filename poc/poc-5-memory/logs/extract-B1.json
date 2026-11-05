@@ -1,0 +1,84 @@
+{
+  "batch": "B1",
+  "reqId": "REQ-001",
+  "chunks": 2,
+  "events": 9,
+  "readableSessions": [
+    {
+      "id": "7d06be78-1d30-4d4b-8c71-68ee8aad9047",
+      "cli": "claude",
+      "events": 5
+    },
+    {
+      "id": "01a1aa3e-c8cf-7950-9684-2fdf35d0cae2",
+      "cli": "codex",
+      "events": 4
+    }
+  ],
+  "missingSessions": [
+    {
+      "id": "00000000-dead-0000-0000-00000000beef",
+      "cli": "claude",
+      "error": "历史不可读：claude session 00000000-dead-0000-0000-00000000beef — 原生历史文件不存在: C:\\Users\\liuy\\.claude\\projects\\C--project2-kanban-desktop-poc-poc-5-memory-fixture-workdir\\00000000-dead-0000-0000-00000000beef.jsonl"
+    }
+  ],
+  "extractionSessionIds": [
+    "d9148a82-8b3c-47f4-8371-18708be15a77",
+    "e4d91611-1278-4cc2-993c-da607b29012a"
+  ],
+  "summaryWritten": {
+    "overwritten": true,
+    "file": "C:\\project2\\kanban-desktop\\poc\\poc-5-memory\\data\\REQ-001\\summary.md"
+  },
+  "candidates": [
+    {
+      "id": "CAND-0001",
+      "claim": "calc.js 的 divide 函数在除数 b 为 0 时必须 throw new Error('divide by zero')，不得返回 0 或其他默认值",
+      "conflicts": [],
+      "notes": []
+    },
+    {
+      "id": "CAND-0002",
+      "claim": "calc.js 的验证方式为在文件末尾追加自测断言并运行 node calc.js，以退出码 exit 0/1 判定通过或失败",
+      "conflicts": [],
+      "notes": []
+    },
+    {
+      "id": "CAND-0003",
+      "claim": "该用户要求开发任务严格按其指定的分步流程执行（先让当前实现通过→改断言复现失败→修复到通过），不要跳步或直接给最终实现",
+      "conflicts": [],
+      "notes": []
+    },
+    {
+      "id": "CAND-0004",
+      "claim": "该用户偏好任务完成后只输出一行包含验证证据的结果报告，不输出额外解释",
+      "conflicts": [],
+      "notes": []
+    },
+    {
+      "id": "CAND-0005",
+      "claim": "本段对除零纠错采用 FAIL→PASS 回归模式：先以抛错断言稳定复现失败，再修复实现使断言通过，两个状态均有运行证据",
+      "conflicts": [],
+      "notes": []
+    },
+    {
+      "id": "CAND-0006",
+      "claim": "calc.js 中新增运算函数时必须同步把函数名加入 module.exports 导出",
+      "conflicts": [],
+      "notes": []
+    },
+    {
+      "id": "CAND-0007",
+      "claim": "calc.js 的回归验证方式是在文件末尾自测区加断言，运行 node calc.js 确认全部通过",
+      "conflicts": [],
+      "notes": []
+    },
+    {
+      "id": "CAND-0008",
+      "claim": "小任务完成后用一行话报告结果（改了什么、验证是否通过），不展开冗长说明",
+      "conflicts": [],
+      "notes": []
+    }
+  ],
+  "isolated": true
+}

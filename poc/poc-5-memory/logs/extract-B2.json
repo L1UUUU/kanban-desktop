@@ -1,0 +1,85 @@
+{
+  "batch": "B2",
+  "reqId": "REQ-001",
+  "chunks": 2,
+  "events": 9,
+  "readableSessions": [
+    {
+      "id": "7d06be78-1d30-4d4b-8c71-68ee8aad9047",
+      "cli": "claude",
+      "events": 5
+    },
+    {
+      "id": "01a1aa3e-c8cf-7950-9684-2fdf35d0cae2",
+      "cli": "codex",
+      "events": 4
+    }
+  ],
+  "missingSessions": [
+    {
+      "id": "00000000-dead-0000-0000-00000000beef",
+      "cli": "claude",
+      "error": "历史不可读：claude session 00000000-dead-0000-0000-00000000beef — 原生历史文件不存在: C:\\Users\\liuy\\.claude\\projects\\C--project2-kanban-desktop-poc-poc-5-memory-fixture-workdir\\00000000-dead-0000-0000-00000000beef.jsonl"
+    }
+  ],
+  "extractionSessionIds": [
+    "1481b7fa-7104-4d4d-95de-1e599e4f1a8d",
+    "7c5aac24-a854-4852-a46f-e0b92c7a9568"
+  ],
+  "summaryWritten": {
+    "overwritten": false,
+    "reason": "human-edited",
+    "proposed": "C:\\project2\\kanban-desktop\\poc\\poc-5-memory\\data\\REQ-001\\summary.proposed.B2.md"
+  },
+  "candidates": [
+    {
+      "id": "CAND-0009",
+      "claim": "calc.js 中 divide(a,b) 的除零契约是 b 为 0 时抛出 Error('divide by zero')，不允许静默返回 0",
+      "conflicts": [],
+      "notes": []
+    },
+    {
+      "id": "CAND-0010",
+      "claim": "calc.js 的自测方式是在文件末尾追加断言、直接运行 node calc.js、以 exit code 0/1 判定通过或失败",
+      "conflicts": [
+        {
+          "withId": "CAND-0002",
+          "similarity": 0.611,
+          "kind": "similar-to-accepted"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "id": "CAND-0011",
+      "claim": "修改 calc.js 函数行为契约时采用先建立 FAIL 再修复到 PASS 的顺序，先确认新断言会失败以证明其有效",
+      "conflicts": [],
+      "notes": []
+    },
+    {
+      "id": "CAND-0012",
+      "claim": "该需求会话中用户要求完成任务后只输出一行结果报告，不输出额外解释",
+      "conflicts": [],
+      "notes": []
+    },
+    {
+      "id": "CAND-0013",
+      "claim": "calc.js 新增运算函数后须在文件末尾自测区加结果断言，并以运行 node calc.js 通过作为完成标准",
+      "conflicts": [],
+      "notes": []
+    },
+    {
+      "id": "CAND-0014",
+      "claim": "calc.js 对外提供的函数需通过 module.exports 导出",
+      "conflicts": [],
+      "notes": []
+    },
+    {
+      "id": "CAND-0015",
+      "claim": "小型代码任务完成后用一行话简洁报告结果即可",
+      "conflicts": [],
+      "notes": []
+    }
+  ],
+  "isolated": true
+}

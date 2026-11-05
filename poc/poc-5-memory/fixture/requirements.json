@@ -1,0 +1,29 @@
+{
+  "requirements": [
+    {
+      "id": "REQ-001",
+      "title": "为 calc.js 添加基础运算函数（divide 含除零纠错、multiply）",
+      "sessions": [
+        {
+          "id": "7d06be78-1d30-4d4b-8c71-68ee8aad9047",
+          "cli": "claude",
+          "cwd": "C:\\project2\\kanban-desktop\\poc\\poc-5-memory\\fixture\\workdir",
+          "report": "boss：三步均完成——①返回0版断言通过(exit 0) ②改抛错断言后按预期失败(Error: bad, exit 1) ③改为 throw 'divide by zero' 后全部自测通过(exit 0)，calc.js 共 +12 行。"
+        },
+        {
+          "id": "01a1aa3e-c8cf-7950-9684-2fdf35d0cae2",
+          "cli": "codex",
+          "cwd": "C:\\project2\\kanban-desktop\\poc\\poc-5-memory\\fixture\\workdir",
+          "rolloutPath": "C:\\Users\\liuy\\.codex\\sessions\\2026\\11\\05\\rollout-2026-11-05T13-46-48-01a1aa3e-c8cf-7950-9684-2fdf35d0cae2.jsonl",
+          "report": "boss，我会修改 `calc.js`，补充乘法导出和末尾断言，然后运行 `node calc.js` 验证。boss，已完成：`calc.js` 已添加并导出 `multiply(a,b)`，加入 `multiply(3,4) === 12` 断言，运行 `node calc.js` 通过。"
+        },
+        {
+          "id": "00000000-dead-0000-0000-00000000beef",
+          "cli": "claude",
+          "cwd": "C:\\project2\\kanban-desktop\\poc\\poc-5-memory\\fixture\\workdir",
+          "note": "假 session（历史不存在），验证缺失提示"
+        }
+      ]
+    }
+  ]
+}

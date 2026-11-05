@@ -1,0 +1,33 @@
+{
+  "summaryHumanMarkKept": true,
+  "summaryMetaBatch": "B1",
+  "proposedFiles": [
+    "summary.proposed.B2.md"
+  ],
+  "acceptedIds": [
+    "CAND-0001",
+    "CAND-0002"
+  ],
+  "ignoredIds": [
+    "CAND-0003"
+  ],
+  "batch2Pending": 7,
+  "batch2Conflicted": [
+    {
+      "id": "CAND-0010",
+      "conflicts": [
+        {
+          "withId": "CAND-0002",
+          "similarity": 0.611,
+          "kind": "similar-to-accepted"
+        }
+      ]
+    }
+  ],
+  "wrongRuleCandidates": [],
+  "wrongInAccepted": [],
+  "acceptedDir": [
+    "CAND-0001.md",
+    "CAND-0002.md"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "claude": {
+    "file": "C:\\Users\\liuy\\.claude\\projects\\C--project2-kanban-desktop-poc-poc-5-memory-fixture-workdir\\7d06be78-1d30-4d4b-8c71-68ee8aad9047.jsonl",
+    "sha256": "b86241b41ea98b3bbfe83e2242fec628ddd3c392eca4ddc79413671b7ebdba7b",
+    "size": 297804,
+    "mtimeMs": 1793857597131.1724
+  },
+  "codex": {
+    "file": "C:\\Users\\liuy\\.codex\\sessions\\2026\\11\\05\\rollout-2026-11-05T13-46-48-01a1aa3e-c8cf-7950-9684-2fdf35d0cae2.jsonl",
+    "sha256": "cab31c8e444ec2aecea4636da5378da64454cef164df750bd1deb573ca709195",
+    "size": 89755
+  }
+}
