@@ -1,10 +1,19 @@
-// 用途：preload 桥接的 renderer 侧 transport 工厂 —— 出站开发态 zod 校验（spec E：Renderer 出站 dev 校验，生产零开销）+ 事件订阅
-import { adapterEventSchema, ipcRequestSchema, type AdapterEvent, type IpcRequest, type IpcResult } from "@kanban/ipc-schema";
+// 用途：preload 桥接的 renderer 侧 transport 工厂 —— 出站开发态 zod 校验（spec E：Renderer 出站 dev 校验，生产零开销）+ chat/terminal 事件订阅
+import {
+  adapterEventSchema,
+  ipcRequestSchema,
+  terminalEventSchema,
+  type AdapterEvent,
+  type IpcRequest,
+  type IpcResult,
+  type TerminalEvent,
+} from "@kanban/ipc-schema";
 
 /** 传输 seam：组件测试注入 FakeAdapter 直连实现，生产为 window.api 桥接 */
 export interface ChatTransport {
   invoke(req: IpcRequest): Promise<IpcResult>;
   onEvent(handler: (event: AdapterEvent) => void): () => void;
+  onTerminalEvent(handler: (event: TerminalEvent) => void): () => void;
 }
 
 /** 从 window.api（contextBridge 暴露）构造 transport；桥接不可用（如 jsdom 测试）返回 null */
@@ -22,6 +31,16 @@ export function createWindowTransport(): ChatTransport | null {
           const parsed = adapterEventSchema.safeParse(event);
           if (!parsed.success) {
             console.warn("[kanban] 入站事件不符合 schema", parsed.error.issues);
+          }
+        }
+        handler(event);
+      }),
+    onTerminalEvent: (handler) =>
+      api.onTerminalEvent((event: TerminalEvent) => {
+        if (import.meta.env.DEV) {
+          const parsed = terminalEventSchema.safeParse(event);
+          if (!parsed.success) {
+            console.warn("[kanban] 入站终端事件不符合 schema", parsed.error.issues);
           }
         }
         handler(event);

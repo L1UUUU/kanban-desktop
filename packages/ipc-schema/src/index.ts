@@ -2,3 +2,4 @@
 export * from "./app-info";
 export * from "./chat";
 export * from "./ipc";
+export * from "./terminal";

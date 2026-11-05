@@ -1,19 +1,20 @@
-// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc 路由）、CliHost 托管（utilityProcess 优先，进程内回退）与事件转发/状态落库、初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
+// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc 路由）、CliHost 托管（utilityProcess 优先，进程内回退）与事件转发/状态落库、TrackerEngine（SkillObservation 落库 + 重启恢复）、PTY 终端宿主（node-pty，main 进程直接使用，t0-03 实证）和有序退出、初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { adapterEventSchema, appInfoSchema } from "@kanban/ipc-schema";
+import * as nodePty from "node-pty";
+import { appInfoSchema, terminalEventSchema } from "@kanban/ipc-schema";
 import { AdapterRouter, createDesktopAdapterFactory, type CliAdapter } from "@kanban/cli-host";
-import { TRACKER_PLACEHOLDER } from "@kanban/tracker";
+import { TrackerEngine } from "@kanban/tracker";
 import { defaultConfig, loadConfig, saveConfig, type AppConfig } from "./config";
+import { createAdapterEventHandler } from "./adapter-events";
 import { CliHostClient } from "./cli-host-client";
 import { SQLITE_ENTRY, openDatabase } from "./db";
 import { handleIpc, type IpcDeps } from "./ipc";
+import { createPtyHost } from "./pty-host";
 import { ProjectStore } from "./project-store";
 import { SessionStore } from "./session-store";
-
-// 占位引用：确保依赖方向在构建图上成立（真实消费自阶段 2 接入）
-void TRACKER_PLACEHOLDER;
 
 /** CliHost 托管形态（ADR-0001：utilityProcess 崩溃隔离 + Job Object）；worker 产物缺失/fork 失败回退 Main 进程内（C5 降级路径，seam 不变） */
 function createHostedAdapter(appConfig: AppConfig): CliAdapter {
@@ -31,7 +32,7 @@ function createHostedAdapter(appConfig: AppConfig): CliAdapter {
   );
 }
 
-// Adapter 门面：fake/codex 经 CliHost 分发（KANBAN_DISABLE_CODEX=1 时 codex 回落 Fake 演示模式）
+// Adapter 门面：fake/codex 经 CliHost 分发（utilityProcess 托管；KANBAN_DISABLE_CODEX=1 时 codex 回落 Fake 演示模式）
 let adapter: CliAdapter;
 
 let mainWindow: BrowserWindow | null = null;
@@ -88,18 +89,65 @@ app.whenReady().then(() => {
   const db = openDatabase(join(app.getPath("userData"), "kanban.db"));
   const projects = new ProjectStore(db);
   const sessions = new SessionStore(db);
+  // Tracker 接线（#9）：SkillObservation 落库驱动状态机；启动即按 stage_events 事件日志重放恢复（需求/关联/幂等集）
+  const trackerEngine = new TrackerEngine(db);
+  trackerEngine.restore();
   // 启动探测：全部项目目录存在性落库（missing 标记，工单 #7 验收第 1 条）
   projects.refreshStatuses();
   // CliHost 托管 adapter（utilityProcess 优先；config 手动覆盖 exe + env 开关在工厂内生效）
   adapter = createHostedAdapter(appConfig);
   app.on("quit", () => {
-    db.close();
+    trackerEngine.close(); // 关闭 engine 与底层 DB 连接（唯一关闭点）
     // 有序停止：worker 内 shutdown（停新命令→dispose→有限等待）→ kill 兜底；Job Object 覆盖崩溃场景（spec H）
     void adapter.dispose();
   });
 
+  // 应用退出前有序停止全部 PTY（#13 退出治理的 PTY 部分：killAll 幂等；#8 的 Job Object 属 cli-host 侧）
+  app.on("before-quit", () => {
+    ptyHost.killAll();
+  });
+
+  // PTY 宿主装配：平台能力注入（shell/CLI exe 覆盖来自 config，不硬编码）；事件出站过 schema 校验并转发 renderer，
+  // started/exit 顺带落 sessions 状态（PTY 活=空闲徽标，退出=已断开徽标）
+  const sendTerminalEvent = (event: unknown): void => {
+    terminalEventSchema.parse(event);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("terminal:event", event);
+    }
+  };
+  const ptyHost = createPtyHost(
+    {
+      pty: nodePty,
+      execFileSync,
+      execFileTextSync: (cmd, args) => execFileSync(cmd, args, { encoding: "utf8" }) as string,
+      existsSync,
+      resolve: (p) => join(p),
+      tmpdir: () => app.getPath("temp"),
+      env: process.env,
+      platform: process.platform,
+      cwd: () => process.cwd(),
+      shellOverride: () => appConfig.terminal.shell,
+      cliExeOverride: (name) => (appConfig.cliExe as unknown as Record<string, string | null>)[name] ?? null,
+    },
+    {
+      started: (terminalId, payload) => {
+        sessions.updateStatus(terminalId, "idle");
+        sendTerminalEvent({ terminalId, type: "started", ...payload });
+      },
+      data: (terminalId, data) => sendTerminalEvent({ terminalId, type: "data", data }),
+      exit: (terminalId, payload) => {
+        sessions.updateStatus(terminalId, "disconnected");
+        sessions.touch(terminalId, new Date().toISOString());
+        sendTerminalEvent({ terminalId, type: "exit", ...payload });
+      },
+      error: (terminalId, payload) => sendTerminalEvent({ terminalId, type: "error", message: payload.message }),
+    },
+  );
+
   const deps: IpcDeps = {
     adapter,
+    // PTY 宿主：node-pty 在 main 进程直接使用（main → ConPTY；utilityProcess 是 cli-host 的形态，spec F）
+    pty: ptyHost,
     projects,
     sessions,
     pickDirectory,
@@ -123,18 +171,18 @@ app.whenReady().then(() => {
   );
   ipcMain.handle("kanban:ipc", (_event, raw: unknown) => handleIpc(deps, raw));
 
-  // Adapter 事件流 → renderer：出站也过 schema 校验（廉价，全量），窗口不在时静默丢弃；
-  // session_status/turn_started 顺带落库（sessions.status 与 last_active_at 随运行更新）
-  adapter.subscribe((event) => {
-    adapterEventSchema.parse(event);
-    if ("type" in event) {
-      if (event.type === "session_status") sessions.updateStatus(event.sessionId, event.status);
-      else if (event.type === "turn_started") sessions.touch(event.sessionId, new Date().toISOString());
-    }
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("chat:event", event);
-    }
-  });
+  // Adapter 事件流：出站校验 + 会话状态落库 + SkillObservation 进 tracker 落库（#9）→ 转发 renderer；窗口不在时静默丢弃转发
+  adapter.subscribe(
+    createAdapterEventHandler({
+      sessions,
+      engine: trackerEngine,
+      send: (event) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("chat:event", event);
+        }
+      },
+    }),
+  );
 
   createWindow();
 });

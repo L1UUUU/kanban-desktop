@@ -72,16 +72,17 @@ test("注册项目 → 新建会话（主仓库徽标）→ 重启完整恢复�
     await expect(first.win.getByText("Codex")).toBeVisible();
     await expect(first.win.getByText("OpenCode")).toBeVisible();
     await expect(first.win.getByRole("button", { name: /PTY 终端/ })).toBeVisible();
-    // PTY 占位：点击提示后续版本（一致项 2 的占位行为）
+    // PTY 项新建终端会话（#12 实体）：PTY 分组出现会话行 + xterm 面板挂起
     await first.win.getByRole("button", { name: /PTY 终端/ }).click();
-    await expect(first.win.getByText("PTY 终端会话将在后续版本提供")).toBeVisible();
-    // PTY 点击收起菜单且鼠标已离开项目行（＋ 为 group-hover 显示）：重新 hover 后再打开菜单选 Claude
+    await expect(first.win.getByText(/^终端 · /).first()).toBeVisible({ timeout: 10_000 });
+    await expect(first.win.locator(".xterm").first()).toBeVisible({ timeout: 10_000 });
+    // 切回 Claude 会话建结构化会话（PTY 已占位激活，重新 hover 打开菜单）
     await first.win.locator("aside").getByText(PROJECT_NAME, { exact: true }).hover();
     await first.win.getByRole("button", { name: "＋", exact: true }).click();
     await first.win.getByRole("button", { name: "Claude", exact: true }).click();
     await expect(first.win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
-    // 主仓库徽标（cwd 为 Main 侧 canonical 化后的路径，用正则断言）
-    await expect(first.win.getByTitle(/工作在主仓库（.*e2e-repo）/)).toBeVisible();
+    // 主仓库徽标（cwd 为 Main 侧 canonical 化后的路径，用正则断言；PTY 终端行同徽标 → first）
+    await expect(first.win.getByTitle(/工作在主仓库（.*e2e-repo）/).first()).toBeVisible();
     await expect(first.win.getByText("空闲").first()).toBeVisible();
     await first.app.close();
 

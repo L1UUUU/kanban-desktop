@@ -9,15 +9,25 @@ export interface CliExeConfig {
   opencode: string | null;
 }
 
+/** 终端配置：shell=null 自动探测（pwsh→powershell→cmd）；不硬编码默认 shell */
+export interface TerminalConfig {
+  shell: string | null;
+}
+
 export interface AppConfig {
   cliExe: CliExeConfig;
   /** 当前项目 id（项目注册/切换时持久化，重启恢复；null=尚无项目） */
   currentProjectId: string | null;
+  terminal: TerminalConfig;
 }
 
-/** 默认配置：三 CLI exe 均为占位 null */
+/** 默认配置：三 CLI exe 均为占位 null；终端 shell 自动探测 */
 export function defaultConfig(): AppConfig {
-  return { cliExe: { codex: null, claude: null, opencode: null }, currentProjectId: null };
+  return {
+    cliExe: { codex: null, claude: null, opencode: null },
+    currentProjectId: null,
+    terminal: { shell: null },
+  };
 }
 
 const CLI_KEYS = ["codex", "claude", "opencode"] as const;
@@ -42,6 +52,8 @@ export function loadConfig(path: string): AppConfig {
   }
   const current = (raw as { currentProjectId?: unknown }).currentProjectId;
   if (typeof current === "string" && current.length > 0) fallback.currentProjectId = current;
+  const termShell = (raw as { terminal?: { shell?: unknown } }).terminal?.shell;
+  if (typeof termShell === "string" && termShell.length > 0) fallback.terminal.shell = termShell;
   return fallback;
 }
 

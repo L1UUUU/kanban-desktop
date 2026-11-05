@@ -1,4 +1,5 @@
-// 用途：Main 入站 IPC 路由 —— 单通道 kanban:ipc 强制 zod 校验 + 分发到 CliAdapter 与 projects/sessions store（纯函数无 Electron 依赖：dialog 与 config 经 deps 注入）
+// 用途：Main 入站 IPC 路由 —— 单通道 kanban:ipc 强制 zod 校验 + 分发到 CliAdapter 与 projects/sessions store + PTY 宿主（纯函数无 Electron 依赖：dialog 与 config 经 deps 注入）
+import { randomUUID } from "node:crypto";
 import {
   ipcRequestSchema,
   type IpcRequest,
@@ -7,12 +8,15 @@ import {
 } from "@kanban/ipc-schema";
 import { AdapterError, type CliAdapter } from "@kanban/cli-host";
 import { detectDirIdentity } from "./git-identity";
+import type { PtyHost } from "./pty-host";
 import type { ProjectStore } from "./project-store";
 import type { SessionStore } from "./session-store";
 
-/** 路由依赖：adapter + 持久化 store + 平台能力（Electron dialog/config 由 index.ts 注入，测试可替换） */
+/** 路由依赖：adapter + PTY 宿主 + 持久化 store + 平台能力（Electron dialog/config 由 index.ts 注入，测试可替换） */
 export interface IpcDeps {
   adapter: CliAdapter;
+  /** PTY 终端宿主（terminal:* 通道；mock 注入可单测） */
+  pty: PtyHost;
   projects: ProjectStore;
   sessions: SessionStore;
   /** 原生目录选择（用户取消返回 null） */
@@ -123,6 +127,58 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
         requestId: req.requestId,
         decision: req.decision,
       });
+      return { ok: true };
+    case "session:readHistory": {
+      // 断开会话恢复第一步：原生历史快照（不变量 4：与实时流同键同 seq，renderer 侧无缝拼接）
+      const events = await deps.adapter.readHistory(req.sessionId);
+      return { ok: true, events };
+    }
+    case "session:resume":
+      // 断开会话恢复第二步：重连原生会话（真实 CLI 语义由 #8/#10/#11 Adapter 实现）
+      await deps.adapter.resume(req.sessionId);
+      return { ok: true };
+    // PTY 终端通道（spec E/H：切换/关标签不停止；kill 为用户显式停止的唯一入口）
+    case "terminal:create": {
+      const terminalId = randomUUID();
+      const spawned = deps.pty.spawn(terminalId, { cwd: req.cwd, cols: req.cols ?? 80, rows: req.rows ?? 30, command: req.command });
+      if (!spawned.ok) {
+        return { ok: false, error: { code: "E_INTERNAL", message: spawned.message } };
+      }
+      const title = req.title ?? `终端 · ${spawned.label}`;
+      const identity = detectDirIdentity(req.cwd);
+      deps.sessions.insert({
+        id: terminalId,
+        kind: "pty",
+        cli: "pty",
+        nativeSessionId: null,
+        projectId: req.projectId ?? null,
+        title,
+        cwd: req.cwd,
+        permMode: null,
+        status: "idle",
+        lastActiveAt: null,
+      });
+      return {
+        ok: true,
+        sessionId: terminalId,
+        cli: "pty",
+        title,
+        dirIdentity: identity.kind,
+        worktreeName: identity.kind === "worktree" ? identity.name : null,
+      };
+    }
+    case "terminal:write": {
+      const written = deps.pty.write(req.terminalId, req.data);
+      if (!written.ok) {
+        return { ok: false, error: { code: "E_SESSION_NOT_FOUND", message: written.message } };
+      }
+      return { ok: true };
+    }
+    case "terminal:resize":
+      deps.pty.resize(req.terminalId, req.cols, req.rows);
+      return { ok: true };
+    case "terminal:kill":
+      deps.pty.kill(req.terminalId);
       return { ok: true };
   }
 }

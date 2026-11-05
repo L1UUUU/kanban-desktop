@@ -159,6 +159,32 @@ export class ChatStore {
     this.changed();
   }
 
+  /** 会话状态直写（PTY 终端 started/exit 事件驱动，与 ChatEvent 路径并列） */
+  updateStatus(id: string, status: SessionStatus): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    s.status = status;
+    this.changed();
+  }
+
+  /**
+   * 断开会话恢复（#9）：用 readHistory 快照重建消息流 items。
+   * 复用 applyEvent 归并逻辑（与实时流同一合并键 → 快照后增量无缝拼接，不变量 4 的 renderer 侧）；
+   * 状态类事件跳过：断开态由 resume 后的实时 session_status 驱动，不用历史状态冒充当前态。
+   */
+  applySnapshot(id: string, events: ChatEvent[]): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    s.items = [];
+    s.pendingApproval = null;
+    s.lastTurnInterrupted = false;
+    s.lastError = null;
+    for (const e of events) {
+      if (e.type === "session_status" || e.type === "session_error" || e.type === "session_exit") continue;
+      this.applyEvent(e);
+    }
+  }
+
   /** 发送时本地回显用户消息（内容不经事件流回传，见不变量 1 的 renderer 侧补充） */
   appendUserMessage(id: string, text: string): void {
     const s = this.requireView(id);

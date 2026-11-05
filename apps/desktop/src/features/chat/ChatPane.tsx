@@ -8,6 +8,8 @@ import { MessageList } from "./components/MessageList";
 
 export interface ChatPaneActions extends ComposerActions {
   onResolveApproval(decision: ApprovalDecision): void;
+  /** 断开会话「读取原生历史并恢复」（#9） */
+  onResume(sessionId: string): void;
 }
 
 export function ChatPane({
@@ -63,9 +65,16 @@ export function ChatPane({
           </div>
         ) : null}
         {session.status === "disconnected" ? (
-          // 断开会话（重启恢复的历史会话）：缓存不替代原生历史（原型 L424 文案；恢复按钮随真实 resume 链路 #8 接入）
+          // 断开会话（重启恢复的历史会话）：缓存不替代原生历史（原型 L424 文案 + 恢复入口，一致项 5）
           <div className="mx-auto mb-3.5 max-w-[860px] text-center text-xs text-muted-foreground">
-            该会话来自上次运行（CLI 已退出）。缓存不替代原生历史。
+            <span>该会话来自上次运行（CLI 已退出）。缓存不替代原生历史。</span>
+            <button
+              type="button"
+              onClick={() => actions.onResume(session.sessionId)}
+              className="ml-2 rounded-md border border-primary/60 px-3 py-1 text-xs text-primary hover:bg-primary/10"
+            >
+              读取原生历史并恢复
+            </button>
           </div>
         ) : null}
         {session.lastError ? (

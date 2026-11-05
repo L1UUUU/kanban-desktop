@@ -16,6 +16,9 @@
     "@kanban/cli-host": "workspace:*",
     "@kanban/ipc-schema": "workspace:*",
     "@kanban/tracker": "workspace:*",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^5.5.0",
+    "node-pty": "1.1.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
