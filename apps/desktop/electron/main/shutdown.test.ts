@@ -153,7 +153,7 @@ describe("统一退出序列（spec H §6.1）", () => {
 });
 
 describe("重开恢复编排（#13）", () => {
-  it("启动收养：status 非 disconnected 的结构化会话 adoptSession（DB id/native id/cwd/cli 透传）并落库断开；PTY 与已断开条目不收养但统一断开", async () => {
+  it("启动收养：全部结构化会话（含上次已断开）adoptSession（DB id/native id/cwd/cli 透传）并落库断开；PTY 不收养但统一断开——二次重启后断开会话仍可恢复", async () => {
     const sessions = makeSessions([
       { id: "s-live", cli: "codex", nativeSessionId: "th-1", status: "running", permMode: "auto" },
       { id: "s-null-native", cli: "fake", nativeSessionId: null, status: "idle" },
@@ -162,10 +162,10 @@ describe("重开恢复编排（#13）", () => {
     ]);
     const { adapter, adopted } = makeFakeAdapter();
     await adoptRestoredSessions({ adapter, sessions });
-    expect(adopted.map((a) => a.sessionId).sort()).toEqual(["s-live", "s-null-native"]);
+    expect(adopted.map((a) => a.sessionId).sort()).toEqual(["s-already", "s-live", "s-null-native"]);
     expect(adopted.find((a) => a.sessionId === "s-live")).toMatchObject({ nativeSessionId: "th-1", cli: "codex", permMode: "auto" });
     expect(adopted.find((a) => a.sessionId === "s-null-native")).toMatchObject({ nativeSessionId: "" });
-    for (const id of ["s-live", "s-null-native", "s-pty"]) {
+    for (const id of ["s-live", "s-null-native", "s-already", "s-pty"]) {
       expect(sessions.list().find((r) => r.id === id)?.status).toBe("disconnected");
     }
   });

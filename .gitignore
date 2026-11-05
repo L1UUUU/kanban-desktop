@@ -7,3 +7,5 @@ playwright-report/
 test-results/
 *.log
 .DS_Store
+# registry-fallback-proxy 的本地元数据/tarball 缓存
+apps/desktop/scripts/.registry-cache/

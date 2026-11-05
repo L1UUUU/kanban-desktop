@@ -90,12 +90,13 @@ export interface RestoreDeps {
 }
 
 /**
- * 重开恢复编排（spec H/#13）：启动时对 DB 中 status 非 disconnected 的结构化会话统一收养
- * （adapter.adoptSession 登记断开，readHistory/resume 可续；事件流回 session_status disconnected 落库）；
+ * 重开恢复编排（spec H/#13，#14 修正）：启动时对 DB 中全部结构化会话统一收养
+ * （adapter.adoptSession 登记断开，readHistory/resume 可续；事件流回 session_status disconnected 落库）。
+ * 含上次已断开的会话——否则第二次重启后 adapter 无登记，「读取原生历史并恢复」必报会话不存在；
  * 收养失败与无 adoptSession 能力的 CLI、以及全部 PTY 会话（进程随上次退出终止）落库为 disconnected。
  */
 export async function adoptRestoredSessions(deps: RestoreDeps): Promise<void> {
-  const rows = deps.sessions.list().filter((r) => r.kind === "structured" && r.status !== "disconnected");
+  const rows = deps.sessions.list().filter((r) => r.kind === "structured");
   for (const r of rows) {
     const input: AdoptSessionInput = {
       sessionId: r.id,

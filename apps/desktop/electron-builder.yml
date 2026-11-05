@@ -1,0 +1,44 @@
+# 用途：electron-builder 打包配置 —— NSIS 安装包 + 便携版双产物（spec J 节：无自动更新/代码签名/遥测）；路径相对 apps/desktop
+appId: com.l1uuuu.kanban-desktop
+productName: Kanban Desktop
+copyright: 自用
+
+directories:
+  output: dist
+  # buildResources 默认 build/ 目录（暂无自定义图标，沿用 Electron 默认）
+
+# 应用本体：electron-vite 产物 + 运行时依赖（主 bundle 仅外置 node-pty）；smartUnpack 自动拆原生模块
+files:
+  - out/**
+  - package.json
+
+asar: true
+# node-pty 1.1.0 自带 N-API prebuilds（prebuilds/win32-x64，dev 形态 Electron 44 已实证加载），
+# 无需按 Electron ABI 重编；npmRebuild 关闭以避免 node-gyp 拉取 node 头文件（离线不可达且无必要）
+npmRebuild: false
+# node-pty 为原生模块，必须位于 asar 之外可加载路径
+asarUnpack:
+  - "**/node_modules/node-pty/**"
+
+# Electron 二进制默认从本机缓存（%LOCALAPPDATA%/electron/Cache）取，缺省时经 ELECTRON_MIRROR 镜像下载，不在此硬编码
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  # 无代码签名（spec Out of Scope），不配置签名相关字段
+
+nsis:
+  oneClick: true
+  perMachine: false
+  deleteAppDataOnUninstall: false
+  artifactName: Kanban-Desktop-${version}-setup.${ext}
+
+portable:
+  artifactName: Kanban-Desktop-${version}-portable.${ext}
+
+# 无 publish 配置（阶段 1 无自动更新）
