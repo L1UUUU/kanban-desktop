@@ -1,0 +1,10 @@
+{
+  "_comment": "干净用户级配置模板：运行时由 lib/common.mjs prepareCleanHome() 从真实 ~/.claude/settings.json 复制整个 env 块（网关认证）+ model，显式丢弃 hooks/permissions/skillOverrides/enabledPlugins/statusLine。此处仅记录形状，不含真实密钥。",
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "<runtime-copied-from-real-user-settings>",
+    "ANTHROPIC_BASE_URL": "<runtime-copied>",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "<runtime-copied>",
+    "ANTHROPIC_MODEL": "<runtime-copied>"
+  },
+  "model": "<runtime-copied>"
+}

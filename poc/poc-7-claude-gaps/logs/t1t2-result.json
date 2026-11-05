@@ -1,0 +1,161 @@
+{
+  "exe": "C:\\Users\\liuy\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe",
+  "cliVersion": null,
+  "sessionId": null,
+  "turns": [
+    {
+      "prompt": "请牢牢记住这个暗号：紫鲸7号。不要调用任何工具，只回复四个字：已记住暗号",
+      "sentAt": "2026-11-05T07:59:06.254Z",
+      "texts": [
+        "已记住暗号"
+      ],
+      "deltas": [
+        {
+          "ts": "2026-11-05T07:59:14.580Z",
+          "text": "已"
+        },
+        {
+          "ts": "2026-11-05T07:59:14.580Z",
+          "text": "记住"
+        },
+        {
+          "ts": "2026-11-05T07:59:14.580Z",
+          "text": "暗"
+        },
+        {
+          "ts": "2026-11-05T07:59:14.580Z",
+          "text": "号"
+        }
+      ],
+      "toolUses": [],
+      "result": {
+        "subtype": "success",
+        "is_error": false,
+        "num_turns": 1,
+        "costUsd": 0.066917,
+        "resultText": "已记住暗号",
+        "durationMs": 8359,
+        "sessionId": "683f6d8d-f415-471c-b119-a8340083d695"
+      },
+      "endedBy": "result",
+      "done": true
+    },
+    {
+      "prompt": "从1数到30，每个数字单独占一行，依次连续输出全部30个数字。不要调用任何工具，不要解释，直接开始输出。",
+      "sentAt": "2026-11-05T07:59:14.648Z",
+      "texts": [
+        "1\n2\n3"
+      ],
+      "deltas": [
+        {
+          "ts": "2026-11-05T07:59:22.283Z",
+          "text": "1"
+        },
+        {
+          "ts": "2026-11-05T07:59:22.283Z",
+          "text": "\n"
+        },
+        {
+          "ts": "2026-11-05T07:59:22.283Z",
+          "text": "2"
+        },
+        {
+          "ts": "2026-11-05T07:59:22.300Z",
+          "text": "\n"
+        },
+        {
+          "ts": "2026-11-05T07:59:22.303Z",
+          "text": "3"
+        }
+      ],
+      "toolUses": [],
+      "result": {
+        "subtype": "error_during_execution",
+        "is_error": true,
+        "num_turns": 2,
+        "costUsd": 0.066917,
+        "resultText": "",
+        "durationMs": 7659,
+        "sessionId": "683f6d8d-f415-471c-b119-a8340083d695"
+      },
+      "endedBy": "result",
+      "done": true
+    },
+    {
+      "prompt": "我们之前约定的暗号是什么？不要调用任何工具，只回复暗号本身。",
+      "sentAt": "2026-11-05T07:59:22.352Z",
+      "texts": [
+        "紫鲸7号"
+      ],
+      "deltas": [
+        {
+          "ts": "2026-11-05T07:59:27.261Z",
+          "text": "紫鲸7号"
+        }
+      ],
+      "toolUses": [],
+      "result": {
+        "subtype": "success",
+        "is_error": false,
+        "num_turns": 1,
+        "costUsd": 0.07567800000000001,
+        "resultText": "紫鲸7号",
+        "durationMs": 4954,
+        "sessionId": "683f6d8d-f415-471c-b119-a8340083d695"
+      },
+      "endedBy": "result",
+      "done": true
+    }
+  ],
+  "judgments": {
+    "t1_single_process": true,
+    "t1_same_session_id": true,
+    "t1_turn1_success": true,
+    "t1_secret_recalled": true,
+    "t1_turn3_success": true,
+    "t2_interrupt_acknowledged": true,
+    "t2_output_stopped_partial": true,
+    "t2_numbers_before_interrupt": 3,
+    "t2_turn_terminated": true,
+    "t2_session_continues_next_turn": true,
+    "precondition_project_settings_clean": true,
+    "precondition_home_no_hooks": true,
+    "t1_result_count": 3,
+    "t2_deltas_after_interrupt": 0,
+    "t2_interrupted_result_subtype": "error_during_execution",
+    "_recomputedFromRaw": "analyze-t1t2.mjs（运行脚本内联判定存在 session id 竞态读取与 interrupt 观察窗口提前退出的口径缺陷，本重算仅依据 t1t2-raw-stream.jsonl）"
+  },
+  "timeline": [],
+  "initModel": null,
+  "initPermissionMode": null,
+  "t2": {
+    "interruptSentAt": "2026-11-05T07:59:22.304Z",
+    "interruptAck": {
+      "acknowledged": true,
+      "raw": {
+        "type": "control_response",
+        "response": {
+          "subtype": "success",
+          "request_id": "0dd367e2-25a6-43e2-b553-28831d98f482",
+          "response": {
+            "still_queued": []
+          }
+        }
+      }
+    },
+    "stoppedCheck": null,
+    "partialText": "1\n2\n3",
+    "deltasTotal": 5,
+    "endedBy": "result",
+    "result": {
+      "subtype": "error_during_execution",
+      "is_error": true,
+      "num_turns": 2,
+      "costUsd": 0.066917,
+      "resultText": "",
+      "durationMs": 7659,
+      "sessionId": "683f6d8d-f415-471c-b119-a8340083d695"
+    },
+    "partialDeltas": "1\n2\n3"
+  }
+}

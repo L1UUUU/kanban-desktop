@@ -1,0 +1,4 @@
+node_modules/
+logs/home-*/
+fixture/proj/hook-events.jsonl
+fixture/proj/t3-*.txt

@@ -1,0 +1,84 @@
+{
+  "exe": "C:\\Users\\liuy\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe",
+  "inject": {
+    "path": "C:\\project2\\kanban-desktop\\poc\\poc-7-claude-gaps\\logs\\t5-inject-settings.json",
+    "shape": {
+      "env": {
+        "POC7_SESSION_INJECTED": "1"
+      },
+      "hooks": {
+        "PreToolUse": [
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "node \"C:\\project2\\kanban-desktop\\poc\\poc-7-claude-gaps\\fixture\\proj\\hook-capture.mjs\"",
+                "timeout": 15
+              }
+            ]
+          }
+        ],
+        "PostToolUse": [
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "node \"C:\\project2\\kanban-desktop\\poc\\poc-7-claude-gaps\\fixture\\proj\\hook-capture.mjs\"",
+                "timeout": 15
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "cleanPreconditions": {
+    "projectSettingsExists": false,
+    "homeSettingsNoHooks": true,
+    "realHasHooks": true,
+    "baseline": 0
+  },
+  "turns": {
+    "positive": {
+      "prompt": "/design-feature",
+      "texts": "DESIGN-FEATURE-STUB-OK",
+      "resultSubtype": "success",
+      "skillToolCalled": false
+    },
+    "negative": {
+      "prompt": "(提及 design-feature 不执行)",
+      "texts": "ACK-NOHOOK",
+      "resultSubtype": "success"
+    }
+  },
+  "judgments": {
+    "t5_preconditions_clean": true,
+    "t5_inject_via_spawn_arg_only": true,
+    "t5_pre_skill_hook_captured": false,
+    "t5_post_skill_hook_captured": false,
+    "t5_skill_stub_output": true,
+    "t5_negative_no_skill_event": true,
+    "t6_auth_still_effective": true,
+    "t6_user_model_still_effective": true,
+    "t6_injected_env_effective": false
+  },
+  "hookEvents": {
+    "baseline": 0,
+    "total": 0,
+    "newCount": 0,
+    "preSkill": [],
+    "postSkill": [],
+    "otherToolEvents": []
+  },
+  "t6": {
+    "sessionProducedOutput": true,
+    "noAuthError": true,
+    "injectedEnvProbeSeen": false,
+    "initModel": "glm-5.3[1m]",
+    "homeSettingsModel": "haiku",
+    "hookPermissionMode": null,
+    "sessionCostUsd": 0.031682
+  }
+}

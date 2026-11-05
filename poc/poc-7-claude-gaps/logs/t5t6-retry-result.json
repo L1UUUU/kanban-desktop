@@ -1,0 +1,50 @@
+{
+  "exe": "C:\\Users\\liuy\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe",
+  "injectPath": "C:\\project2\\kanban-desktop\\poc\\poc-7-claude-gaps\\logs\\t5-inject-settings.json",
+  "baseline": 0,
+  "judgments": {
+    "t5_skill_tool_actually_called": true,
+    "t5_pre_skill_hook_captured": true,
+    "t5_post_skill_hook_captured": true,
+    "t5_skill_stub_output": true,
+    "t6_injected_env_effective": true,
+    "t6_auth_still_effective": true
+  },
+  "turn": {
+    "texts": "DESIGN-FEATURE-STUB-OK",
+    "resultSubtype": "success",
+    "skillToolCalled": true,
+    "allToolUses": [
+      "Skill"
+    ]
+  },
+  "hookEvents": {
+    "newCount": 2,
+    "preSkillCount": 1,
+    "postSkillCount": 1,
+    "all": [
+      {
+        "hookEventName": "PreToolUse",
+        "toolName": "Skill",
+        "envProbe": {
+          "POC7_SESSION_INJECTED": "1"
+        },
+        "permissionMode": "default",
+        "sessionId": "9e079606",
+        "toolInputSkill": "design-feature",
+        "postSuccess": null
+      },
+      {
+        "hookEventName": "PostToolUse",
+        "toolName": "Skill",
+        "envProbe": {
+          "POC7_SESSION_INJECTED": "1"
+        },
+        "permissionMode": "default",
+        "sessionId": "9e079606",
+        "toolInputSkill": "design-feature",
+        "postSuccess": true
+      }
+    ]
+  }
+}

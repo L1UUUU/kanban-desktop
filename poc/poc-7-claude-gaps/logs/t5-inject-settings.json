@@ -1,0 +1,31 @@
+{
+  "env": {
+    "POC7_SESSION_INJECTED": "1"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"C:\\project2\\kanban-desktop\\poc\\poc-7-claude-gaps\\fixture\\proj\\hook-capture.mjs\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"C:\\project2\\kanban-desktop\\poc\\poc-7-claude-gaps\\fixture\\proj\\hook-capture.mjs\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

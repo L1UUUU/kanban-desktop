@@ -1,0 +1,32 @@
+{
+  "exe": "C:\\Users\\liuy\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe",
+  "phaseA": {
+    "sessionId": "e43da4cd-13d0-48dd-a302-502f70d6c3f7",
+    "reply": "已记住暗号",
+    "resultSubtype": "success",
+    "exitCode": 0,
+    "costUsd": 0.029273,
+    "initDebug": {
+      "initNull": true,
+      "initSessionId": null
+    }
+  },
+  "phaseB": {
+    "resumeArg": "e43da4cd-13d0-48dd-a302-502f70d6c3f7",
+    "initSessionId": "e43da4cd-13d0-48dd-a302-502f70d6c3f7",
+    "resultSessionId": "e43da4cd-13d0-48dd-a302-502f70d6c3f7",
+    "reply": "琥珀象9号",
+    "resultSubtype": "success",
+    "exitCode": 0,
+    "costUsd": 0.038273,
+    "cliVersionB": "2.1.317"
+  },
+  "judgments": {
+    "t4_phaseA_normal_exit": true,
+    "t4_phaseA_success": true,
+    "t4_phaseB_new_process": true,
+    "t4_resumed_same_session_id": true,
+    "t4_secret_recalled": true,
+    "t4_phaseB_success": true
+  }
+}
