@@ -1,21 +1,19 @@
-// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc 路由）、FakeAdapter 事件转发与会话状态落库、PTY 终端宿主（node-pty，main 进程直接使用，t0-03 实证）与有序退出、初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
+// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc 路由）、FakeAdapter 事件转发与会话状态落库、TrackerEngine（SkillObservation 落库 + 重启恢复）、PTY 终端宿主（node-pty，main 进程直接使用，t0-03 实证）与有序退出、初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import * as nodePty from "node-pty";
-import { adapterEventSchema, appInfoSchema, terminalEventSchema } from "@kanban/ipc-schema";
+import { appInfoSchema, terminalEventSchema } from "@kanban/ipc-schema";
 import { FakeAdapter } from "@kanban/cli-host";
-import { TRACKER_PLACEHOLDER } from "@kanban/tracker";
+import { TrackerEngine } from "@kanban/tracker";
 import { defaultConfig, loadConfig, saveConfig, type AppConfig } from "./config";
+import { createAdapterEventHandler } from "./adapter-events";
 import { SQLITE_ENTRY, openDatabase } from "./db";
 import { handleIpc, type IpcDeps } from "./ipc";
 import { createPtyHost } from "./pty-host";
 import { ProjectStore } from "./project-store";
 import { SessionStore } from "./session-store";
-
-// 占位引用：确保依赖方向在构建图上成立（真实消费自阶段 2 接入）
-void TRACKER_PLACEHOLDER;
 
 // FakeAdapter：#6 Fake 链路宿主（自建 SystemClock；真实三 CLI Adapter 自 #8/#10/#11 接入）
 const adapter = new FakeAdapter();
@@ -74,10 +72,13 @@ app.whenReady().then(() => {
   const db = openDatabase(join(app.getPath("userData"), "kanban.db"));
   const projects = new ProjectStore(db);
   const sessions = new SessionStore(db);
+  // Tracker 接线（#9）：SkillObservation 落库驱动状态机；启动即按 stage_events 事件日志重放恢复（需求/关联/幂等集）
+  const trackerEngine = new TrackerEngine(db);
+  trackerEngine.restore();
   // 启动探测：全部项目目录存在性落库（missing 标记，工单 #7 验收第 1 条）
   projects.refreshStatuses();
   app.on("quit", () => {
-    db.close();
+    trackerEngine.close(); // 关闭 engine 与底层 DB 连接（唯一关闭点）
     // 有序停止：Fake 时钟停泵（真实 CLI 进程有序终止链路属 #10，spec H）
     void adapter.dispose();
   });
@@ -151,18 +152,18 @@ app.whenReady().then(() => {
   );
   ipcMain.handle("kanban:ipc", (_event, raw: unknown) => handleIpc(deps, raw));
 
-  // Adapter 事件流 → renderer：出站也过 schema 校验（廉价，全量），窗口不在时静默丢弃；
-  // session_status/turn_started 顺带落库（sessions.status 与 last_active_at 随运行更新）
-  adapter.subscribe((event) => {
-    adapterEventSchema.parse(event);
-    if ("type" in event) {
-      if (event.type === "session_status") sessions.updateStatus(event.sessionId, event.status);
-      else if (event.type === "turn_started") sessions.touch(event.sessionId, new Date().toISOString());
-    }
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("chat:event", event);
-    }
-  });
+  // Adapter 事件流：出站校验 + 会话状态落库 + SkillObservation 进 tracker 落库（#9）→ 转发 renderer；窗口不在时静默丢弃转发
+  adapter.subscribe(
+    createAdapterEventHandler({
+      sessions,
+      engine: trackerEngine,
+      send: (event) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("chat:event", event);
+        }
+      },
+    }),
+  );
 
   createWindow();
 });

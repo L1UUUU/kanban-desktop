@@ -1,5 +1,5 @@
 // 用途：FakeAdapter 演示脚本 —— 数据化 ScriptStep（可 JSON 化），行为规格对照原型 TURN_SCRIPT/APPROVAL_SCRIPT/decide()（交互文案为硬约束）
-import type { ApprovalSuggestion } from "@kanban/ipc-schema";
+import type { ApprovalSuggestion, SkillObservation } from "@kanban/ipc-schema";
 
 /** 单步脚本：driver 解释执行；approval 步暂停等待用户决定（或过期） */
 export type ScriptStep =
@@ -16,6 +16,8 @@ export type ScriptStep =
       /** deny 后续步骤（缺省：直接结束 turn） */
       onDeny?: ScriptStep[];
     }
+  /** SkillObservation 观察信号步（#9）：向订阅者发归一化 skill 事件（不入 chat 日志，C2 语义独立于消息流） */
+  | { t: "skill"; skill: string; cli: SkillObservation["cli"]; evidenceLevel: SkillObservation["evidenceLevel"] }
   | { t: "wait"; ms: number }
   | { t: "error"; code: string; message: string }
   | { t: "turnEnd" };
@@ -88,8 +90,22 @@ export const ERROR_SCRIPT: ScriptStep[] = [
   { t: "error", code: "E_FAKE_CRASH", message: "Fake CLI 进程意外退出（演示）" },
 ];
 
-/** 按发送文本选择脚本：命中关键词走对应演示分支（E2E/手动演示的确定性入口） */
+// C2 有效阶段 skill 集合（token 精确匹配用；硬编码于 fake 层，真实识别归各 Adapter）
+const STAGE_SKILLS = new Set(["design-feature", "implement-spec", "pr", "retro"]);
+
+/** skill 分支：发送文本首个空白分隔 token 精确等于 /skill名 且命中已知 skill（镜像 Codex 生成规则，spec B）；Fake 无 hook → self_reported */
+export function skillTurnScript(skill: string): ScriptStep[] {
+  return [
+    { t: "skill", skill, cli: "codex", evidenceLevel: "self_reported" },
+    { t: "assistant", text: `已收到 /${skill}，开始按该 skill 的流程推进（观察信号 self_reported 已发出）。` },
+    { t: "turnEnd" },
+  ];
+}
+
+/** 按发送文本选择脚本：命中关键词走对应演示分支（E2E/手动演示的确定性入口）；/skill 名精确命中走 skill 分支，未命中按普通 prompt 发送 */
 export function pickScript(text: string): ScriptStep[] {
+  const token = text.split(/\s+/)[0] ?? "";
+  if (token.startsWith("/") && STAGE_SKILLS.has(token.slice(1))) return cloneScript(skillTurnScript(token.slice(1)));
   if (text.includes("审批")) return cloneScript(APPROVAL_SCRIPT);
   if (text.includes("过期")) return cloneScript(EXPIRY_SCRIPT);
   if (text.includes("错误") || text.includes("异常")) return cloneScript(ERROR_SCRIPT);

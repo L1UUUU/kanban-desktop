@@ -67,6 +67,7 @@ export function ChatWorkspace({
             onPermChange: controller.setPerm,
             onModelChange: controller.setModel,
             onResolveApproval: controller.resolveApproval,
+            onResume: (sessionId) => void controller.resumeSession(sessionId),
           }}
         />
       )}

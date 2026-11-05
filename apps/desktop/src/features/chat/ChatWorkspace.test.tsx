@@ -491,7 +491,7 @@ describe("PTY 终端链路（#12：mock PTY 驱动 TerminalPanel 与多路复用
     return { projDir, dbPath, transport: makeTransport(adapter, { dbPath, statePath, pick: async () => projDir }) };
   }
 
-  /** 注册项目并挂载工作区（返回 flush 与 xterm 面板断言器） */
+  /** 注册项目并挂载工作区（返回 flush） */
   async function boot(transport: ChatTransport) {
     const t = mount(transport);
     await t.flush();
@@ -554,5 +554,60 @@ describe("PTY 终端链路（#12：mock PTY 驱动 TerminalPanel 与多路复用
     expect(screen.getByText("已断开")).toBeTruthy();
     fireEvent.click(screen.getAllByText("终端 · pwsh")[0]);
     expect(screen.getByText(/该终端进程已结束/)).toBeTruthy();
+  });
+});
+
+describe("断开会话「读取原生历史并恢复」（#9）", () => {
+  let tmpRoot = "";
+
+  afterEach(() => {
+    cleanup();
+    for (const db of openDbs.splice(0)) db.close();
+    if (tmpRoot) {
+      rmSync(tmpRoot, { recursive: true, force: true });
+      tmpRoot = "";
+    }
+  });
+
+  it("重启恢复为断开态 → 点「读取原生历史并恢复」→ readHistory 快照重建消息流 → resume 回 idle → 续聊无缝拼接", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "kb-ws-resume-"));
+    const dbPath = join(tmpRoot, "state.db");
+
+    // 第一次运行：boot 演示会话跑一个完整 turn（事件日志留在 adapter 内存 = Fake 的原生历史）
+    const clock1 = new VirtualClock();
+    const adapter = new FakeAdapter({ clock: clock1 });
+    const t1 = mount(makeTransport(adapter, { dbPath }));
+    await t1.flush();
+    send("拆类型");
+    act(() => {
+      clock1.runToIdle();
+    });
+    expect(screen.getByText("好的，我先跑一遍现有测试确认基线，然后开始拆分。")).toBeTruthy();
+
+    // 「重启」：UI/store 重建、会话行来自 DB（断开态）；adapter 保留（Fake 的 CLI 进程未退出场景）
+    cleanup();
+    const t2 = mount(makeTransport(adapter, { dbPath })); // mount 的内部 clock 与本 adapter 无关；驱动用 clock1
+    await t2.flush();
+    expect(await screen.findByText("已断开")).toBeTruthy();
+    // 激活该会话后聊天区呈现断开提示与恢复入口（恢复登记不自动激活）
+    fireEvent.click(screen.getByText("演示会话 · Fake"));
+    expect(screen.getByText("该会话来自上次运行（CLI 已退出）。缓存不替代原生历史。")).toBeTruthy();
+    expect(screen.queryByText("好的，我先跑一遍现有测试确认基线，然后开始拆分。")).toBeNull(); // 缓存不替代原生历史：恢复前消息流为空
+
+    // 恢复入口：readHistory 快照重建 → resume 回 idle
+    fireEvent.click(screen.getByRole("button", { name: "读取原生历史并恢复" }));
+    await t2.flush();
+    expect(screen.getByText("好的，我先跑一遍现有测试确认基线，然后开始拆分。")).toBeTruthy();
+    expect(screen.getByText("基线全绿。现在把 chat 与 session 两个命名空间拆成独立文件，并在 index 里保持原导出面不变。")).toBeTruthy();
+    expect(screen.queryByText("已断开")).toBeNull(); // resume 后实时 session_status(idle) 驱动状态
+    expect(screen.getByText("空闲")).toBeTruthy();
+
+    // 续聊：快照后新事件无缝续上（恢复的会话可继续对话；默认脚本同文案 → 用 getAllByText 计数两次出现）
+    send("第二 turn");
+    act(() => {
+      clock1.runToIdle();
+    });
+    expect(screen.getAllByText("好的，我先跑一遍现有测试确认基线，然后开始拆分。")).toHaveLength(2); // 快照 1 次 + 实时 1 次
+    expect(screen.getAllByText("基线全绿。现在把 chat 与 session 两个命名空间拆成独立文件，并在 index 里保持原导出面不变。")).toHaveLength(2);
   });
 });
