@@ -302,3 +302,22 @@ test("S5: 恢复后 link 同步仍可用（sessionEvents 缓存随持久化往�
   }
   rmSync(db, { force: true });
 });
+
+test("S3: 真实源路径 —— opencode self_reported（command API 可观察）先执行后关联，同步推进且标 uncertain", () => {
+  // 对应 e2e S3 真实 OpenCode 分支的规则镜像：command 提交 + turn 完成构造 self_reported，无独立 skill 语义 hook
+  const tr = new RequirementTracker();
+  tr.process(mkSkill({ sessionId: "cs-1", skill: "design-feature", at: T.t1 })); // REQ-001 @ Design(t1)
+  tr.process(mkLink("cx-1", "REQ-001", T.t1));
+  tr.process(mkSkill({ sessionId: "cx-1", cli: "codex", skill: "implement-spec", at: T.t2, evidence: "self_reported" })); // Implement(t2)
+  // opencode session 先真实执行 pr（t3，未关联 → 只记活动）
+  const oc = mkSkill({ sessionId: "ses_oc_real", cli: "opencode", skill: "pr", at: T.t3, evidence: "self_reported" });
+  assert.deepEqual(tr.process(oc), []);
+  assert.equal(tr.req("REQ-001").stage, "Implement");
+  // 手动关联后按 command 实际发生时间(t3) > 依据(t2) 同步推进到 PR
+  const ch = tr.process(mkLink("ses_oc_real", "REQ-001", T.t4, "opencode"));
+  const r = tr.req("REQ-001");
+  assert.equal(r.stage, "PR");
+  assert.equal(r.uncertain, true, "self_reported 依据 → uncertain");
+  assert.equal(r.stageBasis.at, T.t3, "依据为 skill 实际发生时间而非关联时间");
+  assert.ok(ch.some((c) => c.type === "stage_changed" && c.stage === "PR"));
+});

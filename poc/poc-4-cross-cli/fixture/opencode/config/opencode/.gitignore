@@ -1,0 +1,2 @@
+# 运行时由 poc-4 从用户全局 opencode.json 只读复制注入（含 provider apiKey，密钥不入库不落日志）
+opencode.json

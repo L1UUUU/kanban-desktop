@@ -1,12 +1,13 @@
 {
-  "startedAt": "2026-11-05T05:53:35.340Z",
+  "startedAt": "2026-11-05T07:10:07.169Z",
   "mode": "verify-restart",
   "steps": [],
   "modelCalls": {
     "claude": 0,
-    "codexTurn": 0
+    "codexTurn": 0,
+    "opencodeCommand": 0
   },
-  "budget": 8,
+  "budget": 6,
   "checks": [
     {
       "name": "重启后卡片数量与编号一致",
@@ -21,29 +22,29 @@
     {
       "name": "重启后 Session 关联一致",
       "pass": true,
-      "detail": "[[\"01a1aa43-9b9b-76a3-84e2-3459d5382430\",\"ses_opencode_sim_0001\",\"d1318afc-6411-47cf-809a-0174c447807e\"]]"
+      "detail": "[[\"01a1aa86-ee95-7e50-8dc7-3b3f7811888b\",\"ses_e557894baffedo5hHsRZ6i3b2M\",\"98074da3-6c95-4129-a8ad-ae172ebc9a07\"]]"
     },
     {
       "name": "重启后重放真实 hook 事件（同 eventId）→ 幂等不变化",
       "pass": true,
-      "detail": "eventId=hook:6abd778a-2c2a-475c-9cb7-1b1eb6179a81:design-feature:2026-11-05T05:51:38.736Z → duplicate_ignored"
+      "detail": "eventId=hook:803fb517-a2d3-4a07-b30f-19df5cd269c9:design-feature:2026-11-05T07:04:42.131Z → duplicate_ignored"
     },
     {
-      "name": "重启后历史事件完整（stage_events 行数一致）",
+      "name": "重启后历史事件完整（stage_events 行数不丢失）",
       "pass": true,
-      "detail": "events=13"
+      "detail": "events=13（main 结束时=13）"
     },
     {
       "name": "证据等级分布可查（verified/self_reported/simulated 均在库）",
       "pass": true,
-      "detail": "[{\"evidence_level\":\"self_reported\",\"n\":1},{\"evidence_level\":\"simulated\",\"n\":4},{\"evidence_level\":\"verified\",\"n\":8}]"
+      "detail": "[{\"evidence_level\":\"self_reported\",\"n\":2},{\"evidence_level\":\"simulated\",\"n\":3},{\"evidence_level\":\"verified\",\"n\":8}]"
     },
     {
       "name": "重启后新事件仍正常驱动阶段",
       "pass": true,
-      "detail": "stage=Retro"
+      "detail": "stage=Retro（注入 session=01a1aa86-ee95-7e50-8dc7-3b3f7811888b，内存验证不落库）"
     }
   ],
   "snapshot": null,
-  "finishedAt": "2026-11-05T05:53:35.351Z"
+  "finishedAt": "2026-11-05T07:10:07.174Z"
 }

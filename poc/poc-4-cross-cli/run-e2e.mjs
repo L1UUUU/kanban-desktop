@@ -1,13 +1,13 @@
-// 用途：PoC 4 端到端混合流运行器 —— 场景 1-5 全链路：真实 Claude hook 建卡 → 真实 Codex turn + self_reported → 合成 OpenCode 事件 → 手动修正/重放/延迟/乱序注入 → 解除关联 → 重启恢复（--verify-restart 子命令为新进程校验）
-// 用法：node run-e2e.mjs               # 主链路（真实模型调用 ≤8 次硬上限）
+// 用途：PoC 4 端到端混合流运行器 —— 场景 1-5 全链路：真实 Claude hook 建卡 → 真实 Codex turn + self_reported → 真实 OpenCode command + self_reported → 手动修正/重放/延迟/乱序注入 → 解除关联 → 重启恢复（--verify-restart 子命令为新进程校验）
+// 用法：node run-e2e.mjs               # 主链路（真实模型调用 ≤6 次硬上限：Claude/Codex/OpenCode）
 //       node run-e2e.mjs --verify-restart  # 退出重开校验：新进程读同一 SQLite 恢复并做重放注入
 import { mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { PoCEngine } from "./lib/engine.mjs";
-import { runClaudePrompt, readHookSkillEvents, hookFileLineCount, HOOK_FILE, FIXTURE_PROJ } from "./adapters/claude.mjs";
+import { runClaudePrompt, readHookSkillEvents, hookFileLineCount, HOOK_FILE } from "./adapters/claude.mjs";
 import { CodexAppServerClient } from "./adapters/codex-client.mjs";
+import { OpencodeServer, runSkillCommand, resetDataDir } from "./adapters/opencode.mjs";
 import { synthSkillEvent, guiEvent } from "./adapters/synth.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -16,8 +16,8 @@ const DB = join(RUNS, "poc4.db");
 const WORKDIR = join(here, "fixture", "workdir");
 mkdirSync(RUNS, { recursive: true });
 
-const MODEL_BUDGET = 8; // 真实模型调用硬上限（一句话级）
-const report = { startedAt: new Date().toISOString(), mode: process.argv.includes("--verify-restart") ? "verify-restart" : "main", steps: [], modelCalls: { claude: 0, codexTurn: 0 }, budget: MODEL_BUDGET, checks: [], snapshot: null };
+const MODEL_BUDGET = 6; // 真实模型调用硬上限（一句话级；三 CLI 真实源）
+const report = { startedAt: new Date().toISOString(), mode: process.argv.includes("--verify-restart") ? "verify-restart" : "main", steps: [], modelCalls: { claude: 0, codexTurn: 0, opencodeCommand: 0 }, budget: MODEL_BUDGET, checks: [], snapshot: null };
 let snapshotFinal = null; // main 末尾状态，供 restart 对比
 
 function step(name, fn) {
@@ -32,6 +32,7 @@ function check(name, pass, detail) {
 }
 const now = () => new Date().toISOString();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function budgetLeft() { return MODEL_BUDGET - (report.modelCalls.claude + report.modelCalls.codexTurn + report.modelCalls.opencodeCommand); }
 
 // 从 hook 文件提取本会话新增的 verified skill 事件（sinceLine 避免读到旧运行残留）
 function newHookEvents(sinceLine) {
@@ -41,7 +42,7 @@ function newHookEvents(sinceLine) {
 // 跑一次真实 Claude 调用并返回新增 hook 事件；skill 未被调用时返回空（由调用方重试）
 async function claudeOnce(label) {
   report.modelCalls.claude++;
-  if (report.modelCalls.claude + report.modelCalls.codexTurn > MODEL_BUDGET) throw new Error("真实模型调用超出预算上限，中止");
+  if (budgetLeft() < 0) throw new Error(`真实模型调用超出预算上限 ${MODEL_BUDGET}，中止`);
   const since = hookFileLineCount();
   const out = await runClaudePrompt({ prompt: label });
   return { out, events: newHookEvents(since) };
@@ -61,7 +62,7 @@ async function main() {
   // 本 PoC 验证目标是「hook 捕获真调用 → tracker 正确处理」链路，等价于 GUI 中用户确定性触发场景
   const S1_PROMPT = "/design-feature\n\n请立即使用 Skill 工具执行 design-feature，不要运行任何其他工具，不要做任何调查。";
   await step("S1 真实 Claude：/design-feature stub → hook verified → 自动建卡", async () => {
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
       const r = await claudeOnce(S1_PROMPT);
       s1Out = r.out;
       s1Events = r.events;
@@ -132,19 +133,38 @@ async function main() {
     check("用户确认后 uncertain 转正（manual 立即生效）", eng.snapshot()[0].uncertain === false, `stage=${eng.snapshot()[0].stage} uncertain=${eng.snapshot()[0].uncertain}`);
   });
 
-  // ---- 场景 3：OpenCode Session 先执行阶段 Skill 后手动关联（凭据阻塞 → 合成事件，标注 simulated） ----
-  await step("S3 合成 OpenCode：先执行 pr（simulated）后手动关联 → 按实际发生时间同步", async () => {
-    const ocSession = "ses_opencode_sim_0001";
-    const prAt = now();
-    const prEv = synthSkillEvent({ sessionId: ocSession, cli: "opencode", skill: "pr", occurredAt: prAt, note: "opencode-credentials-expired(poc3)" });
-    const r1 = eng.process(prEv);
+  // ---- 场景 3：OpenCode Session 先执行阶段 Skill 后手动关联（真实：command API + magpie provider；self_reported 分级） ----
+  await step("S3 真实 OpenCode：先真实执行 /pr（self_reported）后手动关联 → 按实际发生时间同步", async () => {
+    resetDataDir();
+    const srv = new OpencodeServer();
+    let ocResult = null;
+    try {
+      const injected = await srv.start();
+      check("OpenCode server 隔离启动 + provider 只读注入（密钥不落日志）", injected.hasApiKey, `provider=${injected.providerId} models=${injected.modelCount} hasApiKey=${injected.hasApiKey}（key 值不记录）`);
+      report.modelCalls.opencodeCommand++;
+      ocResult = await runSkillCommand(srv, { command: "pr", expectText: "PR-STUB-OK", title: "poc4-s3-pr" });
+    } finally {
+      srv.stop();
+    }
+    check("阶段 skill 经 command API 真实执行（同步 200 + turn 完成）", ocResult.httpStatus === 200 && ocResult.turnStatus === "completed",
+      `command=${ocResult.command} discovered=${ocResult.discovered}(source=${ocResult.source}) HTTP ${ocResult.httpStatus} turn=${ocResult.turnStatus} session=${ocResult.sessionId}`);
+    check("项目级 stub 被真实执行（回读 stub 文案）", ocResult.textMatched === true, `text="${ocResult.text.trim().slice(0, 80)}"`);
+
+    // self_reported 事件：可观察信号 = 用户提交 command + 同步 200 + turn 真实执行（无独立 skill 语义 hook）
+    const selfEv = {
+      eventId: `oc-command:${ocResult.sessionId}:pr:${ocResult.commandAt}`,
+      kind: "skill", sessionId: ocResult.sessionId, cli: "opencode", skill: "pr", stage: null, requirementId: null,
+      occurredAt: ocResult.commandAt, receivedAt: now(), seq: ocResult.sessionId,
+      evidenceLevel: "self_reported", source: "opencode-http:command(user submitted /pr)",
+    };
+    const r1 = eng.process(selfEv);
     check("OpenCode 先执行 Skill（未关联）→ 只记活动不建卡不改阶段", r1.changes.length === 0 && eng.snapshot().length === 1, `changes=${r1.changes.length} cards=${eng.snapshot().length}`);
     await sleep(5);
-    const linkEv = guiEvent("link", { sessionId: ocSession, cli: "opencode", requirementId: "REQ-001", source: "gui-manual-link" });
+    const linkEv = guiEvent("link", { sessionId: ocResult.sessionId, cli: "opencode", requirementId: "REQ-001", source: "gui-manual-link" });
     const { changes } = eng.process(linkEv);
     const snap = eng.snapshot()[0];
-    check("手动关联后按 Skill 实际发生时间同步阶段到 PR", snap.stage === "PR" && snap.sessions.includes(ocSession), `stage=${snap.stage} basis.at=${snap.stageBasis?.at}（link 时间更晚但不冒充依据） uncertain=${snap.uncertain}`);
-    check("simulated 依据 → 阶段标 uncertain", snap.uncertain === true, `uncertain=${snap.uncertain}`);
+    check("手动关联后按 Skill 实际发生时间同步阶段到 PR", snap.stage === "PR" && snap.sessions.includes(ocResult.sessionId), `stage=${snap.stage} basis.at=${snap.stageBasis?.at}（link 时间更晚但不冒充依据）`);
+    check("self_reported 依据 → 阶段标 uncertain", snap.uncertain === true, `uncertain=${snap.uncertain}`);
   });
 
   // ---- 场景 4：手动修正 → 新有效事件覆盖；重复/延迟旧事件不覆盖；多 Session 最新有效胜出 ----
@@ -157,7 +177,7 @@ async function main() {
     let dEvents = [];
     let dOut = null;
     const S4_PROMPT = "/implement-spec\n\n请立即使用 Skill 工具执行 implement-spec，不要运行任何其他工具，不要做任何调查。";
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
       const r = await claudeOnce(S4_PROMPT);
       dOut = r.out;
       dEvents = r.events;
@@ -196,14 +216,14 @@ async function main() {
       check("延迟旧事件（occurredAt 早于依据）不覆盖", false, "前置真实事件缺失，降级跳过");
     }
 
-    // 4.5 乱序并发 + PR→Implement 回退（simulated 混合注入，时间递增）
+    // 4.5 乱序并发 + PR→Implement 回退（规则注入用 simulated 事件，时间递增；session 为已关联的真实 Claude session A）
     await sleep(5);
-    eng.process(synthSkillEvent({ sessionId: "ses_opencode_sim_0001", cli: "opencode", skill: "pr", occurredAt: now(), note: "concurrent-newest-1" }));
+    eng.process(synthSkillEvent({ sessionId: claudeSessionA, cli: "claude-code", skill: "pr", occurredAt: now(), note: "concurrent-newest-1" }));
     const prStage = eng.snapshot()[0].stage;
     await sleep(5);
     eng.process(synthSkillEvent({ sessionId: claudeSessionA, cli: "claude-code", skill: "implement-spec", occurredAt: now(), note: "concurrent-newest-2-regress" }));
     const finalStage = eng.snapshot()[0].stage;
-    check("多 Session 并发最新有效事件胜出，且允许 PR→Implement 回退", prStage === "PR" && finalStage === "Implement", `t6=PR → t7=${finalStage}`);
+    check("混合流最新有效事件胜出，且允许 PR→Implement 回退", prStage === "PR" && finalStage === "Implement", `t6=PR → t7=${finalStage}`);
   });
 
   // ---- 场景 5（前半）：解除关联不删历史、不回退 ----
@@ -244,15 +264,16 @@ async function verifyRestart() {
   const replayRes = eng.process(realHookEv);
   check("重启后重放真实 hook 事件（同 eventId）→ 幂等不变化", replayRes.changes.length === 0 && JSON.stringify(eng.snapshot()) === before, `eventId=${realHookEv?.eventId} → duplicate_ignored`);
 
-  // 历史完整性：stage_events 行数不因重启丢失
+  // 历史完整性：重启不丢历史（>= 判定；verify-restart 可重复运行，post-restart 驱动 check 每次新增一条事件）
   const tables = eng.store.snapshotTables();
-  check("重启后历史事件完整（stage_events 行数一致）", tables.stageEventCount === expectedTables.stageEventCount, `events=${tables.stageEventCount}`);
+  check("重启后历史事件完整（stage_events 行数不丢失）", tables.stageEventCount >= expectedTables.stageEventCount, `events=${tables.stageEventCount}（main 结束时=${expectedTables.stageEventCount}）`);
   check("证据等级分布可查（verified/self_reported/simulated 均在库）", tables.eventsByEvidence.length === 3, JSON.stringify(tables.eventsByEvidence));
 
-  // 恢复后 tracker 仍可继续工作（新事件正常驱动）
+  // 恢复后 tracker 仍可继续工作：注入走 tracker 内存态（不落库），验证状态机可继续驱动且不污染 main 终态（verify-restart 可重复运行）
+  const linkedSession = eng.snapshot()[0].sessions[0];
   const t = now();
-  eng.process(synthSkillEvent({ sessionId: "ses_opencode_sim_0001", cli: "opencode", skill: "retro", occurredAt: t, note: "post-restart" }));
-  check("重启后新事件仍正常驱动阶段", eng.snapshot()[0].stage === "Retro", `stage=${eng.snapshot()[0].stage}`);
+  const prCh = eng.tracker.process(synthSkillEvent({ sessionId: linkedSession, cli: "opencode", skill: "retro", occurredAt: t, note: "post-restart(in-memory only)" }));
+  check("重启后新事件仍正常驱动阶段", eng.tracker.snapshot()[0].stage === "Retro" && prCh.length > 0, `stage=${eng.tracker.snapshot()[0].stage}（注入 session=${linkedSession}，内存验证不落库）`);
   eng.close();
 }
 
