@@ -1,0 +1,105 @@
+// 用途：PTY 终端全链 E2E（#12 验收第 2 条 + 工单 E2E 项）—— 真实 ConPTY PowerShell：新建 → 键入回显 → 切结构化会话再切回（终端内容保留、进程仍活）→ 显式停止 → 重启恢复断开态条目
+import { test, expect, _electron, type ElectronApplication, type Page } from "@playwright/test";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const PROJECT_NAME = "e2e-pty";
+
+/** 尽力删除目录：Windows 下 electron/Crashpad 子进程退出有延迟，重试后仍锁则告警放行 */
+async function rmBestEffort(target: string): Promise<void> {
+  for (let i = 0; i < 20; i += 1) {
+    try {
+      rmSync(target, { recursive: true, force: true });
+      return;
+    } catch {
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+  console.warn(`[e2e] 临时目录仍被占用，跳过清理：${target}`);
+}
+
+/** 建隔离 fixture：独立 userData + 伪 git 主仓库目录 */
+function makeFixture(): { userData: string; repoDir: string } {
+  const userData = mkdtempSync(join(tmpdir(), "kb-e2e-pty-user-"));
+  const repoRoot = mkdtempSync(join(tmpdir(), "kb-e2e-pty-repo-"));
+  const repoDir = join(repoRoot, PROJECT_NAME);
+  mkdirSync(join(repoDir, ".git"), { recursive: true });
+  return { userData, repoDir };
+}
+
+/** 启动应用（env 隔离 userData；固定目录选择跳过原生模态） */
+async function launchApp(userData: string, repoDir?: string): Promise<{ app: ElectronApplication; win: Page }> {
+  const app = await _electron.launch({
+    args: [join(__dirname, "..")],
+    env: {
+      ...process.env,
+      KANBAN_USER_DATA: userData,
+      ...(repoDir ? { KANBAN_TEST_PICK_DIRECTORY: repoDir } : {}),
+    },
+  });
+  const win = await app.firstWindow();
+  return { app, win };
+}
+
+/** 在终端面板键入文本并回车（点击 .xterm 聚焦后走键盘事件 → term.onData → terminal:write） */
+async function typeInTerminal(win: Page, line: string): Promise<void> {
+  await win.locator(".xterm").first().click();
+  await win.keyboard.type(line);
+  await win.keyboard.press("Enter");
+}
+
+test("PTY 终端：新建 → 回显 → 切结构化会话再切回（内容保留/进程仍活）→ 停止 → 重启恢复断开态", async () => {
+  const { userData, repoDir } = makeFixture();
+  const repoRoot = join(repoDir, "..");
+  try {
+    // —— 第一次启动：注册项目 → 「＋」建 PTY 终端（真实 PowerShell）
+    const first = await launchApp(userData, repoDir);
+    await first.win.getByRole("button", { name: "＋ 注册", exact: true }).click();
+    await expect(first.win.locator("aside").getByText(PROJECT_NAME, { exact: true })).toBeVisible({ timeout: 15_000 });
+
+    await first.win.locator("aside").getByText(PROJECT_NAME, { exact: true }).hover();
+    await first.win.getByRole("button", { name: "＋", exact: true }).click();
+    await first.win.getByRole("button", { name: /PTY 终端/ }).click();
+
+    // PTY 分组出现会话行（默认 shell 探测：pwsh/powershell）+ xterm 面板挂起 + 空闲徽标
+    await expect(first.win.getByText(/^终端 · /).first()).toBeVisible({ timeout: 15_000 });
+    await expect(first.win.locator(".xterm").first()).toBeVisible({ timeout: 15_000 });
+    await expect(first.win.getByText("空闲").first()).toBeVisible();
+
+    // 键入回显（真实 ConPTY：输入经 terminal:write → PTY → 输出流回 xterm DOM 渲染）
+    await typeInTerminal(first.win, "echo kb-pty-marker-1");
+    await expect(first.win.getByText(/kb-pty-marker-1/).first()).toBeVisible({ timeout: 20_000 });
+
+    // 建结构化会话并切换：PTY 面板卸载（xterm 元素消失），PTY 会话行保留
+    await first.win.locator("aside").getByText(PROJECT_NAME, { exact: true }).hover();
+    await first.win.getByRole("button", { name: "＋", exact: true }).click();
+    await first.win.getByRole("button", { name: "Claude", exact: true }).click();
+    await expect(first.win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
+    await expect(first.win.getByPlaceholder("输入消息，/ 开头触发 Skill…")).toBeVisible();
+    await expect(first.win.locator(".xterm")).toHaveCount(0);
+
+    // 切回 PTY：终端内容保留（marker 仍在缓冲）且进程仍活（新命令继续回显）
+    await first.win.getByText(/^终端 · /).first().click();
+    await expect(first.win.locator(".xterm").first()).toBeVisible({ timeout: 10_000 });
+    await expect(first.win.getByText(/kb-pty-marker-1/).first()).toBeVisible({ timeout: 10_000 });
+    await typeInTerminal(first.win, "echo kb-pty-alive");
+    await expect(first.win.getByText(/kb-pty-alive/).first()).toBeVisible({ timeout: 20_000 });
+
+    // 显式停止（面板顶栏按钮 = 唯一停止入口）→ 状态徽标已断开
+    await first.win.getByRole("button", { name: "⏹ 停止终端" }).click();
+    await expect(first.win.getByText("已断开").first()).toBeVisible({ timeout: 15_000 });
+    await first.app.close();
+
+    // —— 重启（同一 userData）：PTY 会话恢复为断开态条目（进程不在），点击显示断开占位
+    const second = await launchApp(userData);
+    await expect(second.win.getByText(/^终端 · /).first()).toBeVisible({ timeout: 15_000 });
+    await expect(second.win.getByText("已断开").first()).toBeVisible();
+    await second.win.getByText(/^终端 · /).first().click();
+    await expect(second.win.getByText(/该终端进程已结束/)).toBeVisible({ timeout: 10_000 });
+    await second.app.close();
+  } finally {
+    await rmBestEffort(userData);
+    await rmBestEffort(repoRoot);
+  }
+});

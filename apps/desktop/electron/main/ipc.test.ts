@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { FakeAdapter, VirtualClock, type CliAdapter } from "@kanban/cli-host";
 import { openDatabase } from "./db";
 import { handleIpc, type IpcDeps } from "./ipc";
+import type { PtyHost } from "./pty-host";
 import { ProjectStore } from "./project-store";
 import { SessionStore } from "./session-store";
 
@@ -17,6 +18,29 @@ afterEach(() => {
     tmpRoot = "";
   }
 });
+
+/** 路由级 fake PTY 宿主：记录 spawn/kill 调用（PTY 行为由 pty-host.test.ts 覆盖） */
+function makePtyHost() {
+  const spawned: Array<{ terminalId: string; cwd: string }> = [];
+  const killed: string[] = [];
+  const running = new Set<string>();
+  const host: PtyHost = {
+    spawn: (terminalId, req) => {
+      spawned.push({ terminalId, cwd: req.cwd });
+      running.add(terminalId);
+      return { ok: true, label: "pwsh", shell: "pwsh.exe", cwd: req.cwd };
+    },
+    write: (terminalId) => (running.has(terminalId) ? { ok: true } : { ok: false, message: "终端未运行" }),
+    resize: () => undefined,
+    kill: (terminalId) => {
+      killed.push(terminalId);
+      running.delete(terminalId);
+    },
+    isRunning: (terminalId) => running.has(terminalId),
+    killAll: () => running.clear(),
+  };
+  return { host, spawned, killed, drop: (id: string) => running.delete(id) };
+}
 
 /** 构造 VirtualClock 驱动的 FakeAdapter + 路由器（无持久化通道，#6 既有行为回归用） */
 function makeRouter() {
@@ -39,6 +63,7 @@ function makeDeps(adapter: CliAdapter, pick: () => Promise<string | null> = asyn
     setCurrentProjectId: (id) => {
       currentProjectId = id;
     },
+    pty: makePtyHost().host,
   };
 }
 
@@ -291,5 +316,94 @@ describe("session 通道（#7）", () => {
     const scoped = await handle({ channel: "session:list", projectId });
     if (!scoped.ok) throw new Error("session:list(projectId) 失败");
     expect(scoped.sessions).toHaveLength(2);
+  });
+});
+
+describe("terminal 通道（#12：terminalApi × terminalId 参数化）", () => {
+  /** terminal 专用路由：真实 SessionStore + fake pty 宿主（spawn 可注入失败） */
+  function makeTerminalRouter(opts?: { failSpawn?: boolean }) {
+    tmpRoot = mkdtempSync(join(tmpdir(), "kb-ipc-pty-"));
+    const projDir = join(tmpRoot, "repo");
+    mkdirSync(join(projDir, ".git"), { recursive: true }); // 主仓库 fixture → dirIdentity=main
+    const clock = new VirtualClock();
+    const db = openDatabase(":memory:");
+    const ptyState = makePtyHost();
+    const deps: IpcDeps = {
+      adapter: new FakeAdapter({ clock }),
+      projects: new ProjectStore(db),
+      sessions: new SessionStore(db),
+      pickDirectory: async () => projDir,
+      getCurrentProjectId: () => null,
+      setCurrentProjectId: () => undefined,
+      pty: opts?.failSpawn
+        ? {
+            ...ptyState.host,
+            spawn: () => ({ ok: false, message: "启动失败：spawn boom" }),
+          }
+        : ptyState.host,
+    };
+    return { deps, ptyState, projDir, handle: (raw: unknown) => handleIpc(deps, raw) };
+  }
+
+  it("terminal:create：spawn + pty 会话落库（kind=pty/cli=pty）+ 目录身份 + 默认标题「终端 · label」", async () => {
+    const { handle, ptyState, projDir } = makeTerminalRouter();
+    const created = await handle({ channel: "terminal:create", cwd: projDir, cols: 120, rows: 40 });
+    expect(created.ok).toBe(true);
+    if (created.ok) {
+      expect(created.sessionId).toBeTruthy();
+      expect(created.cli).toBe("pty");
+      expect(created.title).toBe("终端 · pwsh");
+      expect(created.dirIdentity).toBe("main");
+    }
+    expect(ptyState.spawned).toHaveLength(1);
+
+    const list = await handle({ channel: "session:list" });
+    if (!list.ok) throw new Error("session:list 失败");
+    expect(list.sessions).toHaveLength(1);
+    expect(list.sessions![0]).toMatchObject({ kind: "pty", cli: "pty", nativeSessionId: null, status: "idle", title: "终端 · pwsh" });
+  });
+
+  it("terminal:create spawn 失败 → E_INTERNAL 且不落库", async () => {
+    const { handle } = makeTerminalRouter({ failSpawn: true });
+    const res = await handle({ channel: "terminal:create", cwd: "C:\\p" });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.code).toBe("E_INTERNAL");
+    const list = await handle({ channel: "session:list" });
+    if (!list.ok) throw new Error("session:list 失败");
+    expect(list.sessions).toHaveLength(0);
+  });
+
+  it("terminal:write/resize/kill 路由：成功 ok；未运行/未知终端 → E_SESSION_NOT_FOUND", async () => {
+    const { handle, ptyState } = makeTerminalRouter();
+    const created = await handle({ channel: "terminal:create", cwd: "C:\\p" });
+    const terminalId = created.ok ? created.sessionId! : "";
+
+    expect((await handle({ channel: "terminal:write", terminalId, data: "echo hi\r" })).ok).toBe(true);
+    expect((await handle({ channel: "terminal:resize", terminalId, cols: 100, rows: 30 })).ok).toBe(true);
+    const ghost = await handle({ channel: "terminal:write", terminalId: "ghost", data: "x" });
+    if (!ghost.ok) expect(ghost.error.code).toBe("E_SESSION_NOT_FOUND");
+
+    // 进程退出后 write 同样 E_SESSION_NOT_FOUND
+    ptyState.drop(terminalId);
+    const afterExit = await handle({ channel: "terminal:write", terminalId, data: "x" });
+    if (!afterExit.ok) expect(afterExit.error.code).toBe("E_SESSION_NOT_FOUND");
+
+    expect((await handle({ channel: "terminal:kill", terminalId })).ok).toBe(true);
+    expect(ptyState.killed).toContain(terminalId);
+  });
+
+  it("非法 terminal 载荷 → E_SCHEMA（缺 terminalId / 空 cwd）", async () => {
+    const { handle } = makeTerminalRouter();
+    const cases: unknown[] = [
+      { channel: "terminal:write", data: "x" },
+      { channel: "terminal:resize", terminalId: "t", cols: 0, rows: 30 },
+      { channel: "terminal:create", cwd: "" },
+      { channel: "terminal:nuke", terminalId: "t" },
+    ];
+    for (const raw of cases) {
+      const res = await handle(raw);
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error.code).toBe("E_SCHEMA");
+    }
   });
 });

@@ -1,11 +1,11 @@
-// 用途：侧栏 —— 项目区（注册引导/项目行切换/悬浮「＋」CLI 新建菜单）+ 结构化会话行（CLI 色点/目录徽标/状态徽标，按当前项目过滤）+ PTY 分组 + 底部运行信息（原型一致项 1/2/3）
+// 用途：侧栏 —— 项目区（注册引导/项目行切换/悬浮「＋」CLI 新建菜单）+ 结构化会话与 PTY 终端两组会话行（CLI 色点/目录徽标/状态徽标/PTY 停止按钮，按当前项目过滤）+ 底部运行信息（原型一致项 1/2/3；PTY 实体 #12）
 import { useState, type ReactNode } from "react";
 import type { AppInfo, CliKind, ProjectRow } from "@kanban/ipc-schema";
 import type { SessionView } from "../features/chat/chat-store";
 import { StatusBadge } from "../features/chat/components/StatusBadge";
 import { DirBadge } from "./DirBadge";
 
-// CLI 色点（原型四色；fake 演示用 accent2 蓝）
+// CLI 色点（原型四色；fake 演示用 accent2 蓝；pty 终端用 pty 色）
 const CLI_DOT_CLS: Record<string, string> = {
   fake: "bg-accent2",
   codex: "bg-codex",
@@ -14,7 +14,7 @@ const CLI_DOT_CLS: Record<string, string> = {
   pty: "bg-pty",
 };
 
-// 「＋」菜单四项（原型一致项 2；PTY 为占位——#12 接入实体）
+// 「＋」菜单：三 CLI 结构化会话 + PTY 终端（原型一致项 2）
 const NEW_MENU_CLIS: Array<{ cli: CliKind; label: string }> = [
   { cli: "codex", label: "Codex" },
   { cli: "claude", label: "Claude" },
@@ -30,6 +30,10 @@ export interface SidebarProps {
   onSelectProject(projectId: string): void;
   onRegisterProject(): void;
   onCreateSession(projectId: string, cli: CliKind): void;
+  /** 「＋」菜单 PTY 项：在该项目目录新建终端会话（#12） */
+  onCreatePtySession(projectId: string): void;
+  /** PTY 行停止按钮：显式终止终端进程（唯一停止入口） */
+  onKillTerminal(terminalId: string): void;
   info?: ReactNode;
 }
 
@@ -42,16 +46,20 @@ export function Sidebar({
   onSelectProject,
   onRegisterProject,
   onCreateSession,
+  onCreatePtySession,
+  onKillTerminal,
   info,
 }: SidebarProps) {
-  // 「＋」菜单开在哪个项目行上（一次只开一个）；PTY 占位提示
+  // 「＋」菜单开在哪个项目行上（一次只开一个）
   const [menuProjectId, setMenuProjectId] = useState<string | null>(null);
-  const [ptyNotice, setPtyNotice] = useState(false);
 
   // 会话按作用域过滤：有当前项目=该项目会话；无=无项目会话（boot 演示链路可见）
   const scopedSessions = sessions.filter((s) =>
     currentProjectId ? s.projectId === currentProjectId : s.projectId === null,
   );
+  // 两组并列：结构化会话 / PTY 终端（cli=pty，spec I-1）
+  const structured = scopedSessions.filter((s) => s.cli !== "pty");
+  const ptySessions = scopedSessions.filter((s) => s.cli === "pty");
 
   return (
     <aside className="relative flex flex-col overflow-y-auto border-r border-border bg-card py-2.5">
@@ -98,7 +106,6 @@ export function Sidebar({
               title="新建会话（选择 CLI）"
               className="hidden h-6 w-6 shrink-0 rounded-md text-fg-faint hover:text-primary group-hover:block"
               onClick={() => {
-                setPtyNotice(false);
                 setMenuProjectId(menuProjectId === p.id ? null : p.id);
               }}
             >
@@ -113,7 +120,6 @@ export function Sidebar({
                     className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] hover:bg-card"
                     onClick={() => {
                       setMenuProjectId(null);
-                      setPtyNotice(false);
                       onCreateSession(p.id, cli);
                     }}
                   >
@@ -126,7 +132,7 @@ export function Sidebar({
                   className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] hover:bg-card"
                   onClick={() => {
                     setMenuProjectId(null);
-                    setPtyNotice(true);
+                    onCreatePtySession(p.id);
                   }}
                 >
                   <span className="inline-block h-2 w-2 rounded-full bg-pty" />
@@ -134,18 +140,15 @@ export function Sidebar({
                 </button>
               </div>
             ) : null}
-            {ptyNotice && menuProjectId !== p.id ? (
-              <p className="absolute left-3.5 top-full z-10 mt-1 text-[11px] text-fg-faint">PTY 终端会话将在后续版本提供</p>
-            ) : null}
           </div>
         ))
       )}
 
       <h4 className="px-3.5 pb-0.5 pt-3 text-[11px] tracking-wide text-muted-foreground">结构化会话</h4>
-      {scopedSessions.length === 0 ? (
+      {structured.length === 0 ? (
         <p className="px-3.5 py-1 text-xs text-fg-faint">暂无会话</p>
       ) : (
-        scopedSessions.map((s) => (
+        structured.map((s) => (
           <button
             key={s.sessionId}
             type="button"
@@ -163,7 +166,35 @@ export function Sidebar({
       )}
 
       <h4 className="px-3.5 pb-0.5 pt-3 text-[11px] tracking-wide text-muted-foreground">PTY 终端</h4>
-      <p className="px-3.5 py-1 text-xs text-fg-faint">暂无终端会话</p>
+      {ptySessions.length === 0 ? (
+        <p className="px-3.5 py-1 text-xs text-fg-faint">暂无终端会话</p>
+      ) : (
+        ptySessions.map((s) => (
+          <div
+            key={s.sessionId}
+            className={`group flex w-full items-center gap-1 border-l-2 px-3.5 py-1.5 hover:bg-muted ${
+              s.sessionId === activeId ? "border-l-primary bg-muted" : "border-l-transparent"
+            }`}
+          >
+            <button type="button" className="flex min-w-0 flex-1 items-center gap-1 text-left" onClick={() => onSelect(s.sessionId)}>
+              <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-pty" />
+              <span className="min-w-0 flex-1 truncate text-[13px]">{s.title}</span>
+              <DirBadge identity={s.dirIdentity} worktreeName={s.worktreeName} cwd={s.cwd} />
+              <StatusBadge status={s.status} />
+            </button>
+            {s.status !== "disconnected" ? (
+              <button
+                type="button"
+                title="停止终端（终止进程，保留会话记录）"
+                className="hidden h-5 w-5 shrink-0 rounded-md text-[11px] text-fg-faint hover:text-destructive group-hover:block"
+                onClick={() => onKillTerminal(s.sessionId)}
+              >
+                ⏹
+              </button>
+            ) : null}
+          </div>
+        ))
+      )}
 
       {info ? <div className="mt-auto px-3.5 pb-1 pt-4 text-[11px] leading-relaxed text-fg-faint">{info}</div> : null}
     </aside>

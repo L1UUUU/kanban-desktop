@@ -1,13 +1,16 @@
-// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc 路由）、FakeAdapter 事件转发与会话状态落库、初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
+// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc 路由）、FakeAdapter 事件转发与会话状态落库、PTY 终端宿主（node-pty，main 进程直接使用，t0-03 实证）与有序退出、初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { adapterEventSchema, appInfoSchema } from "@kanban/ipc-schema";
+import * as nodePty from "node-pty";
+import { adapterEventSchema, appInfoSchema, terminalEventSchema } from "@kanban/ipc-schema";
 import { FakeAdapter } from "@kanban/cli-host";
 import { TRACKER_PLACEHOLDER } from "@kanban/tracker";
 import { defaultConfig, loadConfig, saveConfig, type AppConfig } from "./config";
 import { SQLITE_ENTRY, openDatabase } from "./db";
 import { handleIpc, type IpcDeps } from "./ipc";
+import { createPtyHost } from "./pty-host";
 import { ProjectStore } from "./project-store";
 import { SessionStore } from "./session-store";
 
@@ -79,8 +82,52 @@ app.whenReady().then(() => {
     void adapter.dispose();
   });
 
+  // 应用退出前有序停止全部 PTY（#13 退出治理的 PTY 部分：killAll 幂等；#8 的 Job Object 属 cli-host 侧）
+  app.on("before-quit", () => {
+    ptyHost.killAll();
+  });
+
+  // PTY 宿主装配：平台能力注入（shell/CLI exe 覆盖来自 config，不硬编码）；事件出站过 schema 校验并转发 renderer，
+  // started/exit 顺带落 sessions 状态（PTY 活=空闲徽标，退出=已断开徽标）
+  const sendTerminalEvent = (event: unknown): void => {
+    terminalEventSchema.parse(event);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("terminal:event", event);
+    }
+  };
+  const ptyHost = createPtyHost(
+    {
+      pty: nodePty,
+      execFileSync,
+      execFileTextSync: (cmd, args) => execFileSync(cmd, args, { encoding: "utf8" }) as string,
+      existsSync,
+      resolve: (p) => join(p),
+      tmpdir: () => app.getPath("temp"),
+      env: process.env,
+      platform: process.platform,
+      cwd: () => process.cwd(),
+      shellOverride: () => appConfig.terminal.shell,
+      cliExeOverride: (name) => (appConfig.cliExe as unknown as Record<string, string | null>)[name] ?? null,
+    },
+    {
+      started: (terminalId, payload) => {
+        sessions.updateStatus(terminalId, "idle");
+        sendTerminalEvent({ terminalId, type: "started", ...payload });
+      },
+      data: (terminalId, data) => sendTerminalEvent({ terminalId, type: "data", data }),
+      exit: (terminalId, payload) => {
+        sessions.updateStatus(terminalId, "disconnected");
+        sessions.touch(terminalId, new Date().toISOString());
+        sendTerminalEvent({ terminalId, type: "exit", ...payload });
+      },
+      error: (terminalId, payload) => sendTerminalEvent({ terminalId, type: "error", message: payload.message }),
+    },
+  );
+
   const deps: IpcDeps = {
     adapter,
+    // PTY 宿主：node-pty 在 main 进程直接使用（main → ConPTY；utilityProcess 是 cli-host 的形态，spec F）
+    pty: ptyHost,
     projects,
     sessions,
     pickDirectory,

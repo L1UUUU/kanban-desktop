@@ -61,7 +61,7 @@ describe("saveConfig / loadConfig 往返", () => {
   it("save 后 load 得到等值配置（含父目录自动创建）", () => {
     const dir = newTempDir();
     const path = join(dir, "nested", "config.json");
-    saveConfig(path, { cliExe: { codex: "C:/codex.exe", claude: null, opencode: "C:/oc.exe" }, currentProjectId: "p-9" });
+    saveConfig(path, { cliExe: { codex: "C:/codex.exe", claude: null, opencode: "C:/oc.exe" }, currentProjectId: "p-9", terminal: { shell: null } });
     const loaded = loadConfig(path);
     expect(loaded.cliExe).toEqual({ codex: "C:/codex.exe", claude: null, opencode: "C:/oc.exe" });
     expect(loaded.currentProjectId).toBe("p-9");

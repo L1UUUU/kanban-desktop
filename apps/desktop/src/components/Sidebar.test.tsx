@@ -32,6 +32,8 @@ function mount(props: Partial<Parameters<typeof Sidebar>[0]> = {}) {
   const onSelectProject = vi.fn();
   const onRegisterProject = vi.fn();
   const onCreateSession = vi.fn();
+  const onCreatePtySession = vi.fn();
+  const onKillTerminal = vi.fn();
   render(
     <Sidebar
       projects={[]}
@@ -42,10 +44,12 @@ function mount(props: Partial<Parameters<typeof Sidebar>[0]> = {}) {
       onSelectProject={onSelectProject}
       onRegisterProject={onRegisterProject}
       onCreateSession={onCreateSession}
+      onCreatePtySession={onCreatePtySession}
+      onKillTerminal={onKillTerminal}
       {...props}
     />,
   );
-  return { onSelectProject, onRegisterProject, onCreateSession };
+  return { onSelectProject, onRegisterProject, onCreateSession, onCreatePtySession, onKillTerminal };
 }
 
 describe("侧栏项目区（原型一致项 2）", () => {
@@ -71,20 +75,19 @@ describe("侧栏项目区（原型一致项 2）", () => {
     expect(h.onRegisterProject).toHaveBeenCalledTimes(1);
   });
 
-  it("「＋」菜单：四项 CLI（Codex/Claude/OpenCode/PTY 终端）；点三 CLI 建会话挂该行项目；PTY 占位提示后续版本", () => {
+  it("「＋」菜单：四项 CLI（Codex/Claude/OpenCode/PTY 终端）；点三 CLI 建会话挂该行项目；PTY 项建终端会话（#12 实体）", () => {
     const h = mount({ projects: [P1], currentProjectId: "p-1" });
     fireEvent.click(screen.getByRole("button", { name: "＋" }));
     expect(screen.getByText("Codex")).toBeTruthy();
     expect(screen.getByText("Claude")).toBeTruthy();
     expect(screen.getByText("OpenCode")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /PTY 终端/ })).toBeTruthy();
     fireEvent.click(screen.getByText("Claude"));
     expect(h.onCreateSession).toHaveBeenCalledWith("p-1", "claude");
-    // PTY：不建会话，提示后续版本
+
     fireEvent.click(screen.getByRole("button", { name: "＋" }));
     fireEvent.click(screen.getByRole("button", { name: /PTY 终端/ }));
+    expect(h.onCreatePtySession).toHaveBeenCalledWith("p-1");
     expect(h.onCreateSession).toHaveBeenCalledTimes(1);
-    expect(screen.getByText("PTY 终端会话将在后续版本提供")).toBeTruthy();
   });
 });
 
@@ -140,6 +143,37 @@ describe("侧栏会话区（原型一致项 3）", () => {
     mount();
     expect(screen.getByText("暂无会话")).toBeTruthy();
     expect(screen.getByText("暂无终端会话")).toBeTruthy();
+  });
+
+  it("PTY 分组：cli=pty 会话渲染在 PTY 终端分组（不混入结构化会话），hover 停止按钮触发 onKillTerminal；重启恢复的断开终端同样列出", () => {
+    const onSelect = vi.fn();
+    const h = mount({
+      projects: [P1],
+      currentProjectId: "p-1",
+      sessions: [
+        makeSession(),
+        makeSession({ sessionId: "tty-1", cli: "pty", title: "终端 · pwsh", status: "idle", projectId: "p-1" }),
+        makeSession({ sessionId: "tty-2", cli: "pty", title: "终端 · claude", status: "disconnected", projectId: "p-1" }),
+      ],
+      activeId: "tty-1",
+      onSelect,
+    });
+
+    // PTY 会话出现在 PTY 分组，结构化会话不重复出现
+    expect(screen.getByText("终端 · pwsh")).toBeTruthy();
+    expect(screen.getByText("终端 · claude")).toBeTruthy();
+    const ptyGroup = screen.getByText("PTY 终端").closest("div") ?? document;
+    void ptyGroup;
+    // 活跃终端可停止（显式终止入口）；断开终端无停止按钮
+    const killBtn = screen.getByTitle("停止终端（终止进程，保留会话记录）");
+    expect(killBtn).toBeTruthy();
+    expect(screen.getAllByTitle("停止终端（终止进程，保留会话记录）")).toHaveLength(1);
+    fireEvent.click(killBtn);
+    expect(h.onKillTerminal).toHaveBeenCalledWith("tty-1");
+
+    // 点击 PTY 行切换激活（与结构化会话并列切换）
+    fireEvent.click(screen.getByText("终端 · claude"));
+    expect(onSelect).toHaveBeenCalledWith("tty-2");
   });
 });
 

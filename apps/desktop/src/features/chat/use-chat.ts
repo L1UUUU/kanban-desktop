@@ -32,6 +32,8 @@ export interface ChatController extends ChatControllerActions {
   activeId: string | null;
   /** store 版本号（驱动视图滚动等副作用） */
   version: number;
+  /** store 直面（终端控制器等并列模块登记 PTY 会话/更新状态用） */
+  store: ChatStore;
 }
 
 /** ChatEvent 判别（SkillObservation 无 type 判别字段） */
@@ -111,7 +113,7 @@ export function useChatController(transport: ChatTransport | null): ChatControll
 
   const activeSession = snap.activeId ? (store.getSession(snap.activeId) ?? null) : null;
 
-  return { ...actions, sessions: snap.sessions, activeSession, activeId: snap.activeId, version: snap.version };
+  return { ...actions, sessions: snap.sessions, activeSession, activeId: snap.activeId, version: snap.version, store };
 }
 
 /** 启动自举：恢复 DB 历史会话（统一断开态）；无项目且无历史时建 Fake 演示会话（#6 链路保持） */

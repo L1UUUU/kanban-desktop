@@ -1,14 +1,15 @@
 // 用途：聊天区组件测试（spec Testing seam 4）—— FakeAdapter 事件流直连驱动真实组件：流式/工具卡/审批三键/取消/权限切换/切会话不中断/项目注册与重启恢复（对照原型一致项 2/3/5/6/7）
 /// <reference types="node" /> <!-- 本文件用 node:fs/os/path 建持久化 fixture（重启恢复用例） -->
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AdapterEvent, IpcRequest, IpcResult } from "@kanban/ipc-schema";
+import type { AdapterEvent, IpcRequest, IpcResult, TerminalEvent } from "@kanban/ipc-schema";
 import { FakeAdapter, VirtualClock } from "@kanban/cli-host";
 import { openDatabase } from "../../../electron/main/db";
 import { handleIpc, type IpcDeps } from "../../../electron/main/ipc";
+import { createPtyHost, type PtyLike, type PtyProcess } from "../../../electron/main/pty-host";
 import { ProjectStore } from "../../../electron/main/project-store";
 import { SessionStore } from "../../../electron/main/session-store";
 import { ChatWorkspace } from "./ChatWorkspace";
@@ -19,7 +20,61 @@ import { useProjects } from "../projects/use-projects";
 // 未关闭的 db 连接（afterEach 统一关，避免 Windows 上临时目录删除 EPERM）
 const openDbs: Array<{ close(): void }> = [];
 
-/** FakeAdapter 直连 transport：复用 Main 路由（handleIpc）做请求侧，adapter.subscribe 做事件侧 —— 组件测试即全栈（除 Electron IPC/dialog）；currentProjectId 可落文件（模拟 config.json 持久化） */
+// jsdom 缺 matchMedia/ResizeObserver：xterm 5 浏览器服务与 TerminalPanel 需要（测试环境 polyfill，生产 Chromium 原生具备）
+if (typeof window !== "undefined" && !window.matchMedia) {
+  window.matchMedia = (query: string): MediaQueryList =>
+    ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      dispatchEvent: () => false,
+    }) as MediaQueryList;
+}
+if (typeof globalThis.ResizeObserver === "undefined") {
+  globalThis.ResizeObserver = class {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  } as unknown as typeof ResizeObserver;
+}
+
+/** 回显 mock PTY（old-kanban mock PTY 模式）：spawn 后发提示符，write 原样回显，kill 触发 exit —— 驱动 TerminalPanel 全链路（不含真实 ConPTY） */
+class EchoPty implements PtyLike {
+  readonly spawns: Array<{ file: string; args: string[] }> = [];
+  private nextPid = 700;
+  spawn(file: string, args: string[]): PtyProcess {
+    this.spawns.push({ file, args });
+    const pid = this.nextPid++;
+    let onData: ((data: string) => void) | null = null;
+    let onExit: ((info: { exitCode: number; signal?: number }) => void) | null = null;
+    const proc: PtyProcess = {
+      pid,
+      onData: (l) => {
+        onData = l;
+        return l;
+      },
+      onExit: (l) => {
+        onExit = l;
+        return l;
+      },
+      resize: () => undefined,
+      write: (data) => {
+        onData?.(data);
+      },
+      kill: () => {
+        onExit?.({ exitCode: 0 });
+      },
+    };
+    queueMicrotask(() => onData?.("PS> "));
+    return proc;
+  }
+}
+
+/** FakeAdapter 直连 transport：复用 Main 路由（handleIpc）做请求侧，adapter.subscribe 做 chat 事件侧，真实 createPtyHost + 回显 mock PTY 做 terminal 事件侧 —— 组件测试即全栈（除 Electron IPC/dialog） */
 function makeTransport(
   adapter: FakeAdapter,
   opts?: { dbPath?: string; statePath?: string; pick?: () => Promise<string | null> },
@@ -29,26 +84,57 @@ function makeTransport(
   const state: { currentProjectId: string | null } = { currentProjectId: null };
   if (opts?.statePath) {
     try {
-      const raw = JSON.parse(readFileSync(opts.statePath, "utf8")) as { currentProjectId?: string | null };
+      const raw = JSON.parse(readFileSync(opts?.statePath, "utf-8")) as { currentProjectId?: string | null };
       if (typeof raw.currentProjectId === "string") state.currentProjectId = raw.currentProjectId;
     } catch {
       // 首次运行无状态文件
     }
   }
+  // terminal 事件订阅侧：pty 宿主 sink → renderer 订阅者集合
+  const terminalListeners = new Set<(event: TerminalEvent) => void>();
+  const emitTerminal = (event: TerminalEvent): void => {
+    for (const l of terminalListeners) l(event);
+  };
+  const pty = createPtyHost(
+    {
+      pty: new EchoPty(),
+      execFileSync: () => undefined,
+      execFileTextSync: () => "",
+      existsSync: () => true,
+      resolve: (p) => p,
+      tmpdir: () => "C:\\tmp",
+      env: { USERPROFILE: "C:\\home\\u" },
+      platform: "win32",
+      cwd: () => "C:\\cwd",
+      shellOverride: () => null,
+      cliExeOverride: () => null,
+    },
+    {
+      started: (terminalId, payload) => emitTerminal({ terminalId, type: "started", ...payload }),
+      data: (terminalId, data) => emitTerminal({ terminalId, type: "data", data }),
+      exit: (terminalId, payload) => emitTerminal({ terminalId, type: "exit", ...payload }),
+      error: (terminalId, payload) => emitTerminal({ terminalId, type: "error", message: payload.message }),
+    },
+  );
   const deps: IpcDeps = {
     adapter,
+    pty,
     projects: new ProjectStore(db),
     sessions: new SessionStore(db),
     pickDirectory: opts?.pick ?? (async () => null),
     getCurrentProjectId: () => state.currentProjectId,
     setCurrentProjectId: (id) => {
       state.currentProjectId = id;
-      if (opts?.statePath) writeFileSync(opts.statePath, JSON.stringify(state), "utf8");
+      if (opts?.statePath) writeFileSync(opts?.statePath, JSON.stringify(state), "utf-8");
     },
   };
   return {
     invoke: (req: IpcRequest) => handleIpc(deps, req),
     onEvent: (h: (e: AdapterEvent) => void) => adapter.subscribe(h),
+    onTerminalEvent: (h: (e: TerminalEvent) => void) => {
+      terminalListeners.add(h);
+      return () => terminalListeners.delete(h);
+    },
   };
 }
 
@@ -311,6 +397,7 @@ describe("聊天区（原型一致项 5/6/7）", () => {
         return { ok: false, error: { code: "E_SESSION_NOT_FOUND", message: "会话不存在：s-1" } };
       },
       onEvent: () => () => undefined,
+      onTerminalEvent: () => () => undefined,
     };
     const t = mount(stub);
     await t.flush();
@@ -379,5 +466,93 @@ describe("项目注册与会话恢复（#7 全链，除 Electron dialog）", () 
     // boot 演示会话不再创建（已有项目）
     expect(screen.queryByText("演示会话 · Fake")).toBeNull();
     void t2;
+  });
+});
+
+describe("PTY 终端链路（#12：mock PTY 驱动 TerminalPanel 与多路复用路由）", () => {
+  let tmpRoot = "";
+
+  afterEach(() => {
+    cleanup();
+    for (const db of openDbs.splice(0)) db.close();
+    if (tmpRoot) {
+      rmSync(tmpRoot, { recursive: true, force: true });
+      tmpRoot = "";
+    }
+  });
+
+  function makePtyFixture() {
+    tmpRoot = mkdtempSync(join(tmpdir(), "kb-ws-pty-"));
+    const projDir = join(tmpRoot, "demo-repo");
+    mkdirSync(join(projDir, ".git"), { recursive: true });
+    const dbPath = join(tmpRoot, "state.db");
+    const statePath = join(tmpRoot, "app-state.json");
+    const adapter = new FakeAdapter({ clock: new VirtualClock() });
+    return { projDir, dbPath, transport: makeTransport(adapter, { dbPath, statePath, pick: async () => projDir }) };
+  }
+
+  /** 注册项目并挂载工作区（返回 flush 与 xterm 面板断言器） */
+  async function boot(transport: ChatTransport) {
+    const t = mount(transport);
+    await t.flush();
+    fireEvent.click(screen.getByRole("button", { name: "＋ 注册" }));
+    await t.flush();
+    await screen.findByText("demo-repo");
+    return t;
+  }
+
+  /** 等待标题出现（侧栏行与终端面板头同名，断言取全部命中，点击取首项=侧栏行） */
+  const findTitle = (title: string) => screen.findAllByText(title);
+
+  it("「＋」→ PTY 终端：PTY 分组出现会话行 + 面板挂起（xterm）；切换到结构化会话再切回：面板保留（进程不停止）", async () => {
+    const { transport } = makePtyFixture();
+    const t = await boot(transport);
+
+    // 「＋」菜单建 PTY 会话（echo mock PTY：started + 提示符事件回流）
+    fireEvent.click(screen.getByRole("button", { name: "＋" }));
+    fireEvent.click(screen.getByRole("button", { name: /PTY 终端/ }));
+    await t.flush();
+    expect((await findTitle("终端 · pwsh")).length).toBeGreaterThanOrEqual(1);
+
+    // 激活 PTY 会话 → 面板渲染 xterm（banner 内容由 terminal-manager 单测覆盖；jsdom 下 xterm 不落 DOM 行文本）
+    await waitFor(() => expect(document.querySelector(".xterm")).toBeTruthy());
+
+    // 建一个结构化会话并切换：PTY 面板卸载但会话保留
+    fireEvent.click(screen.getByRole("button", { name: "＋" }));
+    fireEvent.click(screen.getByText("Claude"));
+    await t.flush();
+    await screen.findByText("新会话 · Claude");
+    expect(screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…")).toBeTruthy();
+    expect(document.querySelector(".xterm")).toBeNull();
+
+    // 切回 PTY：面板保留（同一持久元素重新挂入，进程未停 —— mock PTY 仍可回显）
+    fireEvent.click(screen.getAllByText("终端 · pwsh")[0]);
+    await waitFor(() => expect(document.querySelector(".xterm")).toBeTruthy());
+  });
+
+  it("停止终端：exit 事件 → 状态已断开；重启恢复为断开态条目（进程不在）", async () => {
+    const { dbPath, transport } = makePtyFixture();
+    const t = await boot(transport);
+
+    fireEvent.click(screen.getByRole("button", { name: "＋" }));
+    fireEvent.click(screen.getByRole("button", { name: /PTY 终端/ }));
+    await t.flush();
+    await findTitle("终端 · pwsh");
+    await waitFor(() => expect(document.querySelector(".xterm")).toBeTruthy());
+
+    // 停止按钮（显式终止唯一入口）→ mock PTY exit 事件 → 会话状态已断开
+    fireEvent.click(screen.getByTitle("停止终端（终止进程，保留会话记录）"));
+    await screen.findByText("已断开");
+
+    // 重启（同 db/状态文件）：PTY 会话恢复为断开态条目（进程不在，可重新新建）
+    cleanup();
+    const adapter2 = new FakeAdapter({ clock: new VirtualClock() });
+    const transport2 = makeTransport(adapter2, { dbPath, statePath: join(tmpRoot, "app-state.json"), pick: async () => null });
+    const t2 = mount(transport2);
+    await t2.flush();
+    expect((await findTitle("终端 · pwsh")).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("已断开")).toBeTruthy();
+    fireEvent.click(screen.getAllByText("终端 · pwsh")[0]);
+    expect(screen.getByText(/该终端进程已结束/)).toBeTruthy();
   });
 });

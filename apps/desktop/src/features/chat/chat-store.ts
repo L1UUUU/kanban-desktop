@@ -159,6 +159,14 @@ export class ChatStore {
     this.changed();
   }
 
+  /** 会话状态直写（PTY 终端 started/exit 事件驱动，与 ChatEvent 路径并列） */
+  updateStatus(id: string, status: SessionStatus): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    s.status = status;
+    this.changed();
+  }
+
   /** 发送时本地回显用户消息（内容不经事件流回传，见不变量 1 的 renderer 侧补充） */
   appendUserMessage(id: string, text: string): void {
     const s = this.requireView(id);

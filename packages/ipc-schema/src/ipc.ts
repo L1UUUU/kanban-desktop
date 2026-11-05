@@ -1,6 +1,7 @@
 // 用途：IPC 请求/结果/错误码契约 —— 单通道 kanban:ipc + channel 判别（spec E/C4；错误码形状由 ipc-schema 定义，不变量 6）
 import { z } from "zod";
 import { approvalDecisionSchema, permModeSchema, sessionIdSchema, sessionStatusSchema } from "./chat";
+import { terminalCreatePayloadSchema, terminalIdSchema } from "./terminal";
 
 // 首版错误码：E_SCHEMA 入站不合契约 / E_SESSION_NOT_FOUND 未知会话 / E_APPROVAL_EXPIRED 过期或已决审批 / E_PROJECT_NOT_FOUND 未知项目 / E_INTERNAL 兜底
 export const ERROR_CODES = [
@@ -77,6 +78,16 @@ export const ipcRequestSchema = z.discriminatedUnion("channel", [
   /** 注册项目：Main 弹原生目录选择对话框，路径归一化与去重在 Main 侧完成 */
   z.object({ channel: z.literal("project:register") }),
   z.object({ channel: z.literal("project:switch"), projectId: z.string().min(1) }),
+  // PTY 终端通道（spec E：terminalApi × terminalId 参数化；spawn 在 terminal:create 内完成）
+  terminalCreatePayloadSchema.extend({ channel: z.literal("terminal:create") }),
+  z.object({ channel: z.literal("terminal:write"), terminalId: terminalIdSchema, data: z.string() }),
+  z.object({
+    channel: z.literal("terminal:resize"),
+    terminalId: terminalIdSchema,
+    cols: z.number().int().positive(),
+    rows: z.number().int().positive(),
+  }),
+  z.object({ channel: z.literal("terminal:kill"), terminalId: terminalIdSchema }),
 ]);
 export type IpcRequest = z.infer<typeof ipcRequestSchema>;
 
