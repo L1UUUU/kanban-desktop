@@ -1,0 +1,8 @@
+// 用途：cli-host 包 TS 配置（纯 Node 侧模块，无 DOM）
+{
+  "extends": "../../tsconfig.base.json",
+  "include": ["src/**/*.ts"],
+  "compilerOptions": {
+    "types": ["node"]
+  }
+}

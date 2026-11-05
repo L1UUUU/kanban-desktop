@@ -1,0 +1,41 @@
+/* 用途：Tailwind v4 入口 + 原型变体 A 暗色设计 token（暗色唯一主题，不做 .dark 切换） */
+@import "tailwindcss";
+
+@theme {
+  /* 原型三档底色 → 语义槽位（见 prototype-variant-a-extract.md §2） */
+  --color-background: #0f1117; /* --bg 应用底色 */
+  --color-card: #161a23; /* --bg2 侧栏/顶栏/composer/工具卡 */
+  --color-muted: #1d222e; /* --bg3 悬浮/选中/输入框/菜单 */
+  --color-border: #2a3040; /* --line 边框/分隔线 */
+  --color-foreground: #e6e9f0; /* --fg 主文字 */
+  --color-muted-foreground: #9aa3b5; /* --fg-dim 次要文字 */
+  --color-fg-faint: #5d6575; /* --fg-faint 占位符/说明 */
+  --color-primary: #4f8cff; /* --accent 主强调 */
+  --color-primary-foreground: #ffffff;
+  --color-accent2: #7aa5ff; /* --accent2 次强调（工具名/worktree 徽标） */
+  --color-destructive: #e0705f; /* --err */
+  --color-codex: #3fb27f; /* Codex 色点 */
+  --color-claude: #d97757; /* Claude 色点 */
+  --color-opencode: #8b7cf6; /* OpenCode 色点 */
+  --color-pty: #d4a72c; /* PTY 色点 */
+  --color-ok: #3fb27f; /* --ok running/成功 */
+  --color-warn: #e5b567; /* --warn waiting/审批 */
+}
+
+/* 全局基调：13px/1.6 Segoe UI + Microsoft YaHei，应用不滚动（各区内部滚） */
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    margin: 0;
+    overflow: hidden;
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 13px;
+    line-height: 1.6;
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+  }
+}

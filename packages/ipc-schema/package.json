@@ -1,0 +1,21 @@
+{
+  "name": "@kanban/ipc-schema",
+  "version": "0.1.0",
+  "private": true,
+  "description": "全部 IPC wire 形状的 zod 契约（spec A/E：无 Node/Electron 依赖，renderer 与 main 共用）",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  }
+}

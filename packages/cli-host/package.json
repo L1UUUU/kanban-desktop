@@ -1,0 +1,22 @@
+{
+  "name": "@kanban/cli-host",
+  "version": "0.1.0",
+  "private": true,
+  "description": "C1 Adapter 统一契约 + 三 CLI 实现 + FakeAdapter + CliHost（本工单仅建包占位，自 #6/#7/#9/#10 填充）",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@kanban/ipc-schema": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  }
+}

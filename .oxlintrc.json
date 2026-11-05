@@ -1,0 +1,6 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "react", "unicorn"],
+  "env": { "browser": true, "node": true },
+  "ignorePatterns": ["**/out/**", "**/dist/**", "**/node_modules/**", "poc/**", "playwright-report/**", "test-results/**"]
+}

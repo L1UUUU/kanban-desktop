@@ -1,0 +1,15 @@
+// 用途：desktop renderer 段 TS 配置（src/，jsx 与 DOM lib；paths 刻意只映射 ipc-schema —— renderer 不得依赖 cli-host/tracker，spec A）
+{
+  "extends": "../../tsconfig.base.json",
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/env.d.ts"],
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["vite/client"],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@kanban/ipc-schema": ["../../packages/ipc-schema/src/index.ts"]
+    }
+  }
+}

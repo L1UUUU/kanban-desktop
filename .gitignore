@@ -1,0 +1,9 @@
+# 用途：忽略依赖、构建产物与本地运行时文件
+node_modules/
+out/
+dist/
+coverage/
+playwright-report/
+test-results/
+*.log
+.DS_Store

@@ -38,6 +38,17 @@ spec C5 规则：**默认 utilityProcess；若 MessagePort 事件吞吐/序列�
 
 两项阈值均通过，不满足降级条件 → 维持默认 utilityProcess。
 
+## Electron 44 基线迁移复核（2026-11-05，主会话裁决 D1/D1 补充）
+
+基线由 42 升 44（42 已于 2026-10-20 过支持窗口）后，用同一 `poc/t0-01-worker/bench/` 脚本在 **Electron 44.10.2 / Node 24.22.2 / Windows 11 build 26200**（同机同日）复核：
+
+| 基准（载荷 ~1KB） | 44 实测 | 阈值 | 判定 |
+|---|---|---|---|
+| utilityProcess MessagePort 单向突发（worker→main，事件流方向） | **65,359 events/s**（首事件 0.52ms） | ≥5,000 events/s | 通过（约 13× 余量） |
+| utilityProcess MessagePort 串行往返（单命令口径，n=200） | 5,246 events/s；p50 0.112ms / **p95 0.458ms** / max 3.6ms | p95 ≤10ms | 通过（不可感知） |
+
+两项阈值均通过，结论可从 42 迁移至 44，维持 utilityProcess 决策；其余对照基准（进程内直调 672,766 events/s、JSON 序列化往返 203,628 events/s、EventEmitter 突发）量级与 42 轮一致，完整数据见本机运行输出（与 42 轮同格式）。
+
 ## 后果
 
 - Main 获得崩溃隔离：Adapter/Worker 未捕获异常不拖垮窗口与 SQLite（阶段 1 需在 shutdown 路径上落实「停止新请求 → 有序取消 → 有限等待 → 受控终止」，Job Object 兜底）。

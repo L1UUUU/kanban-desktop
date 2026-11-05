@@ -1,0 +1,8 @@
+// 用途：tracker 包 TS 配置（Node 侧模块，无 DOM）
+{
+  "extends": "../../tsconfig.base.json",
+  "include": ["src/**/*.ts"],
+  "compilerOptions": {
+    "types": ["node"]
+  }
+}

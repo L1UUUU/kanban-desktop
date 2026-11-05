@@ -1,0 +1,21 @@
+// 用途：desktop 主进程/配置段 TS 配置（electron、preload、e2e 与构建配置文件）
+{
+  "extends": "../../tsconfig.base.json",
+  "include": [
+    "electron.vite.config.ts",
+    "vitest.config.ts",
+    "playwright.config.ts",
+    "electron/**/*.ts",
+    "preload/**/*.ts",
+    "e2e/**/*.ts"
+  ],
+  "compilerOptions": {
+    "types": ["node", "electron-vite/node"],
+    "baseUrl": ".",
+    "paths": {
+      "@kanban/ipc-schema": ["../../packages/ipc-schema/src/index.ts"],
+      "@kanban/cli-host": ["../../packages/cli-host/src/index.ts"],
+      "@kanban/tracker": ["../../packages/tracker/src/index.ts"]
+    }
+  }
+}

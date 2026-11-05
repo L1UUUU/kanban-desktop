@@ -1,0 +1,7 @@
+# 用途：声明 pnpm workspace 包集合与受信构建依赖（pnpm 10 拦截未声明包的构建脚本）
+packages:
+  - apps/*
+  - packages/*
+onlyBuiltDependencies:
+  - electron
+  - node-pty
