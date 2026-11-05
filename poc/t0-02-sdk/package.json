@@ -1,0 +1,9 @@
+{
+  "name": "t0-02-sdk",
+  "private": true,
+  "type": "module",
+  "description": "T0-02 Agent SDK Windows 复测隔离包（依赖仅 SDK，不触碰仓库根）",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.318"
+  }
+}

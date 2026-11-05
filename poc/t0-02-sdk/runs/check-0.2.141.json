@@ -1,0 +1,57 @@
+{
+  "env": {
+    "node": "v24.13.0",
+    "platform": "win32-x64",
+    "sdkVersion": "0.2.141",
+    "win32CliPackageVersion": "0.2.141",
+    "temp": "C:\\Users\\liuy\\AppData\\Local\\Temp",
+    "claudeConfigDir": null,
+    "startedAt": "2026-11-05T09:25:39.248Z"
+  },
+  "verdict": "SDK-UNUSABLE",
+  "results": [
+    {
+      "test": "T1-minimal-query",
+      "status": "fail",
+      "durationMs": 2511,
+      "summary": "messages=0 init=false result=(none) text=(none)"
+    },
+    {
+      "test": "T2-interrupt-survival",
+      "status": "skipped",
+      "summary": "T1 failed"
+    },
+    {
+      "test": "T3-canUseTool-approval",
+      "status": "skipped",
+      "summary": "T1 failed"
+    }
+  ],
+  "unhandledRejections": [],
+  "detail": [
+    {
+      "test": "T1-minimal-query",
+      "status": "fail",
+      "durationMs": 2511,
+      "pass": false,
+      "summary": "messages=0 init=false result=(none) text=(none)",
+      "evidence": {
+        "messages": [],
+        "stderrTail": [],
+        "initSeen": false,
+        "error": "Error: Claude Code process aborted by user\n    at ChildProcess.<anonymous> (file:///C:/project2/kb-wt/s1-02/poc/t0-02-sdk/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs:60:7666)\n    at ChildProcess.emit (node:events:520:35)\n    at abortChildProcess (node:child_process:759:13)\n    at AbortSignal.onAbortListener (node:child_process:829:7)\n    at [nodejs.internal.kHybridDispatch] (node:internal/event_target:845:20)\n    at AbortSignal.dispatchEvent (node:internal/event_target:778:26)\n    at runAbort (node:internal/abort_controller:488:10)\n    at abortSignal (node:internal/abort_controller:459:3)\n    at AbortController.abort (node:internal/abort_controller:507:5)\n    at file:///C:/project2/kb-wt/s1-02/poc/t0-02-sdk/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs:116:39"
+      }
+    },
+    {
+      "test": "T2-interrupt-survival",
+      "status": "skipped",
+      "reason": "T1 failed"
+    },
+    {
+      "test": "T3-canUseTool-approval",
+      "status": "skipped",
+      "reason": "T1 failed"
+    }
+  ],
+  "finishedAt": "2026-11-05T09:25:41.760Z"
+}

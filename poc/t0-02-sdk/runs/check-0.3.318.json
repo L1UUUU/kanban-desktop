@@ -1,0 +1,57 @@
+{
+  "env": {
+    "node": "v24.13.0",
+    "platform": "win32-x64",
+    "sdkVersion": "0.3.318",
+    "win32CliPackageVersion": "0.3.318",
+    "temp": "C:\\Users\\liuy\\AppData\\Local\\Temp",
+    "claudeConfigDir": null,
+    "startedAt": "2026-11-05T09:32:44.270Z"
+  },
+  "verdict": "SDK-UNUSABLE",
+  "results": [
+    {
+      "test": "T1-minimal-query",
+      "status": "fail",
+      "durationMs": 7047,
+      "summary": "messages=0 init=false result=(none) text=(none)"
+    },
+    {
+      "test": "T2-interrupt-survival",
+      "status": "skipped",
+      "summary": "T1 failed"
+    },
+    {
+      "test": "T3-canUseTool-approval",
+      "status": "skipped",
+      "summary": "T1 failed"
+    }
+  ],
+  "unhandledRejections": [],
+  "detail": [
+    {
+      "test": "T1-minimal-query",
+      "status": "fail",
+      "durationMs": 7047,
+      "pass": false,
+      "summary": "messages=0 init=false result=(none) text=(none)",
+      "evidence": {
+        "messages": [],
+        "stderrTail": [],
+        "initSeen": false,
+        "error": "Error: Operation aborted\n    at o3 (file:///C:/project2/kb-wt/s1-02/poc/t0-02-sdk/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs:153:133709)\n    at ChildProcess.n (file:///C:/project2/kb-wt/s1-02/poc/t0-02-sdk/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs:153:132181)\n    at Object.onceWrapper (node:events:623:26)\n    at ChildProcess.emit (node:events:520:35)\n    at _ (file:///C:/project2/kb-wt/s1-02/poc/t0-02-sdk/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs:153:121334)\n    at ChildProcess.<anonymous> (file:///C:/project2/kb-wt/s1-02/poc/t0-02-sdk/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs:153:121538)\n    at Object.onceWrapper (node:events:623:26)\n    at ChildProcess.emit (node:events:520:35)\n    at ChildProcess._handle.onexit (node:internal/child_process:294:12)"
+      }
+    },
+    {
+      "test": "T2-interrupt-survival",
+      "status": "skipped",
+      "reason": "T1 failed"
+    },
+    {
+      "test": "T3-canUseTool-approval",
+      "status": "skipped",
+      "reason": "T1 failed"
+    }
+  ],
+  "finishedAt": "2026-11-05T09:32:51.317Z"
+}

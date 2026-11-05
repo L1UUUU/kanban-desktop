@@ -1,18 +1,18 @@
 # CLI 兼容性矩阵（Kanban Desktop V1）
 
-> 日期：2026-11-05（首轮 + magpie 接入补跑后全量收口）· 全部条目来自本机真实运行（见 `poc/poc-1..4/`），无「文档声称」混入
+> 日期：2026-11-05（首轮 + magpie 接入补跑后全量收口 + T0-02 Agent SDK 弃用决策更新）· 全部条目来自本机真实运行（见 `poc/poc-1..4/`、`poc/t0-02-sdk/`），无「文档声称」混入
 > 字段维度参考 desktop-cc-gui 矩阵 + 计划文档 §5/§8/§10
 
 ## 1. 总矩阵
 
 | 维度 | Codex 0.144.1 | Claude Code 2.1.317 | OpenCode 1.19.5 |
 |---|---|---|---|
-| 协议接入 | **app-server 直连**（JSON-RPC 2.0 over stdio，LF 分帧；`generate-ts` 同版本协议绑定可生成） | **协议直连**（`--print --output-format stream-json --input-format stream-json` + initialize 控制请求行协议）；Agent SDK 0.2.141/0.3.318 Windows pre-spawn abort（上游 #359/#444） | **HTTP+SSE 直连**（`opencode serve`，OpenAPI `/doc` 自描述；`@opencode-ai/sdk` 同版本发布可作类型化替代；自带 `opencode acp` 子命令） |
+| 协议接入 | **app-server 直连**（JSON-RPC 2.0 over stdio，LF 分帧；`generate-ts` 同版本协议绑定可生成） | **协议直连 = 唯一传输层基线**（`--print --output-format stream-json --input-format stream-json` + initialize 控制请求行协议）；**Agent SDK 已正式弃用**（T0-02 复测：0.2.141/0.3.309/0.3.318 全部子进程秒退，换可用 exe/禁 settings 均无效，上游 #359/#444 仍 open 无修复，见 `poc/t0-02-sdk/RESULT.md`） | **HTTP+SSE 直连**（`opencode serve`，OpenAPI `/doc` 自描述；`@opencode-ai/sdk` 同版本发布可作类型化替代；自带 `opencode acp` 子命令） |
 | 原生 Session 创建 | ✅ `thread/start` 返回 UUIDv7 thread id + rollout 落盘路径 | ✅ stream-json 会话（session id + transcriptPath） | ✅ `POST /session` 返回 `ses_...`（实测多开，含 crash 后 18/18 完好） |
 | 多轮流式聊天 | ✅ delta 按 itemId 归属，拼接与终文逐一相等；`turn/completed` 带全量快照可兜底 | ✅ stream-json 增量；slash dispatch 为 CLI 客户端行为（`<command-message>` 转写） | ✅ delta 事件 + part 快照双通道；轮 2 复现暗号「蓝鲸42号」 |
 | 工具调用展示 | ✅ `item/started`+`item/completed`（command/参数/输出/exitCode/duration） | ✅ 工具调用在 stream 可见（Bash/Glob/Read/ToolSearch/Skill） | ✅ bash part 5 次状态更新（状态机流转 + output），模型正确复述结果 |
-| 原生审批 | ✅ `item/commandExecution/requestApproval`（服务端带 id 请求，回 `{decision}`）；read-only 沙箱 + on-request 策略；accept/deny 语义保真实测 | ⚠️ 非交互下 Skill 不弹审批直接执行；`--disallowedTools` / `--permission-mode` 生效；`canUseTool` 回调链路未测（SDK bug） | ⚠️ **默认不弹**：build agent 权限表 `*:*:allow`（三层证据：事件流 + `GET /agent` + server 日志）；显式 `ask` 后批准（`once`）/拒绝（`reject`）双路径实测；**审批请求不走 SSE，须轮询 `GET /permission`**（SSE 只回 `permission.replied`） |
-| 取消 Turn | ✅ `turn/interrupt` → interrupted，同 thread 可继续 | 未单测（无独立 cancel 验收项） | ✅ abort 端点 → `MessageAbortedError`（0 输出 token），session 随后可继续使用 |
+| 原生审批 | ✅ `item/commandExecution/requestApproval`（服务端带 id 请求，回 `{decision}`）；read-only 沙箱 + on-request 策略；accept/deny 语义保真实测 | ⚠️ 非交互**默认静默全拒绝**，必须显式 `--permission-prompt-tool=stdio` 才流出 `can_use_tool` 控制请求（allow/deny 语义保真实测，PoC 7 T3）；`--disallowedTools` / `--permission-mode` 生效；Skill 工具 default 档不弹审批直接执行 | ⚠️ **默认不弹**：build agent 权限表 `*:*:allow`（三层证据：事件流 + `GET /agent` + server 日志）；显式 `ask` 后批准（`once`）/拒绝（`reject`）双路径实测；**审批请求不走 SSE，须轮询 `GET /permission`**（SSE 只回 `permission.replied`） |
+| 取消 Turn | ✅ `turn/interrupt` → interrupted，同 thread 可继续 | ✅ `control_request{interrupt}` 实证（PoC 7 T2：确认后 0 delta，result=error_during_execution 归类「已取消」，同会话可继续） | ✅ abort 端点 → `MessageAbortedError`（0 输出 token），session 随后可继续使用 |
 | 并发 ≥3 Session | ✅ 3 thread 并行无串扰 | 多会话并行由 PoC 4 实证（三 CLI 混合流 25/25） | ✅ 3 session 并行 16.5s 全 completed，回复互不串扰 |
 | 历史读取 | ✅ `thread/read{includeTurns}` 读回完整 turns | ✅ 原生 transcript jsonl 直读（PoC 5 双 CLI 读入实证） | ✅ `GET /session` 列表 + `GET /session/{id}/message`（crash 后 18/18 完好） |
 | 上下文继续 | ✅ `thread/resume` 同 id，暗号复现实证 | ✅（stream-json 会话续问） | ✅ 重启 server 后续问正确复现（原生上下文继续） |
@@ -39,14 +39,15 @@ OpenCode command/SSE (self_reported) ─┘      ├─ verified：唯一可建�
 
 | | Codex Adapter | Claude Adapter | OpenCode Adapter |
 |---|---|---|---|
-| 传输层 | 直连 app-server（零依赖 Node 客户端，poc-1 client.mjs 可演进） | stream-json 行协议直连（poc-2 protocol-client.mjs 可演进）；SDK 待锁版本 | HTTP+SSE（poc-3 client.mjs 可演进，已含 provider 只读注入） |
+| 传输层 | 直连 app-server（零依赖 Node 客户端，poc-1 client.mjs 可演进） | stream-json 行协议直连（poc-2 protocol-client.mjs + poc-7 lib/client.mjs 演进）；**SDK 已弃用、不留备选路径**（T0-02 决策） | HTTP+SSE（poc-3 client.mjs 可演进，已含 provider 只读注入） |
 | 版本策略 | 锁版本 + `--version`/`generate-ts` diff 探针 + 模型可用性探测 | hook 与 CLI 版本解耦（外部 hook 落 JSONL） | 与 CLI 同版本 SDK；prompt body 顶层 `parts` 等形状坑已记录 |
-| 审批策略 | 原生 requestApproval 直通（语义不改写） | 权限 flags 透传 + canUseTool（待 SDK 修复后接） | 会话级显式 `ask` 注入 + **轮询 `GET /permission`** + SSE `replied` 兜底 + UI 明示档位 |
+| 审批策略 | 原生 requestApproval 直通（语义不改写） | 显式 `--permission-prompt-tool=stdio` + 启动自检 fail-fast + `can_use_tool` 控制请求直通（PoC 7 T3；SDK canUseTool 随弃用移除） | 会话级显式 `ask` 注入 + **轮询 `GET /permission`** + SSE `replied` 兜底 + UI 明示档位 |
 | 阶段识别 | self_reported + uncertain | verified（hook） | self_reported + uncertain（已实证） |
 
 ## 4. 证据索引
 
 - Codex：`poc/poc-1-codex-appserver/RESULT.md`（8/8 PASS + 过程发现）、`NOTES.md`、`protocol/ts/`（同版本协议绑定）
-- Claude：`poc/poc-2-claude-skills/RESULT.md`（验收表 + 9 大发现 + 轮次清单）、`tracker/tracker.test.mjs`（15/15）
+- Claude：`poc/poc-2-claude-skills/RESULT.md`（验收表 + 9 大发现 + 轮次清单）、`tracker/tracker.test.mjs`（15/15）、`poc/poc-7-claude-gaps/RESULT.md`（审批/取消/resume/hook 注入补验 T1-T6）
+- Claude（T0-02 SDK 弃用决策）：`poc/t0-02-sdk/RESULT.md`（三版本复测 + E1-E6 隔离实验链 + 可重复复测脚本）
 - OpenCode：`poc/poc-3-opencode/RESULT.md`（首轮 12 项 + 补跑全过 + magpie 发现 NOTES §10）、`NOTES.md`
 - 跨 CLI：`poc/poc-4-cross-cli/RESULT.md`（证据分级策略 + 5 场景，三 CLI 真实源 e2e 25/25）
