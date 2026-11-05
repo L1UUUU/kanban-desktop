@@ -107,3 +107,36 @@ fixture 工作目录放入 `.opencode/command/poc3-hello.md` 与 `.opencode/skil
 
 - npm 包名：`@opencode-ai/sdk`（非 `opencode-ai`，后者是 CLI 二进制分发包）`[实证]`
 - SDK 提供类型化封装（`createOpencodeClient`、`event.callback`、`session.prompt/permissions` 等）`[文档]`；本次客户端直接用 HTTP+SSE（零依赖，且事件形状已实测校准），SDK 接入可等价替换
+
+## 10. 补跑新增发现（2026-11-05，magpie 接入后）
+
+### 10.1 magpie provider 隔离接入模式 `[实证]`
+
+- provider 定义（openai-compatible，`npm:"@ai-sdk/openai-compatible"`，`options.baseURL=http://127.0.0.1:3425/v1`，apiKey 内嵌）位于用户全局 opencode.json；**client.mjs 在 start-server 时只读复制该 provider 节点注入 fixture 配置**，保持"不加载用户全局配置"的隔离性质，密钥不进 git/日志（gitignore 排除动态生成的 `fixture/config/opencode/opencode.json`，入库模板 `.template` 无真实 key）
+- magpie 模型 ID 自带斜杠（`192-168-4-61-3000/asw_glm-5.3`），`modelID` 解析必须按第一个斜杠切分、余下合并；prompt API 的 `model:{providerID,modelID}` 两字段结构不受影响
+- 本地网关无需代理（`OC_PROXY` 默认 off；OpenAI 场景才需 `OC_PROXY=on` 走 127.0.0.1:7897）
+
+### 10.2 审批请求事件的推送限制（GUI Adapter 重要约束）`[实证]`
+
+- `/event` SSE 在审批**响应**后推送 `permission.replied {sessionID, requestID, reply}`（实测捕获）
+- 但审批**请求**产生时（server 日志 `asking id=per_...`），`/event` 未观察到推送 `permission.updated`（两次订阅先于 prompt 的测试均未收到）；`/global/event` 仅推 server 生命周期事件
+- **可靠获取审批请求的模式 = 轮询 `GET /permission`（pending 列表，含 id/sessionID/permission/patterns/metadata/always 建议）+ `permission.replied` 事件确认**；client.mjs `waitPermission` 已按此实现（500ms 轮询 + SSE 兜底）
+
+### 10.3 审批语义细节 `[实证]`
+
+- 显式 `bash:"ask"` 下，server 日志链：`evaluated permission=bash pattern="echo poc3-approve" action.action=ask` → `asking id=per_... patterns=["echo poc3-approve"]`
+- pending 请求的 `patterns` 精确到具体命令，`always` 给出通配建议（如 `echo *`）——GUI 三档审批（once/always/reject）与原生语义一一对应
+- reject 后工具 part state=**error**，error="The user rejected permission to use this specific tool call."；模型会继续生成说明文本（turn 正常完成）
+
+### 10.4 command 执行 API 细节 `[实证]`
+
+- `POST /session/{id}/command` body `{command, arguments, model}`：**`arguments` 必填**（缺省 400 `Missing key at ["arguments"]`），空模板传 `"{}"`
+- 该 API 为**同步返回**（HTTP 200 直接携带完成的 assistant 消息 info，含 time.completed），与 prompt_async 的异步模式不同
+- command 模板经模型真实执行（回复 COMMAND-POC3-OK），非文本展开模拟
+
+### 10.5 GLM（asw_glm-5.3）网关下的行为观察 `[实证]`
+
+- 首 token 延迟约 10-12s，随后 burst 输出：短回复通常 1-2 次 `message.part.delta`；长回复 61 次 delta——流式粒度取决于网关分块，GUI 渲染须同时消费 delta 事件与 part 全量快照
+- 工具调用 turn 内产生多次引擎请求（工具轮 + 总结轮，assistant 消息分多条）；预算/用量统计应以 turn 或 prompt 计，不应假设 1 prompt = 1 请求
+- abort 语义：`POST /abort` → turn errored（`MessageAbortedError`），abort 早于首 token 时 0 输出 token；session 无损可继续
+- reasoning part（GLM 思考链）作为独立 part 类型出现在事件流（`type:"reasoning"`），GUI 可选择展示或折叠

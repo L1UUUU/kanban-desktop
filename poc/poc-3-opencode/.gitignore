@@ -4,3 +4,5 @@ fixture/data/
 node_modules/
 package-lock.json
 *.log
+# fixture 隔离配置：client.mjs 启动时从用户全局 opencode.json 只读复制并注入 apiKey，含密钥不入库
+fixture/config/opencode/opencode.json

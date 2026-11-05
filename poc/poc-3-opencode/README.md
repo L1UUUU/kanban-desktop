@@ -8,7 +8,9 @@
 poc/poc-3-opencode/
 ├── client.mjs              # 统一驱动客户端（HTTP+SSE，零依赖，Node 18+）
 ├── fixture/
-│   ├── config/opencode/    # 隔离全局配置（XDG_CONFIG_HOME 重定向；按模式写入 permission）
+│   ├── config/opencode/    # 隔离全局配置（XDG_CONFIG_HOME 重定向）
+│   │   ├── opencode.json   # 运行时生成：含 magpie provider+apiKey（从全局只读复制），不入库
+│   │   └── opencode.json.template  # 无密钥入库模板
 │   ├── data/               # 隔离数据目录（XDG_* 重定向；含 auth.json 只读副本，不入库）
 │   └── workdir/            # 测试工作目录（含 .opencode/command、.opencode/skill fixture）
 ├── logs/                   # 运行日志与证据 JSON（不入库）
@@ -19,11 +21,11 @@ poc/poc-3-opencode/
 ## 前置条件
 
 - opencode 1.19.5 全局安装；Node ≥18
-- `~/.local/share/opencode/auth.json` 存在且凭据**有效**（本次执行时 OpenAI oauth 已失效——阻塞记录见 RESULT.md）
-- 访问 OpenAI 需本地代理 `127.0.0.1:7897`（与用户 `opencode-proxy.cmd` 一致；`OC_PROXY=off` 可关闭）
+- 可用模型凭据：用户全局 `~/.config/opencode/opencode.json` 配置 `magpie` provider（openai-compatible 本地网关；client.mjs 启动时**只读复制**该 provider 节点注入 fixture 配置，含 apiKey 的生成文件被 gitignore 排除，入库模板见 `opencode.json.template`）。`OC_MODEL` 可覆盖，默认 `magpie/192-168-4-61-3000/asw_glm-5.3`
+- magpie 为本地网关无需代理（默认 `OC_PROXY=off`）；OpenAI 渠道才需 `OC_PROXY=on`（127.0.0.1:7897）
 - `client.mjs` 内 `EXE` 变量指向 opencode.exe（可用 `OC_BIN` 覆盖）
 
-## 一条命令复现（完整矩阵，约 10 次一句话级模型调用）
+## 一条命令复现（完整矩阵，约 11 次一句话级模型调用，其中 1 次被 abort 中止）
 
 ```bash
 cd poc/poc-3-opencode
@@ -53,8 +55,9 @@ node client.mjs stop-server
 
 - 每步日志写入 `logs/<步骤名>.log`，证据 JSON 写入 `logs/<步骤名>.json`
 - server 以 detached 方式常驻（pid 记录于 `logs/server.pid`），跨命令持续运行
-- 模型固定 `openai/gpt-5.4-mini-fast`（oauth 渠道 cost=0；`OC_MODEL` 可覆盖）
-- `fixture/data/`（含凭据副本）与 `logs/` 已被 `.gitignore` 排除
+- 模型默认 `magpie/192-168-4-61-3000/asw_glm-5.3`（`OC_MODEL` 可覆盖）
+- 审批请求获取采用轮询 `GET /permission` + `permission.replied` SSE 确认（实测 /event 不推送审批请求事件，见 NOTES.md §10.2）
+- `fixture/data/`、`logs/` 与含 apiKey 的 `fixture/config/opencode/opencode.json` 已被 `.gitignore` 排除
 
 ## 零成本子命令（无需有效凭据）
 

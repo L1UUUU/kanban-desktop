@@ -1,0 +1,16 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "magpie": {
+      "name": "magpie",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "apiKey": "<REDACTED-RUNTIME-INJECTED-FROM-GLOBAL-CONFIG>",
+        "baseURL": "http://127.0.0.1:3425/v1"
+      },
+      "models": {
+        "192-168-4-61-3000/asw_glm-5.3": { "name": "asw_glm-5.3 · 192.168.4.61:3000", "variants": {} }
+      }
+    }
+  }
+}

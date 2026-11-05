@@ -13,7 +13,10 @@ const LOGS = path.join(ROOT, 'logs');
 const PID_FILE = path.join(LOGS, 'server.pid');
 const PORT = Number(process.env.OC_PORT || 40101);
 const BASE = `http://127.0.0.1:${PORT}`;
-const MODEL = process.env.OC_MODEL || 'openai/gpt-5.4-mini-fast';
+// 模型格式 providerID/modelID；magpie 的 modelID 自带斜杠（192-168-4-61-3000/asw_glm-5.3），故只按第一个斜杠切分
+const MODEL = process.env.OC_MODEL || 'magpie/192-168-4-61-3000/asw_glm-5.3';
+const [PROV_ID, ...MODEL_REST] = MODEL.split('/');
+const MODEL_ID = MODEL_REST.join('/');
 const EXE = process.env.OC_BIN || 'C:\\Users\\liuy\\AppData\\Roaming\\npm\\node_modules\\opencode-ai\\bin\\opencode.exe';
 const TURN_TIMEOUT = Number(process.env.OC_TURN_TIMEOUT || 120000);
 
@@ -43,8 +46,8 @@ function serverEnv() {
   env.XDG_CACHE_HOME = path.join(DATA_DIR, 'cache');
   delete env.OPENCODE_CONFIG;
   delete env.OPENCODE_CONFIG_CONTENT;
-  // 与用户全局 opencode-proxy.cmd 一致：经本地代理访问 OpenAI（OC_PROXY=off 可关闭）
-  if (process.env.OC_PROXY !== 'off') {
+  // 代理默认关闭：模型走 magpie 本地网关（127.0.0.1:3425）；OC_PROXY=on 时按用户 shim 加代理（OpenAI 场景）
+  if (process.env.OC_PROXY === 'on') {
     env.HTTPS_PROXY = 'http://127.0.0.1:7897';
     env.HTTP_PROXY = 'http://127.0.0.1:7897';
     env.NO_PROXY = 'localhost,127.0.0.1';
@@ -52,11 +55,17 @@ function serverEnv() {
   return env;
 }
 // 按模式写隔离全局配置：default = 无 permission 设置；ask = bash/edit 显式 "ask"
+// provider 配置（magpie，含 apiKey）在运行时从用户全局 opencode.json 只读复制注入，密钥不进 git、不进日志
 function writeConfig(mode) {
+  const globalPath = path.join(process.env.HOME || process.env.USERPROFILE, '.config', 'opencode', 'opencode.json');
+  const globalCfg = JSON.parse(readFileSync(globalPath, 'utf8'));
   const cfg = { $schema: 'https://opencode.ai/config.json' };
+  const prov = globalCfg.provider?.[PROV_ID];
+  if (!prov) throw new Error(`provider ${PROV_ID} not found in global config (read-only check)`);
+  cfg.provider = { [PROV_ID]: prov };
   if (mode === 'ask') cfg.permission = { bash: 'ask', edit: 'ask' };
   writeFileSync(path.join(CFG_DIR, 'opencode', 'opencode.json'), JSON.stringify(cfg, null, 2) + '\n', 'utf8');
-  log(`config written mode=${mode}: ${JSON.stringify(cfg)}`);
+  log(`config written mode=${mode}, provider=${PROV_ID} injected (models: ${Object.keys(prov.models || {}).join(', ')}), permission=${mode === 'ask' ? 'bash/edit=ask' : 'default'}`);
 }
 async function waitHttpOk(timeoutMs = 30000) {
   const t0 = Date.now();
@@ -159,7 +168,7 @@ async function createSession(title) {
 }
 async function promptAsync(sessionID, text) {
   const r = await api('POST', `/session/${sessionID}/prompt_async`, {
-    model: { providerID: 'openai', modelID: MODEL.split('/')[1] },
+    model: { providerID: PROV_ID, modelID: MODEL_ID },
     parts: [{ type: 'text', text }],
   });
   return r;
@@ -187,10 +196,11 @@ function waitTurnDone(ec, sessionID, timeoutMs = TURN_TIMEOUT) {
   });
 }
 // 收集 session 相关的文本/工具 part 快照，用于校验流式与工具事件
+// （实测：message.part.updated 的 properties 为顶层 {sessionID, part}，无 info 包装）
 function collectParts(ec, sessionID) {
   const parts = new Map();
   ec.on((ev) => {
-    if (ev.type === 'message.part.updated' && ev.properties.info?.sessionID === sessionID && ev.properties.part) {
+    if (ev.type === 'message.part.updated' && ev.properties.sessionID === sessionID && ev.properties.part) {
       const p = ev.properties.part;
       const key = `${p.messageID}:${p.id}`;
       parts.set(key, p);
@@ -202,18 +212,25 @@ function collectParts(ec, sessionID) {
   });
   return parts;
 }
-// 等待下一次 permission 事件（含 permissionID），可指定等待时长
-function waitPermission(ec, timeoutMs = TURN_TIMEOUT) {
+// 等待下一次 permission 审批请求：轮询 GET /permission 为主，SSE permission.updated 兜底
+// （实测 1.19.5：/event SSE 未观察到推送审批请求事件，仅响应后推送 permission.replied；
+//   官方 TUI 外的 GUI 客户端可靠模式 = 轮询 pending 列表，详见 NOTES.md）
+function waitPermission(ec, sessionID, timeoutMs = TURN_TIMEOUT) {
   return new Promise((resolve, reject) => {
-    const t0 = Date.now();
-    const timer = setTimeout(() => { ec.handlers = ec.handlers.filter(h => h !== on); reject(new Error(`no permission event in ${timeoutMs}ms`)); }, timeoutMs);
+    const timer = setTimeout(() => { clearInterval(poll); ec.handlers = ec.handlers.filter(h => h !== on); reject(new Error(`no permission request in ${timeoutMs}ms`)); }, timeoutMs);
+    const finish = (perm) => { clearTimeout(timer); clearInterval(poll); ec.handlers = ec.handlers.filter(h => h !== on); resolve(perm); };
     const on = (ev) => {
-      if (ev.type === 'permission') {
-        clearTimeout(timer); ec.handlers = ec.handlers.filter(h => h !== on);
-        resolve(ev.properties);
-      }
+      if (ev.type === 'permission.updated' && ev.properties?.permission?.id) finish(ev.properties.permission);
     };
     ec.on(on);
+    const poll = setInterval(async () => {
+      try {
+        const r = await api('GET', '/permission');
+        const pending = r.json || [];
+        const hit = pending.find(p => p.sessionID === sessionID);
+        if (hit) finish(hit);
+      } catch { /* transient */ }
+    }, 500);
   });
 }
 // assistant 最终文本（从 parts 快照取 text part 拼接）
@@ -266,8 +283,10 @@ steps['perm-ask-approve'] = async () => {
   log(`session=${s.id}`);
   const parts = collectParts(ec, s.id);
   const done = waitTurnDone(ec, s.id);
-  const perm = await waitPermission(ec);
-  log(`permission arrived id=${perm.id} tool=${perm.part?.tool} title=${perm.part?.title}`);
+  const r = await promptAsync(s.id, '请用 bash 工具执行命令 echo poc3-approve 然后原样告诉我输出内容。');
+  log(`prompt_async status=${r.status}`);
+  const perm = await waitPermission(ec, s.id);
+  log(`permission arrived id=${perm.id} permission=${perm.permission} patterns=${JSON.stringify(perm.patterns)}`);
   const resp = await api('POST', `/session/${s.id}/permissions/${perm.id}`, { response: 'once' });
   log(`approve(once) -> HTTP ${resp.status} ${resp.text.slice(0, 200)}`);
   const info = await done;
@@ -286,8 +305,10 @@ steps['perm-ask-deny'] = async () => {
   log(`session=${s.id}`);
   const parts = collectParts(ec, s.id);
   const done = waitTurnDone(ec, s.id);
-  const perm = await waitPermission(ec);
-  log(`permission arrived id=${perm.id} tool=${perm.part?.tool}`);
+  const r = await promptAsync(s.id, '请用 bash 工具执行命令 echo poc3-deny 然后原样告诉我输出内容。');
+  log(`prompt_async status=${r.status}`);
+  const perm = await waitPermission(ec, s.id);
+  log(`permission arrived id=${perm.id} permission=${perm.permission} patterns=${JSON.stringify(perm.patterns)}`);
   const resp = await api('POST', `/session/${s.id}/permissions/${perm.id}`, { response: 'reject' });
   log(`reject -> HTTP ${resp.status} ${resp.text.slice(0, 200)}`);
   const info = await done;
@@ -299,30 +320,33 @@ steps['perm-ask-deny'] = async () => {
   ec.close();
 };
 
-// 多轮流式聊天：两轮短消息，校验流式增量（text part 多次更新）与上下文延续（暗号回读）
+// 多轮流式聊天：两轮短消息，校验流式增量（delta 事件 + text part 快照更新）与上下文延续（暗号回读）
 steps['chat'] = async () => {
   const ec = await new EventClient().connect();
   const s = await createSession('poc3-chat');
   log(`session=${s.id}`);
+  const textUpd = () => ec.events.filter(e => e.type === 'message.part.updated' && e.properties.sessionID === s.id && e.properties.part?.type === 'text').length;
+  const deltaUpd = () => ec.events.filter(e => e.type === 'message.part.delta' && e.properties.sessionID === s.id).length;
   // 轮 1：设定暗号
   const parts1 = collectParts(ec, s.id);
   const done1 = waitTurnDone(ec, s.id);
   await promptAsync(s.id, '请记住暗号：蓝鲸42号。只回复：收到。');
   const info1 = await done1; await sleep(300);
-  log(`turn1 status=${info1.status} text="${assistantText(parts1)}" textPartUpdates=${ec.events.filter(e => e.type === 'message.part.updated' && e.properties.part?.type === 'text' && e.properties.info?.sessionID === s.id).length}`);
+  log(`turn1 status=${info1.status} text="${assistantText(parts1)}" (delta=${deltaUpd()}, snapshots=${textUpd()})`);
   // 轮 2：回读暗号（验证上下文延续 + 流式）
-  const updatesBefore = ec.events.filter(e => e.type === 'message.part.updated' && e.properties.part?.type === 'text' && e.properties.info?.sessionID === s.id).length;
+  const u0 = textUpd(), d0 = deltaUpd();
   const done2 = waitTurnDone(ec, s.id);
   await promptAsync(s.id, '暗号是什么？只回答暗号本身。');
   const info2 = await done2; await sleep(300);
-  const textUpdates = ec.events.filter(e => e.type === 'message.part.updated' && e.properties.part?.type === 'text' && e.properties.info?.sessionID === s.id).length - updatesBefore;
-  log(`turn2 status=${info2.status} text="${assistantText(parts1)}" turn2TextPartUpdates=${textUpdates}`);
-  dump('chat.json', { session: s.id, turn1: { status: info1.status, text: assistantText(parts1) }, turn2TextUpdates: textUpdates, events: ec.events });
+  const parts2 = [...parts1.values()];
+  log(`turn2 status=${info2.status} text="${assistantText(parts1)}" (turn2 delta=${deltaUpd() - d0}, snapshots=${textUpd() - u0})`);
+  dump('chat.json', { session: s.id, turn1: { status: info1.status, text: [...parts1.values()].filter(p => p.type === 'text').map(p => p.text).slice(-1)[0] }, turn2TextUpdates: textUpd() - u0, turn2Delta: deltaUpd() - d0, finalText: assistantText(parts1), events: ec.events });
   writeFileSync(path.join(LOGS, 'chat.session.id'), s.id, 'utf8');
   ec.close();
 };
 
-// 取消当前 turn：prompt_async 后立即 abort，校验 turn 进入 canceled 且 session 可继续
+// 取消当前 turn：prompt_async 后 abort，校验 turn 进入 canceled 且保留部分输出
+// 「取消后 Session 可继续」由 concurrent 步骤复用本 session 验证（预算合并）
 steps['cancel'] = async () => {
   const ec = await new EventClient().connect();
   const s = await createSession('poc3-cancel');
@@ -331,34 +355,33 @@ steps['cancel'] = async () => {
   const done = waitTurnDone(ec, s.id);
   const r = await promptAsync(s.id, '从 1 数到 20，每个数字一行，不要省略。');
   log(`prompt_async status=${r.status}`);
-  await sleep(2500); // 让流式开始产出，再取消
+  await sleep(4000); // 让流式开始产出，再取消
   const ab = await api('POST', `/session/${s.id}/abort`);
   log(`abort -> HTTP ${ab.status}`);
   const info = await done;
   await sleep(300);
   const partial = assistantText(parts);
   log(`turn status=${info.status} partialText="${partial.slice(0, 120)}..."`);
-  // 取消后继续同一 session
-  const done2 = waitTurnDone(ec, s.id);
-  await promptAsync(s.id, '只回复：继续OK。');
-  const info2 = await done2; await sleep(300);
-  log(`after-cancel turn status=${info2.status} text="${assistantText(parts).slice(-40)}"`);
-  dump('cancel.json', { session: s.id, canceledStatus: info.status, partialText: partial, afterCancelStatus: info2.status, events: ec.events });
+  dump('cancel.json', { session: s.id, canceledStatus: info.status, abortHttp: ab.status, partialText: partial, events: ec.events });
+  writeFileSync(path.join(LOGS, 'cancel.session.id'), s.id, 'utf8');
   ec.close();
 };
 
-// 并发：3 个 session 同时 prompt_async，全部完成
+// 并发：3 个 session 同时 prompt_async，全部完成；第 3 个复用 cancel session（验证取消后可继续）并暗号供 resume 使用
 steps['concurrent'] = async () => {
   const ec = await new EventClient().connect();
+  const cancelID = existsSync(path.join(LOGS, 'cancel.session.id'))
+    ? readFileSync(path.join(LOGS, 'cancel.session.id'), 'utf8').trim() : null;
   const sessions = [];
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 2; i++) {
     const s = await createSession(`poc3-conc-${i}`);
-    sessions.push(s);
+    sessions.push({ id: s.id, reused: false });
   }
-  log(`sessions=${sessions.map(s => s.id).join(',')}`);
+  if (cancelID) sessions.push({ id: cancelID, reused: true });
+  else { const s = await createSession('poc3-conc-2'); sessions.push({ id: s.id, reused: false }); }
+  log(`sessions=${sessions.map(s => s.id + (s.reused ? '(cancel-reused)' : '')).join(',')}`);
   const dones = sessions.map(s => waitTurnDone(ec, s.id));
   const partsMap = new Map(sessions.map(s => [s.id, collectParts(ec, s.id)]));
-  // 第 3 个 session 存暗号，供恢复测试复用
   const prompts = ['只回复：OK1', '只回复：OK2', '请记住暗号：绿豚7号。只回复：已记住。'];
   const t0 = Date.now();
   const rs = await Promise.all(sessions.map((s, i) => promptAsync(s.id, prompts[i])));
@@ -367,8 +390,8 @@ steps['concurrent'] = async () => {
   await sleep(500);
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
   log(`all turns done in ${elapsed}s statuses=${infos.map(i => i.status).join(',')}`);
-  for (const s of sessions) log(`  ${s.id} -> "${assistantText(partsMap.get(s.id))}"`);
-  dump('concurrent.json', { sessions: sessions.map(s => s.id), statuses: infos.map(i => i.status), elapsedSec: Number(elapsed), texts: sessions.map(s => assistantText(partsMap.get(s.id))), events: ec.events });
+  for (const s of sessions) log(`  ${s.id}${s.reused ? '(cancel-reused)' : ''} -> "${assistantText(partsMap.get(s.id))}"`);
+  dump('concurrent.json', { sessions, statuses: infos.map(i => i.status), elapsedSec: Number(elapsed), texts: sessions.map(s => assistantText(partsMap.get(s.id))), events: ec.events });
   writeFileSync(path.join(LOGS, 'concurrent.sessions.json'), JSON.stringify(sessions.map(s => s.id)), 'utf8');
   ec.close();
 };
@@ -461,7 +484,8 @@ steps['commands'] = async () => {
     const s = await createSession('poc3-command-run');
     const parts = collectParts(ec, s.id);
     const done = waitTurnDone(ec, s.id);
-    const r = await api('POST', `/session/${s.id}/command`, { command: 'poc3-hello' });
+    // arguments 为模板参数（poc3-hello 无参数，传空对象字符串）
+    const r = await api('POST', `/session/${s.id}/command`, { command: 'poc3-hello', arguments: '{}', model: MODEL });
     log(`command exec HTTP ${r.status} ${r.text.slice(0, 200)}`);
     const info = await done; await sleep(300);
     log(`command turn status=${info.status} text="${assistantText(parts)}"`);
