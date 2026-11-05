@@ -17,11 +17,13 @@ export interface AdapterCapabilities {
   skillSignal: boolean;
 }
 
-/** createSession 输入（cwd 必填；model/permMode 由 Adapter 映射到各 CLI 原生机制） */
+/** createSession 输入（cwd 必填；model/permMode 由 Adapter 映射到各 CLI 原生机制；cli 供 AdapterRouter 分发，单实现忽略） */
 export interface CreateSessionInput {
   cwd: string;
   model?: string;
   permMode?: PermMode;
+  /** 目标 CLI（AdapterRouter 按 CLI 分发；单 Adapter 实现忽略） */
+  cli?: string;
 }
 
 export interface SendTurnInput {
@@ -62,7 +64,8 @@ export class AdapterError extends Error {
  */
 export interface CliAdapter {
   readonly capabilities: AdapterCapabilities;
-  createSession(init: CreateSessionInput): Promise<{ sessionId: string }>;
+  /** nativeSessionId 为各 CLI 原生会话 id（Codex thread id 等；Fake 无则为 undefined/null），宿主据此回填 sessions 表 */
+  createSession(init: CreateSessionInput): Promise<{ sessionId: string; nativeSessionId?: string | null }>;
   sendTurn(input: SendTurnInput): Promise<void>;
   interruptTurn(sessionId: string): Promise<void>;
   resolveApproval(input: ResolveApprovalInput): Promise<void>;

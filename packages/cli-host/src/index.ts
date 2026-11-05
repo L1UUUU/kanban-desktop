@@ -1,6 +1,14 @@
-// 用途：@kanban/cli-host 入口 —— C1 Adapter 统一契约（adapter.ts）+ FakeAdapter（fake-adapter.ts）；三 CLI 实现与 CliHost 自 #7/#9/#10 填充
+// 用途：@kanban/cli-host 入口 —— C1 Adapter 统一契约 + FakeAdapter + CodexAdapter（真实结构化会话）+ AdapterRouter + CliHost seam；Claude/OpenCode 自 #10/#11 填充
 export * from "./adapter";
 export { FakeAdapter, type FakeAdapterOptions } from "./fake-adapter";
 export type { ScriptStep } from "./fake-scripts";
 export { pickScript, DEFAULT_TURN_SCRIPT, APPROVAL_SCRIPT, EXPIRY_SCRIPT, ERROR_SCRIPT } from "./fake-scripts";
 export { VirtualClock, SystemClock, type FakeClock } from "./clock";
+export { CodexAdapter, type CodexAdapterOptions, type CodexRpcClientLike } from "./codex-adapter";
+export { resolveCodexExe, readCodexVersion } from "./codex/exe";
+export { CodexRpcClient, RpcError } from "./codex/rpc";
+export { createDefaultModelResolver, latestRolloutModel, probeModelWithMinimalTurn, type ModelResolver, type ProbeClient } from "./codex/model-probe";
+export { probeProtocol, type ProtocolProbeResult } from "./codex/protocol-probe";
+export { AdapterRouter, type AdapterFactory } from "./router-adapter";
+export { CliHost, type HostCommand, type HostCommandResult, type ShutdownOptions } from "./host/cli-host";
+export { createDesktopAdapterFactory, type DesktopAdapterFactoryOptions } from "./host/desktop-adapters";

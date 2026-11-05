@@ -14,9 +14,15 @@ const PROD_CSP =
 
 export default defineConfig({
   main: {
-    // spec A 冻结布局为 electron/（非 electron-vite 默认的 src/main），入口显式声明
+    // spec A 冻结布局为 electron/（非 electron-vite 默认的 src/main），入口显式声明；
+    // cli-host-worker = utilityProcess 托管入口（ADR-0001；cli-host 包以 TS 源打进 bundle）
     build: {
-      lib: { entry: resolve(__dirname, "electron/main/index.ts") },
+      lib: {
+        entry: {
+          index: resolve(__dirname, "electron/main/index.ts"),
+          "cli-host-worker": resolve(__dirname, "../../packages/cli-host/src/host/worker.ts"),
+        },
+      },
     },
     plugins: [externalizeDepsPlugin({ exclude: workspacePackages })],
   },

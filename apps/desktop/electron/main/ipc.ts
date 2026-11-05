@@ -81,19 +81,20 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
       return { ok: true, sessions: rows };
     }
     case "session:create": {
-      const { sessionId } = await deps.adapter.createSession({
+      const { sessionId, nativeSessionId } = await deps.adapter.createSession({
         cwd: req.cwd,
         model: req.model,
         permMode: req.permMode,
+        cli: req.cli,
       });
       const title = req.title ?? `新会话 · ${CLI_LABELS[req.cli] ?? req.cli}`;
       const identity = detectDirIdentity(req.cwd);
-      // 会话落库（重启恢复依据；nativeSessionId 由真实 Adapter 接入后回填，Fake 无 native id）
+      // 会话落库（重启恢复依据；真实 Adapter 返回 native id 一并回填，Fake 无 native id 为 null）
       deps.sessions.insert({
         id: sessionId,
         kind: "structured",
         cli: req.cli,
-        nativeSessionId: null,
+        nativeSessionId: nativeSessionId ?? null,
         projectId: req.projectId ?? null,
         title,
         cwd: req.cwd,

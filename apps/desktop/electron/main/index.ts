@@ -1,11 +1,12 @@
-// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc 路由）、FakeAdapter 事件转发与会话状态落库、初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
+// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc 路由）、CliHost 托管（utilityProcess 优先，进程内回退）与事件转发/状态落库、初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { adapterEventSchema, appInfoSchema } from "@kanban/ipc-schema";
-import { FakeAdapter } from "@kanban/cli-host";
+import { AdapterRouter, createDesktopAdapterFactory, type CliAdapter } from "@kanban/cli-host";
 import { TRACKER_PLACEHOLDER } from "@kanban/tracker";
 import { defaultConfig, loadConfig, saveConfig, type AppConfig } from "./config";
+import { CliHostClient } from "./cli-host-client";
 import { SQLITE_ENTRY, openDatabase } from "./db";
 import { handleIpc, type IpcDeps } from "./ipc";
 import { ProjectStore } from "./project-store";
@@ -14,8 +15,24 @@ import { SessionStore } from "./session-store";
 // 占位引用：确保依赖方向在构建图上成立（真实消费自阶段 2 接入）
 void TRACKER_PLACEHOLDER;
 
-// FakeAdapter：#6 Fake 链路宿主（自建 SystemClock；真实三 CLI Adapter 自 #8/#10/#11 接入）
-const adapter = new FakeAdapter();
+/** CliHost 托管形态（ADR-0001：utilityProcess 崩溃隔离 + Job Object）；worker 产物缺失/fork 失败回退 Main 进程内（C5 降级路径，seam 不变） */
+function createHostedAdapter(appConfig: AppConfig): CliAdapter {
+  const dataDir = app.getPath("userData");
+  const workerPath = join(__dirname, "cli-host-worker.js");
+  if (existsSync(workerPath)) {
+    try {
+      return new CliHostClient({ workerPath, dataDir, codexExe: appConfig.cliExe.codex });
+    } catch (e) {
+      console.error(`[cli-host] utilityProcess 托管不可用，回退进程内：${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  return new AdapterRouter(
+    createDesktopAdapterFactory({ codexExe: appConfig.cliExe.codex, cacheDir: dataDir, log: (k, d) => console.error(`[cli-host:${k}] ${d}`) }),
+  );
+}
+
+// Adapter 门面：fake/codex 经 CliHost 分发（KANBAN_DISABLE_CODEX=1 时 codex 回落 Fake 演示模式）
+let adapter: CliAdapter;
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -73,9 +90,11 @@ app.whenReady().then(() => {
   const sessions = new SessionStore(db);
   // 启动探测：全部项目目录存在性落库（missing 标记，工单 #7 验收第 1 条）
   projects.refreshStatuses();
+  // CliHost 托管 adapter（utilityProcess 优先；config 手动覆盖 exe + env 开关在工厂内生效）
+  adapter = createHostedAdapter(appConfig);
   app.on("quit", () => {
     db.close();
-    // 有序停止：Fake 时钟停泵（真实 CLI 进程有序终止链路属 #10，spec H）
+    // 有序停止：worker 内 shutdown（停新命令→dispose→有限等待）→ kill 兜底；Job Object 覆盖崩溃场景（spec H）
     void adapter.dispose();
   });
 
