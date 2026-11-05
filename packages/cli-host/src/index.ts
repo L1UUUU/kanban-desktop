@@ -1,4 +1,4 @@
-// 用途：@kanban/cli-host 入口 —— C1 Adapter 统一契约 + FakeAdapter + CodexAdapter/ClaudeAdapter（真实结构化会话）+ AdapterRouter + CliHost seam；OpenCode 自 #11 填充
+// 用途：@kanban/cli-host 入口 —— C1 Adapter 统一契约 + FakeAdapter + CodexAdapter/ClaudeAdapter/OpenCodeAdapter（真实结构化会话）+ AdapterRouter + CliHost seam
 export * from "./adapter";
 export { FakeAdapter, type FakeAdapterOptions } from "./fake-adapter";
 export type { ScriptStep } from "./fake-scripts";
@@ -14,6 +14,10 @@ export { resolveClaudeExe } from "./claude/exe";
 export { ClaudeStreamClient, CLAUDE_BASE_ARGS, assertApprovalFlag, type ClaudeStreamOptions } from "./claude/client";
 export { resolveHookNodeBin } from "./claude/hook-inject";
 export { findTranscriptFile } from "./claude/transcript";
+export { OpenCodeAdapter, type OpenCodeAdapterOptions, splitModelId } from "./opencode-adapter";
+export { resolveOpenCodeExe } from "./opencode/exe";
+export { OpenCodeHttpServerClient, type OpenCodeServerClientLike, type OpenCodeSseEvent, type OpenCodeApiResponse } from "./opencode/client";
+export { OpenCodeServerHost, OPENCODE_PERM_CONFIG, type OpenCodeServerHostLike, type OpenCodeServerHostOptions } from "./opencode/server-host";
 export { AdapterRouter, type AdapterFactory } from "./router-adapter";
 export { CliHost, type HostCommand, type HostCommandResult, type ShutdownOptions } from "./host/cli-host";
 export { createDesktopAdapterFactory, type DesktopAdapterFactoryOptions } from "./host/desktop-adapters";

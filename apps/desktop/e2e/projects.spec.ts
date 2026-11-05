@@ -28,7 +28,7 @@ function makeFixture(): { userData: string; repoDir: string } {
   return { userData, repoDir };
 }
 
-/** 启动应用（env 隔离 userData；KANBAN_TEST_PICK_DIRECTORY 固定目录选择，跳过原生模态；KANBAN_DISABLE_CODEX=1 走 Fake 演示模式——本套验证 UI 行为，真实 Codex 链路由 cli-host e2e 覆盖） */
+/** 启动应用（env 隔离 userData；KANBAN_TEST_PICK_DIRECTORY 固定目录选择，跳过原生模态；KANBAN_DISABLE_*=1 走 Fake 演示模式——本套验证 UI 行为，真实三 CLI 链路由 cli-host e2e 覆盖） */
 async function launchApp(userData: string, repoDir?: string): Promise<{ app: ElectronApplication; win: Page }> {
   const app = await _electron.launch({
     args: [join(__dirname, "..")],
@@ -37,6 +37,7 @@ async function launchApp(userData: string, repoDir?: string): Promise<{ app: Ele
       KANBAN_USER_DATA: userData,
       KANBAN_DISABLE_CODEX: "1",
       KANBAN_DISABLE_CLAUDE: "1",
+      KANBAN_DISABLE_OPENCODE: "1",
       ...(repoDir ? { KANBAN_TEST_PICK_DIRECTORY: repoDir } : {}),
     },
   });

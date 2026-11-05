@@ -127,6 +127,12 @@ export function Composer({ session, actions }: { session: SessionView; actions: 
           )}
         </div>
       </div>
+      {/* OpenCode 权限为 server 级（spec B：同项目共享）——档位变更须明示影响同项目全部会话（原型 permnote 文案） */}
+      {session.cli === "opencode" ? (
+        <div className="mt-1.5 text-center text-[11px] text-muted-foreground">
+          OpenCode 权限档位为 server 级（同项目下会话共享）；切换后新会话生效
+        </div>
+      ) : null}
     </footer>
   );
 }

@@ -14,6 +14,7 @@ import { ProjectStore } from "../../../electron/main/project-store";
 import { SessionStore } from "../../../electron/main/session-store";
 import { ChatWorkspace } from "./ChatWorkspace";
 import type { ChatController } from "./use-chat";
+import { FAKE_DEMO_CWD } from "./use-chat";
 import type { ChatTransport } from "../../lib/kanban-api";
 import { useProjects } from "../projects/use-projects";
 
@@ -350,6 +351,19 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     expect((model as HTMLSelectElement).value).toBe("默认模型");
     fireEvent.change(model, { target: { value: "gpt-5.6-luna" } });
     expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("gpt-5.6-luna");
+  });
+
+  it("composer：OpenCode 会话明示权限档位为 server 级（同项目共享）；其他 CLI 无此说明（spec B UI 明示）", async () => {
+    const t = mount();
+    await t.flush();
+    expect(screen.queryByText(/OpenCode 权限档位为 server 级/)).toBeNull(); // fake 会话不显示
+    await act(async () => {
+      await t.ctl().createSession("opencode", { cwd: FAKE_DEMO_CWD, title: "演示会话 · OpenCode" });
+    });
+    expect(screen.getByText(/OpenCode 权限档位为 server 级（同项目下会话共享）；切换后新会话生效/)).toBeTruthy();
+    // 切回 fake 会话：说明消失
+    fireEvent.click(screen.getByText("演示会话 · Fake"));
+    expect(screen.queryByText(/OpenCode 权限档位为 server 级/)).toBeNull();
   });
 
   it("切会话不中断（一致项 7）：会话 A 流式中切到 B，A 持续推进，切回 A 全文在", async () => {
