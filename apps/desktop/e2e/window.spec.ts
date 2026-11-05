@@ -1,18 +1,26 @@
-// 用途：Electron E2E 冒烟 —— 启动构建产物应用，断言三区布局可见与 preload→main IPC 链路连通（Fake 链路版）
+// 用途：Electron E2E 冒烟 —— 启动构建产物应用，断言三区布局可见与 preload→main IPC 链路连通（Fake 链路版；userData 隔离保证空项目 boot 态）
 /// <reference lib="dom" /> <!-- evaluate 回调在页面上下文执行，需 DOM lib（仅本文件） -->
 import { test, expect, _electron, type ElectronApplication, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 let app: ElectronApplication;
 let win: Page;
+let userData = "";
 
 test.beforeAll(async () => {
-  app = await _electron.launch({ args: [resolve(__dirname, "..")] });
+  userData = mkdtempSync(join(tmpdir(), "kb-window-e2e-"));
+  app = await _electron.launch({
+    args: [resolve(__dirname, "..")],
+    env: { ...process.env, KANBAN_USER_DATA: userData },
+  });
   win = await app.firstWindow();
 });
 
 test.afterAll(async () => {
   await app.close();
+  rmSync(userData, { recursive: true, force: true });
 });
 
 test("窗口打开显示三区布局（原型一致项 1）", async () => {
@@ -20,10 +28,11 @@ test("窗口打开显示三区布局（原型一致项 1）", async () => {
   await expect(win.getByText("Kanban Desktop")).toBeVisible();
   await expect(win.getByText("设置")).toBeVisible();
 
-  // 左侧栏：项目 / 结构化会话 / PTY 终端三分组 + 首个 Fake 会话行
+  // 左侧栏：项目 / 结构化会话 / PTY 终端三分组 + 空项目 boot 演示会话行（#7：无项目时引导注册）
   await expect(win.getByText("项目", { exact: true })).toBeVisible();
   await expect(win.getByText("结构化会话")).toBeVisible();
   await expect(win.getByText("PTY 终端")).toBeVisible();
+  await expect(win.getByText("尚无项目")).toBeVisible({ timeout: 15_000 });
   await expect(win.getByText("演示会话 · Fake")).toBeVisible({ timeout: 15_000 });
 });
 

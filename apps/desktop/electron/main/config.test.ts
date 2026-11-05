@@ -19,9 +19,18 @@ afterEach(() => {
 });
 
 describe("loadConfig", () => {
-  it("文件不存在 → 返回默认配置（三 CLI exe 均为 null 占位）", () => {
+  it("文件不存在 → 返回默认配置（三 CLI exe 均为 null 占位、无当前项目）", () => {
     const dir = newTempDir();
     expect(loadConfig(join(dir, "config.json"))).toEqual(defaultConfig());
+    expect(defaultConfig().currentProjectId).toBeNull();
+  });
+
+  it("currentProjectId：合法往返；非法类型回退 null", () => {
+    const dir = newTempDir();
+    writeFileSync(join(dir, "config.json"), JSON.stringify({ currentProjectId: "p-1" }), "utf8");
+    expect(loadConfig(join(dir, "config.json")).currentProjectId).toBe("p-1");
+    writeFileSync(join(dir, "config.json"), JSON.stringify({ currentProjectId: 42 }), "utf8");
+    expect(loadConfig(join(dir, "config.json")).currentProjectId).toBeNull();
   });
 
   it("损坏 JSON → 回退默认配置", () => {
@@ -52,8 +61,10 @@ describe("saveConfig / loadConfig 往返", () => {
   it("save 后 load 得到等值配置（含父目录自动创建）", () => {
     const dir = newTempDir();
     const path = join(dir, "nested", "config.json");
-    saveConfig(path, { cliExe: { codex: "C:/codex.exe", claude: null, opencode: "C:/oc.exe" } });
-    expect(loadConfig(path).cliExe).toEqual({ codex: "C:/codex.exe", claude: null, opencode: "C:/oc.exe" });
+    saveConfig(path, { cliExe: { codex: "C:/codex.exe", claude: null, opencode: "C:/oc.exe" }, currentProjectId: "p-9" });
+    const loaded = loadConfig(path);
+    expect(loaded.cliExe).toEqual({ codex: "C:/codex.exe", claude: null, opencode: "C:/oc.exe" });
+    expect(loaded.currentProjectId).toBe("p-9");
   });
 });
 

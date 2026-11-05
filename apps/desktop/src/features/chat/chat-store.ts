@@ -1,5 +1,5 @@
 // 用途：聊天会话视图 store —— ChatEvent 按合并键归并成每会话 items（不变量 3/4 的 renderer 侧），useSyncExternalStore 兼容（快照引用稳定）
-import type { ApprovalSuggestion, ChatEvent, PermMode, SessionStatus } from "@kanban/ipc-schema";
+import type { ApprovalSuggestion, ChatEvent, PermMode, SessionRow, SessionStatus } from "@kanban/ipc-schema";
 
 /** 用户消息条目（ChatEvent 无 user 成员：renderer 发送时本地回显） */
 export interface UserItem {
@@ -44,6 +44,12 @@ export interface SessionView {
   /** 权限档位/模型为 renderer 本地会话状态（createSession 传入；chip/select 切换） */
   permMode: PermMode;
   model: string;
+  /** 会话挂靠项目（null=无项目演示会话；侧栏按当前项目过滤） */
+  projectId: string | null;
+  /** 会话工作目录与目录身份徽标数据（spec I-3） */
+  cwd: string | null;
+  dirIdentity: SessionRow["dirIdentity"];
+  worktreeName: string | null;
   items: ChatItem[];
   pendingApproval: PendingApproval | null;
   /** 「本轮已取消」提示（turnnote）标记 */
@@ -57,6 +63,10 @@ export interface SessionMeta {
   title: string;
   permMode: PermMode;
   model: string;
+  projectId?: string | null;
+  cwd?: string | null;
+  dirIdentity?: SessionRow["dirIdentity"];
+  worktreeName?: string | null;
 }
 
 export interface ChatSnapshot {
@@ -95,14 +105,43 @@ export class ChatStore {
 
   registerSession(meta: SessionMeta): void {
     this.sessions.set(meta.sessionId, {
-      ...meta,
+      sessionId: meta.sessionId,
+      cli: meta.cli,
+      title: meta.title,
       status: "idle",
+      permMode: meta.permMode,
+      model: meta.model,
+      projectId: meta.projectId ?? null,
+      cwd: meta.cwd ?? null,
+      dirIdentity: meta.dirIdentity ?? "none",
+      worktreeName: meta.worktreeName ?? null,
       items: [],
       pendingApproval: null,
       lastTurnInterrupted: false,
       lastError: null,
     });
     this.activeId = meta.sessionId;
+    this.changed();
+  }
+
+  /** 重启恢复：按 DB 行登记历史会话（状态统一显示断开；不激活） */
+  registerRestored(row: SessionRow): void {
+    this.sessions.set(row.id, {
+      sessionId: row.id,
+      cli: row.cli,
+      title: row.title ?? "历史会话",
+      status: "disconnected",
+      permMode: row.permMode ?? "auto",
+      model: "默认模型",
+      projectId: row.projectId,
+      cwd: row.cwd,
+      dirIdentity: row.dirIdentity,
+      worktreeName: row.worktreeName,
+      items: [],
+      pendingApproval: null,
+      lastTurnInterrupted: false,
+      lastError: null,
+    });
     this.changed();
   }
 
@@ -245,6 +284,10 @@ export class ChatStore {
         status: "idle",
         permMode: "auto",
         model: "默认模型",
+        projectId: null,
+        cwd: null,
+        dirIdentity: "none",
+        worktreeName: null,
         items: [],
         pendingApproval: null,
         lastTurnInterrupted: false,

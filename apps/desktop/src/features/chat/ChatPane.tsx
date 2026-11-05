@@ -62,6 +62,12 @@ export function ChatPane({
             — 本轮已取消，会话保留，可继续发消息 —
           </div>
         ) : null}
+        {session.status === "disconnected" ? (
+          // 断开会话（重启恢复的历史会话）：缓存不替代原生历史（原型 L424 文案；恢复按钮随真实 resume 链路 #8 接入）
+          <div className="mx-auto mb-3.5 max-w-[860px] text-center text-xs text-muted-foreground">
+            该会话来自上次运行（CLI 已退出）。缓存不替代原生历史。
+          </div>
+        ) : null}
         {session.lastError ? (
           <div className="mx-auto mb-3.5 max-w-[860px] text-center text-xs text-destructive">
             ⚠ {session.lastError.message}

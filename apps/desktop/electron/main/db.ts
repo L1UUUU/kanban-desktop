@@ -3,6 +3,9 @@ import * as nodeSqlite from "node:sqlite";
 
 type SqliteDatabase = import("node:sqlite").DatabaseSync;
 
+/** 底层连接类型别名（store 层构造函数签名复用） */
+export type SqliteDb = SqliteDatabase;
+
 // Node 24 仅导出 DatabaseSync（新名 Database 自 Node 25.7 起，见 decisions.md D2）；以实测为准优先新入口、回退别名
 const exportsRecord = nodeSqlite as unknown as Record<string, unknown>;
 const DatabaseCtor = (typeof exportsRecord.Database === "function"

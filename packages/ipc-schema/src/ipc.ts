@@ -1,18 +1,58 @@
-// 用途：最小 IPC 请求/结果/错误码契约 —— 单通道 kanban:ipc + channel 判别（spec E/C4；错误码形状由 ipc-schema 定义，不变量 6）
+// 用途：IPC 请求/结果/错误码契约 —— 单通道 kanban:ipc + channel 判别（spec E/C4；错误码形状由 ipc-schema 定义，不变量 6）
 import { z } from "zod";
-import { approvalDecisionSchema, permModeSchema, sessionIdSchema } from "./chat";
+import { approvalDecisionSchema, permModeSchema, sessionIdSchema, sessionStatusSchema } from "./chat";
 
-// 首版错误码：E_SCHEMA 入站不合契约 / E_SESSION_NOT_FOUND 未知会话 / E_APPROVAL_EXPIRED 过期或已决审批 / E_INTERNAL 兜底
-export const ERROR_CODES = ["E_SCHEMA", "E_SESSION_NOT_FOUND", "E_APPROVAL_EXPIRED", "E_INTERNAL"] as const;
+// 首版错误码：E_SCHEMA 入站不合契约 / E_SESSION_NOT_FOUND 未知会话 / E_APPROVAL_EXPIRED 过期或已决审批 / E_PROJECT_NOT_FOUND 未知项目 / E_INTERNAL 兜底
+export const ERROR_CODES = [
+  "E_SCHEMA",
+  "E_SESSION_NOT_FOUND",
+  "E_APPROVAL_EXPIRED",
+  "E_PROJECT_NOT_FOUND",
+  "E_INTERNAL",
+] as const;
 export const errorCodeSchema = z.enum(ERROR_CODES);
 export type ErrorCode = z.infer<typeof errorCodeSchema>;
 
-// 最小消息集：会话创建/发送/中断/审批决定（#6 cli 仅 fake；三 CLI 枚举随 #7/#9/#10 放开）
+// 会话 CLI 枚举（#7 起放开三 CLI；fake 为 #6 演示链路；pty 会话不经 session:create 建）
+export const cliKindSchema = z.enum(["fake", "codex", "claude", "opencode"]);
+export type CliKind = z.infer<typeof cliKindSchema>;
+
+// projects 表 wire 行（C3：id/name/canonical_path/status/created_at）
+export const projectRowSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  canonicalPath: z.string().min(1),
+  status: z.enum(["ok", "missing"]),
+  createdAt: z.string().min(1),
+});
+export type ProjectRow = z.infer<typeof projectRowSchema>;
+
+// sessions 表 wire 行（C3 列 + Main 侧判定的目录身份徽标数据）
+export const sessionRowSchema = z.object({
+  id: z.string().min(1),
+  kind: z.enum(["structured", "pty"]),
+  cli: z.string().min(1),
+  nativeSessionId: z.string().nullable(),
+  projectId: z.string().nullable(),
+  title: z.string().nullable(),
+  cwd: z.string().nullable(),
+  permMode: permModeSchema.nullable(),
+  status: sessionStatusSchema.nullable(),
+  lastActiveAt: z.string().nullable(),
+  /** 目录身份（spec I-3）：main=主仓库绿徽标 / worktree=蓝徽标（name 见 worktreeName）/ none=非 git 目录不渲染 */
+  dirIdentity: z.enum(["main", "worktree", "none"]),
+  worktreeName: z.string().nullable(),
+});
+export type SessionRow = z.infer<typeof sessionRowSchema>;
+
+// 消息集：session CRUD（#6）+ project/session 持久化通道（#7）
 export const ipcRequestSchema = z.discriminatedUnion("channel", [
   z.object({
     channel: z.literal("session:create"),
-    cli: z.literal("fake"),
+    cli: cliKindSchema,
     cwd: z.string().min(1),
+    /** 新建会话挂靠的项目（缺省=无项目演示会话） */
+    projectId: z.string().min(1).optional(),
     title: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
     permMode: permModeSchema.optional(),
@@ -32,6 +72,11 @@ export const ipcRequestSchema = z.discriminatedUnion("channel", [
     requestId: z.string().min(1),
     decision: approvalDecisionSchema,
   }),
+  z.object({ channel: z.literal("session:list"), projectId: z.string().min(1).optional() }),
+  z.object({ channel: z.literal("project:list") }),
+  /** 注册项目：Main 弹原生目录选择对话框，路径归一化与去重在 Main 侧完成 */
+  z.object({ channel: z.literal("project:register") }),
+  z.object({ channel: z.literal("project:switch"), projectId: z.string().min(1) }),
 ]);
 export type IpcRequest = z.infer<typeof ipcRequestSchema>;
 
@@ -42,12 +87,21 @@ export const ipcErrorSchema = z.object({
 });
 export type IpcError = z.infer<typeof ipcErrorSchema>;
 
-// 成功结果：session:create 附会话元数据（renderer 据此登记会话列表），其余通道仅 ok（内容一律经事件流，不变量 1）
+// 成功结果：ok=true + 按 channel 的可选载荷（session:create 附会话元数据；project:register 取消时 canceled；列表通道附行数组）
 export const ipcOkSchema = z.object({
   ok: z.literal(true),
   sessionId: z.string().optional(),
   cli: z.string().optional(),
   title: z.string().optional(),
+  /** session:create 附带：新会话 cwd 的目录身份（徽标即时渲染依据） */
+  dirIdentity: sessionRowSchema.shape.dirIdentity.optional(),
+  worktreeName: z.string().nullable().optional(),
+  canceled: z.boolean().optional(),
+  duplicate: z.boolean().optional(),
+  project: projectRowSchema.optional(),
+  projects: z.array(projectRowSchema).optional(),
+  currentProjectId: z.string().nullable().optional(),
+  sessions: z.array(sessionRowSchema).optional(),
 });
 export type IpcOk = z.infer<typeof ipcOkSchema>;
 

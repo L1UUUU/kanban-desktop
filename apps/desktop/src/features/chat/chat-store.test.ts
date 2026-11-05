@@ -14,6 +14,48 @@ function makeStore() {
   return store;
 }
 
+describe("chat-store 恢复会话登记（#7 重启恢复）", () => {
+  it("registerRestored：按 DB 行登记，状态强制 disconnected、项目/目录身份带齐", () => {
+    const store = new ChatStore();
+    store.registerRestored({
+      id: "s-old",
+      kind: "structured",
+      cli: "claude",
+      nativeSessionId: "thread-x",
+      projectId: "p-1",
+      title: "新会话 · Claude",
+      cwd: "C:\\repo",
+      permMode: "ask",
+      status: "running", // 上次退出前的落库状态：恢复后统一显示断开
+      lastActiveAt: "2026-11-04T00:00:00.000Z",
+      dirIdentity: "worktree",
+      worktreeName: "poc7",
+    });
+    const s = store.getSession("s-old")!;
+    expect(s.status).toBe("disconnected");
+    expect(s).toMatchObject({ cli: "claude", title: "新会话 · Claude", projectId: "p-1", permMode: "ask" });
+    expect(s.dirIdentity).toBe("worktree");
+    expect(s.worktreeName).toBe("poc7");
+    expect(s.items).toHaveLength(0);
+  });
+
+  it("registerSession 携带项目与目录身份（新建会话行徽标数据）", () => {
+    const store = new ChatStore();
+    store.registerSession({
+      sessionId: "s-9",
+      cli: "codex",
+      title: "新会话 · Codex",
+      permMode: "auto",
+      model: "默认模型",
+      projectId: "p-1",
+      cwd: "C:\\repo",
+      dirIdentity: "main",
+      worktreeName: null,
+    });
+    expect(store.getSession("s-9")).toMatchObject({ projectId: "p-1", dirIdentity: "main", cwd: "C:\\repo" });
+  });
+});
+
 describe("chat-store 事件归并", () => {
   it("message_delta 按 (itemId,partId) 追加：流式文本拼接完整、乱序键不串扰", () => {
     const store = makeStore();

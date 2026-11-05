@@ -1,22 +1,58 @@
-// 用途：聊天区组件测试（spec Testing seam 4）—— FakeAdapter 事件流直连驱动真实组件：流式/工具卡/审批三键/取消/权限切换/切会话不中断（对照原型一致项 5/6/7）
-import { act, fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+// 用途：聊天区组件测试（spec Testing seam 4）—— FakeAdapter 事件流直连驱动真实组件：流式/工具卡/审批三键/取消/权限切换/切会话不中断/项目注册与重启恢复（对照原型一致项 2/3/5/6/7）
+/// <reference types="node" /> <!-- 本文件用 node:fs/os/path 建持久化 fixture（重启恢复用例） -->
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AdapterEvent, IpcRequest, IpcResult } from "@kanban/ipc-schema";
 import { FakeAdapter, VirtualClock } from "@kanban/cli-host";
-import { handleIpc } from "../../../electron/main/ipc";
+import { openDatabase } from "../../../electron/main/db";
+import { handleIpc, type IpcDeps } from "../../../electron/main/ipc";
+import { ProjectStore } from "../../../electron/main/project-store";
+import { SessionStore } from "../../../electron/main/session-store";
 import { ChatWorkspace } from "./ChatWorkspace";
 import type { ChatController } from "./use-chat";
 import type { ChatTransport } from "../../lib/kanban-api";
+import { useProjects } from "../projects/use-projects";
 
-/** FakeAdapter 直连 transport：复用 Main 路由（handleIpc）做请求侧，adapter.subscribe 做事件侧 —— 组件测试即全栈（除 Electron IPC） */
-function makeTransport(adapter: FakeAdapter): ChatTransport {
+// 未关闭的 db 连接（afterEach 统一关，避免 Windows 上临时目录删除 EPERM）
+const openDbs: Array<{ close(): void }> = [];
+
+/** FakeAdapter 直连 transport：复用 Main 路由（handleIpc）做请求侧，adapter.subscribe 做事件侧 —— 组件测试即全栈（除 Electron IPC/dialog）；currentProjectId 可落文件（模拟 config.json 持久化） */
+function makeTransport(
+  adapter: FakeAdapter,
+  opts?: { dbPath?: string; statePath?: string; pick?: () => Promise<string | null> },
+): ChatTransport {
+  const db = opts?.dbPath ? openDatabase(opts.dbPath) : openDatabase(":memory:");
+  openDbs.push(db);
+  const state: { currentProjectId: string | null } = { currentProjectId: null };
+  if (opts?.statePath) {
+    try {
+      const raw = JSON.parse(readFileSync(opts.statePath, "utf8")) as { currentProjectId?: string | null };
+      if (typeof raw.currentProjectId === "string") state.currentProjectId = raw.currentProjectId;
+    } catch {
+      // 首次运行无状态文件
+    }
+  }
+  const deps: IpcDeps = {
+    adapter,
+    projects: new ProjectStore(db),
+    sessions: new SessionStore(db),
+    pickDirectory: opts?.pick ?? (async () => null),
+    getCurrentProjectId: () => state.currentProjectId,
+    setCurrentProjectId: (id) => {
+      state.currentProjectId = id;
+      if (opts?.statePath) writeFileSync(opts.statePath, JSON.stringify(state), "utf8");
+    },
+  };
   return {
-    invoke: (req: IpcRequest) => handleIpc(adapter, req),
+    invoke: (req: IpcRequest) => handleIpc(deps, req),
     onEvent: (h: (e: AdapterEvent) => void) => adapter.subscribe(h),
   };
 }
 
-/** 挂载工作区并暴露 controller（供测试直接驱动动作） */
+/** 挂载工作区（含真实 useProjects host）并暴露 controller（供测试直接驱动动作） */
 function mount(transport?: ChatTransport) {
   const clock = new VirtualClock();
   const adapter = new FakeAdapter({ clock });
@@ -25,7 +61,11 @@ function mount(transport?: ChatTransport) {
   const onController = (c: ChatController): void => {
     holder.controller = c;
   };
-  render(<ChatWorkspace transport={tr} onController={onController} />);
+  function Host() {
+    const projects = useProjects(tr);
+    return <ChatWorkspace transport={tr} projects={projects} onController={onController} />;
+  }
+  render(<Host />);
   const ctl = (): ChatController => {
     if (!holder.controller) throw new Error("controller 未就绪");
     return holder.controller;
@@ -234,7 +274,7 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     });
     // A 流式中新建并切到 B
     await act(async () => {
-      await t.ctl().createSession();
+      await t.ctl().createSession("fake");
     });
     const activeId = t.ctl().activeId;
     expect(activeId).toBeTruthy();
@@ -251,8 +291,9 @@ describe("聊天区（原型一致项 5/6/7）", () => {
   it("新建会话：侧栏「＋」菜单（一致项 2 的 Fake 入口）新增会话行并激活", async () => {
     const t = mount();
     await t.flush();
-    fireEvent.click(screen.getByRole("button", { name: "＋" }));
-    fireEvent.click(screen.getByText("新建 Fake 会话"));
+    await act(async () => {
+      await t.ctl().createSession("fake");
+    });
     await t.flush();
     expect(screen.getByText("新会话 · Fake")).toBeTruthy();
     expect(screen.getAllByText("新会话 · Fake").length).toBeGreaterThanOrEqual(1);
@@ -277,5 +318,66 @@ describe("聊天区（原型一致项 5/6/7）", () => {
       send("任何消息");
     });
     expect(await screen.findByText(/会话不存在/)).toBeTruthy();
+  });
+});
+
+describe("项目注册与会话恢复（#7 全链，除 Electron dialog）", () => {
+  let tmpRoot = "";
+
+  afterEach(() => {
+    cleanup();
+    for (const db of openDbs.splice(0)) db.close();
+    if (tmpRoot) {
+      rmSync(tmpRoot, { recursive: true, force: true });
+      tmpRoot = "";
+    }
+  });
+
+  /** 临时项目目录（.git 目录=主仓库 fixture）+ 固定返回它的 pick + db/状态文件路径 */
+  function makeProjectFixture(): { projDir: string; dbPath: string; statePath: string; transport: ChatTransport } {
+    tmpRoot = mkdtempSync(join(tmpdir(), "kb-ws-projects-"));
+    const projDir = join(tmpRoot, "demo-repo");
+    mkdirSync(join(projDir, ".git"), { recursive: true });
+    const dbPath = join(tmpRoot, "state.db");
+    const statePath = join(tmpRoot, "app-state.json");
+    const adapter = new FakeAdapter({ clock: new VirtualClock() });
+    return { projDir, dbPath, statePath, transport: makeTransport(adapter, { dbPath, statePath, pick: async () => projDir }) };
+  }
+
+  it("注册项目 → 「＋」菜单新建 Claude 会话（挂项目 + 主仓库徽标）→ 重启恢复（项目/会话/当前项目/断开态）", async () => {
+    const { projDir, dbPath, statePath, transport } = makeProjectFixture();
+
+    // 第一次启动：空态引导 → 注册 → 项目行出现（boot 演示会话先就位，注册后被当前项目过滤隐藏）
+    const t1 = mount(transport);
+    await t1.flush();
+    expect(screen.getByText("演示会话 · Fake")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "＋ 注册本地目录…" }));
+    await t1.flush();
+    expect(await screen.findByText("demo-repo")).toBeTruthy();
+
+    // 「＋」菜单：Claude 新建会话（一致项 2/3：菜单四项入口 + CLI 色点 + 主仓库徽标）
+    fireEvent.click(screen.getByRole("button", { name: "＋" }));
+    fireEvent.click(screen.getByText("Claude"));
+    await t1.flush();
+    expect(await screen.findByText("新会话 · Claude")).toBeTruthy();
+    expect(screen.getByTitle(`工作在主仓库（${projDir}）`)).toBeTruthy();
+    // 当前项目过滤：boot 演示会话（无项目）不显示
+    expect(screen.queryByText("演示会话 · Fake")).toBeNull();
+
+    // 第二次启动（同一 db/状态文件）：项目、当前项目与会话恢复，会话为断开态
+    cleanup();
+    const adapter2 = new FakeAdapter({ clock: new VirtualClock() });
+    const transport2 = makeTransport(adapter2, { dbPath, statePath, pick: async () => null });
+    const t2 = mount(transport2);
+    await t2.flush();
+    expect(await screen.findByText("demo-repo")).toBeTruthy();
+    expect(await screen.findByText("新会话 · Claude")).toBeTruthy();
+    expect(screen.getByText("已断开")).toBeTruthy();
+    // 断开会话视图提示（原型 L424 文案）
+    fireEvent.click(screen.getByText("新会话 · Claude"));
+    expect(screen.getByText("该会话来自上次运行（CLI 已退出）。缓存不替代原生历史。")).toBeTruthy();
+    // boot 演示会话不再创建（已有项目）
+    expect(screen.queryByText("演示会话 · Fake")).toBeNull();
+    void t2;
   });
 });

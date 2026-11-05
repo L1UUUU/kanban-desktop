@@ -1,18 +1,26 @@
-// 用途：聊天控制器 hook —— transport → ChatStore 接线：全部会话始终归并（切会话不中断，一致项 7），动作经 IPC 单通道发出
+// 用途：聊天控制器 hook —— transport → ChatStore 接线：启动恢复（session:list 断开会话登记）+ 无项目时 boot 演示会话 + 全部会话始终归并（切会话不中断，一致项 7），动作经 IPC 单通道发出
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { AdapterEvent, ApprovalDecision, ChatEvent, IpcResult, PermMode } from "@kanban/ipc-schema";
+import type { AdapterEvent, ApprovalDecision, ChatEvent, CliKind, IpcResult, PermMode } from "@kanban/ipc-schema";
 import type { ChatTransport } from "../../lib/kanban-api";
 import { ChatStore, type SessionView } from "./chat-store";
 
-// Fake 演示会话的项目目录（演示数据集中一处；真实项目注册属 #8）
+// Fake 演示会话的项目目录（无项目时的 boot 链路；真实会话 cwd 一律来自已注册项目）
 export const FAKE_DEMO_CWD = "C:\\project2\\kanban-desktop";
 export const DEFAULT_MODEL = "默认模型";
+
+/** createSession 可选项（cwd 必填：挂当前项目的会话传项目 canonicalPath） */
+export interface CreateSessionOptions {
+  cwd: string;
+  projectId?: string | null;
+  title?: string;
+  permMode?: PermMode;
+}
 
 export interface ChatControllerActions {
   send(text: string): void;
   interrupt(): void;
   resolveApproval(decision: ApprovalDecision): void;
-  createSession(): Promise<void>;
+  createSession(cli: CliKind, opts?: CreateSessionOptions): Promise<void>;
   switchTo(sessionId: string): void;
   setPerm(mode: PermMode): void;
   setModel(model: string): void;
@@ -35,10 +43,10 @@ export function useChatController(transport: ChatTransport | null): ChatControll
   // useState 初始化器保证每 hook 实例一个 store（渲染期可安全读取）
   const [store] = useState(() => new ChatStore());
   const snap = useSyncExternalStore(store.subscribe, store.getSnapshot);
-  // 首会话自举一次性标记（仅 effect 内读写：StrictMode 双挂载下只建一次会话，订阅仍每次重建）
+  // 启动自举一次性标记（仅 effect 内读写：StrictMode 双挂载下只跑一次，订阅仍每次重建）
   const bootRef = useRef(false);
 
-  // 事件订阅 + 首个会话自举：事件对全部会话始终归并（与激活视图无关 —— 切换不停止）
+  // 事件订阅 + 启动自举：事件对全部会话始终归并（与激活视图无关 —— 切换不停止）
   useEffect(() => {
     if (!transport) return;
     const off = transport.onEvent((e) => {
@@ -46,7 +54,7 @@ export function useChatController(transport: ChatTransport | null): ChatControll
     });
     if (!bootRef.current) {
       bootRef.current = true;
-      void createFakeSession(transport, store, "演示会话 · Fake");
+      void bootstrap(transport, store);
     }
     return off;
   }, [transport, store]);
@@ -85,9 +93,9 @@ export function useChatController(transport: ChatTransport | null): ChatControll
           id,
         );
       },
-      createSession: async () => {
+      createSession: async (cli, opts) => {
         if (!transport) return;
-        await createFakeSession(transport, store, "新会话 · Fake");
+        await createCliSession(transport, store, cli, opts ?? { cwd: FAKE_DEMO_CWD });
       },
       switchTo: (sessionId) => store.setActive(sessionId),
       setPerm: (mode) => {
@@ -106,22 +114,47 @@ export function useChatController(transport: ChatTransport | null): ChatControll
   return { ...actions, sessions: snap.sessions, activeSession, activeId: snap.activeId, version: snap.version };
 }
 
-/** 创建 Fake 会话并登记激活 */
-async function createFakeSession(transport: ChatTransport, store: ChatStore, title: string): Promise<void> {
+/** 启动自举：恢复 DB 历史会话（统一断开态）；无项目且无历史时建 Fake 演示会话（#6 链路保持） */
+async function bootstrap(transport: ChatTransport, store: ChatStore): Promise<void> {
+  const [projRes, sessRes] = await Promise.all([
+    transport.invoke({ channel: "project:list" }),
+    transport.invoke({ channel: "session:list" }),
+  ]);
+  if (sessRes.ok && sessRes.sessions) {
+    for (const row of sessRes.sessions) store.registerRestored(row);
+  }
+  const hasProjects = projRes.ok && (projRes.projects?.length ?? 0) > 0;
+  if (!hasProjects && store.getSnapshot().sessions.length === 0) {
+    await createCliSession(transport, store, "fake", { cwd: FAKE_DEMO_CWD, title: "演示会话 · Fake" });
+  }
+}
+
+/** 创建会话并登记激活（目录身份来自 Main 判定回传；登记失败在 console 报告） */
+export async function createCliSession(
+  transport: ChatTransport,
+  store: ChatStore,
+  cli: CliKind,
+  opts: CreateSessionOptions,
+): Promise<void> {
   const r = await transport.invoke({
     channel: "session:create",
-    cli: "fake",
-    cwd: FAKE_DEMO_CWD,
-    title,
-    permMode: "auto",
+    cli,
+    cwd: opts.cwd,
+    projectId: opts.projectId ?? undefined,
+    title: opts.title,
+    permMode: opts.permMode ?? "auto",
   });
   if (r.ok && r.sessionId) {
     store.registerSession({
       sessionId: r.sessionId,
-      cli: r.cli ?? "fake",
-      title: r.title ?? title,
-      permMode: "auto",
+      cli: r.cli ?? cli,
+      title: r.title ?? opts.title ?? `新会话 · ${cli}`,
+      permMode: opts.permMode ?? "auto",
       model: DEFAULT_MODEL,
+      projectId: opts.projectId ?? null,
+      cwd: opts.cwd,
+      dirIdentity: r.dirIdentity ?? "none",
+      worktreeName: r.worktreeName ?? null,
     });
   } else if (!r.ok) {
     // 创建失败也要可见（如 Main 校验拒绝）：挂到错误展示需有会话，此处直接 console 报告

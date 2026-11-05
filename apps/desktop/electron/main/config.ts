@@ -11,16 +11,18 @@ export interface CliExeConfig {
 
 export interface AppConfig {
   cliExe: CliExeConfig;
+  /** 当前项目 id（项目注册/切换时持久化，重启恢复；null=尚无项目） */
+  currentProjectId: string | null;
 }
 
 /** 默认配置：三 CLI exe 均为占位 null */
 export function defaultConfig(): AppConfig {
-  return { cliExe: { codex: null, claude: null, opencode: null } };
+  return { cliExe: { codex: null, claude: null, opencode: null }, currentProjectId: null };
 }
 
 const CLI_KEYS = ["codex", "claude", "opencode"] as const;
 
-/** 读取配置：文件缺失/损坏/字段非法时回退默认值，合法的手动覆盖保留 */
+/** 读取配置：文件缺失/损坏/字段非法时回退默认值，合法的手动覆盖保留（各节独立合并，一节损坏不牵连其余） */
 export function loadConfig(path: string): AppConfig {
   const fallback = defaultConfig();
   if (!existsSync(path)) return fallback;
@@ -32,11 +34,14 @@ export function loadConfig(path: string): AppConfig {
   }
   if (typeof raw !== "object" || raw === null) return fallback;
   const fileCli = (raw as { cliExe?: Record<string, unknown> }).cliExe;
-  if (typeof fileCli !== "object" || fileCli === null) return fallback;
-  for (const key of CLI_KEYS) {
-    const v = fileCli[key];
-    if (typeof v === "string" && v.length > 0) fallback.cliExe[key] = v;
+  if (typeof fileCli === "object" && fileCli !== null) {
+    for (const key of CLI_KEYS) {
+      const v = fileCli[key];
+      if (typeof v === "string" && v.length > 0) fallback.cliExe[key] = v;
+    }
   }
+  const current = (raw as { currentProjectId?: unknown }).currentProjectId;
+  if (typeof current === "string" && current.length > 0) fallback.currentProjectId = current;
   return fallback;
 }
 
