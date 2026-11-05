@@ -1,0 +1,6 @@
+# PoC 3 运行产物：日志、隔离数据目录（含凭据副本）、SDK 缓存，一律不入库
+logs/
+fixture/data/
+node_modules/
+package-lock.json
+*.log
