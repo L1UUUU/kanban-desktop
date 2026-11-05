@@ -23,7 +23,7 @@ CLI Worker（单 Node 宿主，多 Adapter 实例共存）           ← PoC 4 �
 ```
 
 - **统一 Worker 的必要条件已达成**（PoC 4：单 Node 宿主内三 CLI adapter + tracker 并存，交错事件流 25/25 正确），**非充分**：进程管理维度未压测，列为实施首批验证任务（§7-1）。
-- **Windows 进程规则（已实证）**：spawn 必须直连真实 exe（npm `.cmd` shim kill 后留孤儿进程，PoC 1 发现 #4）；codex 用 `codex.exe`、claude 用 `claude.exe`。Job Object + `KILL_ON_JOB_CLOSE` 方案仍需按「取消 Turn 不杀 Session、按 Session 粒度有序终止」实测（§8.6，待验证）。
+- **Windows 进程规则（已实证）**：spawn 必须直连真实 exe（npm `.cmd` shim kill 后留孤儿进程，PoC 1 发现 #4）；codex 用 `codex.exe`、claude 用 `claude.exe`。~~Job Object + `KILL_ON_JOB_CLOSE` 方案仍需按「取消 Turn 不杀 Session、按 Session 粒度有序终止」实测（§8.6，待验证）~~ **已验证（T0-01，2026-11-05）**：Job Object + KILL_ON_JOB_CLOSE 宿主强杀/优雅退出均全灭无孤儿（含孙进程与 CLI 自派辅助进程），且 Job 内单会话受控终止互不影响；取消 Turn ≠ 杀 Session（codex interrupt 实测 + poc-7/poc-3 引证）；孤儿「先核对再接管」策略落地（HTTP 重连复用 / stdio 终止后 resume 零重放）；CliHost 托管形态决策 **utilityProcess**（`docs/adr/0001`，MessagePort 单向 72.8k events/s、串行往返 p95 0.29ms）。证据：`poc/t0-01-worker/RESULT.md`（6/6 PASS）。
 - **生命周期与恢复**沿用 §6.1 规则；对应行为已有实证：切页不停止（架构属性）、取消 Turn 保留 Session（PoC 1e/3）、退出后历史与关联恢复（PoC 1g、PoC 3 恢复项、PoC 4 场景 5 重启 7/7）、CLI 意外退出不崩溃不重放（PoC 1h、PoC 3 异常项）。
 
 ## 3. CLI Adapter 层（每 CLI 一个，接口统一）
@@ -85,7 +85,7 @@ PoC 5 全过（6/6），三条硬边界写入 MVP：
 
 | # | 任务 | 来源 |
 |---|---|---|
-| 1 | Worker 进程管理实测：Windows Job Object、取消 Turn 不杀 Session、按 Session 粒度有序终止、子进程（Skill 的 Subagent）清理 | §8.6 + PoC 1 发现 #4 |
+| 1 | Worker 进程管理实测：Windows Job Object、取消 Turn 不杀 Session、按 Session 粒度有序终止、子进程（Skill 的 Subagent）清理 —— **✅ 已完成（`poc/t0-01-worker/RESULT.md` 6/6 PASS + `docs/adr/0001` CliHost=utilityProcess，2026-11-05）** | §8.6 + PoC 1 发现 #4 |
 | 2 | Agent SDK Windows bug 跟进：锁可用版本或正式弃用改协议直连 | PoC 2 发现 #4 |
 | 3 | node-pty 在 Windows Electron 原生编译验证（terminal 链复用前置） | PoC 6 风险项 |
 | 4 | 同名 skill 冲突的产品策略（项目级/用户级同名提示或前缀） | PoC 2 发现 #3 |

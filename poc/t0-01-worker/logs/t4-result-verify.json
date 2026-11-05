@@ -1,0 +1,49 @@
+{
+  "verdicts": {
+    "A": {
+      "name": "A opencode 孤儿：先核对再重连复用（不重复接管）",
+      "pass": true
+    },
+    "B": {
+      "name": "B codex 孤儿：核对→受控终止→resume 不重放、暗号复现",
+      "pass": true,
+      "orphanAt1s": true,
+      "outcome": "terminated-by-policy",
+      "adoptAction": "terminate-then-resume"
+    },
+    "C": {
+      "name": "C 身份核对负例：死 pid / 签名不符 / pid 复用形态不接管",
+      "pass": true
+    }
+  },
+  "registry": [
+    {
+      "createdAt": "2026-11-05T10:32:48.167Z",
+      "kind": "opencode-server",
+      "exe": "C:\\Users\\liuy\\AppData\\Roaming\\npm\\node_modules\\opencode-ai\\bin\\opencode.exe",
+      "port": 40221,
+      "pid": 55676,
+      "spawnAt": "2026-11-05T10:32:44.491Z",
+      "cmdSignature": [
+        "serve",
+        "--port",
+        "40221"
+      ],
+      "reattachable": true,
+      "project": "p-A",
+      "adopted": true
+    },
+    {
+      "createdAt": "2026-11-05T10:34:00.608Z",
+      "kind": "codex-appserver",
+      "exe": "C:\\Users\\liuy\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe",
+      "pid": 29144,
+      "spawnAt": "2026-11-05T10:33:03.572Z",
+      "cmdSignature": [
+        "app-server"
+      ],
+      "reattachable": false,
+      "threadId": "01a1ab45-01c0-77f1-b272-e5961688c0e2"
+    }
+  ]
+}

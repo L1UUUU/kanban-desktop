@@ -1,0 +1,41 @@
+{
+  "hostPid": 42496,
+  "guardPid": null,
+  "jobName": null,
+  "useJob": false,
+  "children": [
+    {
+      "type": "codex",
+      "label": "codex",
+      "pid": 2612,
+      "spawnAt": "2026-11-05T10:29:15.594Z"
+    },
+    {
+      "type": "claude",
+      "label": "claude",
+      "pid": 63484,
+      "spawnAt": "2026-11-05T10:29:17.635Z"
+    },
+    {
+      "type": "opencode",
+      "label": "opencode-40201",
+      "pid": 10208,
+      "port": 40201,
+      "spawnAt": "2026-11-05T10:29:19.631Z"
+    },
+    {
+      "type": "tree",
+      "label": "tree",
+      "pid": 41340,
+      "spawnAt": "2026-11-05T10:29:19.745Z"
+    }
+  ],
+  "grandchildren": [
+    {
+      "type": "tree-grandchild",
+      "label": "tree-gc",
+      "pid": 40836
+    }
+  ],
+  "readyAt": "2026-11-05T10:29:20.520Z"
+}

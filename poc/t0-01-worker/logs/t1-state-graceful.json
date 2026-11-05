@@ -1,0 +1,41 @@
+{
+  "hostPid": 62320,
+  "guardPid": 35176,
+  "jobName": "kanban_t0_7469d08a",
+  "useJob": true,
+  "children": [
+    {
+      "type": "codex",
+      "label": "codex",
+      "pid": 45144,
+      "spawnAt": "2026-11-05T10:29:49.875Z"
+    },
+    {
+      "type": "claude",
+      "label": "claude",
+      "pid": 61648,
+      "spawnAt": "2026-11-05T10:29:51.022Z"
+    },
+    {
+      "type": "opencode",
+      "label": "opencode-40201",
+      "pid": 56304,
+      "port": 40201,
+      "spawnAt": "2026-11-05T10:29:52.325Z"
+    },
+    {
+      "type": "tree",
+      "label": "tree",
+      "pid": 7556,
+      "spawnAt": "2026-11-05T10:29:52.412Z"
+    }
+  ],
+  "grandchildren": [
+    {
+      "type": "tree-grandchild",
+      "label": "tree-gc",
+      "pid": 45312
+    }
+  ],
+  "readyAt": "2026-11-05T10:29:52.850Z"
+}

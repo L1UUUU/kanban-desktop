@@ -1,0 +1,5 @@
+# 运行时产物不入库（fixture 由脚本按需重建；hosts 为子进程原始日志噪声；bench 依赖走各自 node_modules）
+fixture/
+logs/hosts/
+bench/node_modules/
+logs/*.tmp

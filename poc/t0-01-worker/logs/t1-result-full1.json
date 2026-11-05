@@ -1,0 +1,67 @@
+{
+  "runTag": "full1",
+  "verdicts": {
+    "control": {
+      "name": "无 Job 对照：宿主强杀后无 EOF 自退路径的子/孙进程成孤儿",
+      "pass": true,
+      "orphans": [
+        54856,
+        57588,
+        66348
+      ],
+      "nonStdioOrphans": [
+        54856,
+        66348,
+        57588
+      ],
+      "stdioSelfExit": [
+        "codex:64196:已自行退出(EOF)",
+        "claude:49900:已自行退出(EOF)"
+      ]
+    },
+    "job": {
+      "name": "Job+KILL_ON_JOB_CLOSE：宿主强杀后子/孙进程全灭",
+      "pass": true,
+      "membersAtKill": 5,
+      "snapOnKill": {
+        "41908": false,
+        "44508": false,
+        "48280": false,
+        "61572": false,
+        "66488": false
+      },
+      "pollWindowMs": 1
+    },
+    "graceful": {
+      "name": "Job 内单会话受控终止互不影响 + 优雅退出 Job 兜底全灭",
+      "pass": true,
+      "singleSessionOk": true,
+      "hostExited": true,
+      "guardGone": true,
+      "allGone": true,
+      "snapOnExit": {
+        "49132": false,
+        "50068": false,
+        "57512": false,
+        "59068": false
+      }
+    }
+  },
+  "logLines": [
+    "[T1][control] 2026-11-05T09:53:53.495Z host=25004 children=codex:64196 claude:49900 opencode:54856 tree:66348 gc=57588 opencodeHttpOk=true",
+    "[T1][control] 2026-11-05T09:53:54.315Z taskkill /F /PID 25004 → exit=0",
+    "[T1][control] 2026-11-05T09:54:00.327Z 6s 后存活子/孙进程: {\"49900\":false,\"54856\":true,\"57588\":true,\"64196\":false,\"66348\":true}",
+    "[T1][control] 2026-11-05T09:54:00.327Z stdio 子进程 EOF 自退情况: codex:64196:已自行退出(EOF) claude:49900:已自行退出(EOF)",
+    "[T1][control] 2026-11-05T09:54:03.763Z 显式清理后全部消亡=true 残留=[]",
+    "[T1][job] 2026-11-05T09:54:10.657Z host=29604 guard=61716 job=kanban_t0_6f51885c children=codex:66488 claude:44508 opencode:48280 tree:61572 gc=41908 httpOk=true",
+    "[T1][job] 2026-11-05T09:54:12.165Z job 成员=[29604,66488,61572,41908,62124,47316,65304,57292,44508,63660,39392,48280,38524,62412,36740,45720,52188,49536] 期望缺失=[]",
+    "[T1][job] 2026-11-05T09:54:12.913Z taskkill /F /PID 29604 → exit=0",
+    "[T1][job] 2026-11-05T09:54:13.416Z 宿主死亡 0.5s 时成员存活快照: {\"41908\":false,\"44508\":false,\"48280\":false,\"61572\":false,\"66488\":false}",
+    "[T1][job] 2026-11-05T09:54:13.417Z 成员全灭=true（轮询窗 1ms）guard 退出=true 非stdio成员被Job终止=true 残留=[]",
+    "[T1][graceful] 2026-11-05T09:54:21.807Z host=63616 guard=23892 job=kanban_t0_6c3c977f",
+    "[T1][graceful] 2026-11-05T09:54:22.820Z 杀单成员 opencode:54836 → 消亡=true 其余存活={\"49132\":true,\"50068\":true,\"57512\":true,\"59068\":true} host存活=true",
+    "[T1][graceful] 2026-11-05T09:54:23.484Z 宿主退出 0.5s 时剩余成员存活快照: {\"49132\":false,\"50068\":false,\"57512\":false,\"59068\":false}（stdio 成员可能已 EOF 自退）",
+    "[T1][graceful] 2026-11-05T09:54:23.485Z host 优雅退出=true guard 退出=true 剩余成员全灭=true 非stdio成员被Job终止=true 残留=[]",
+    "T1_VERDICT PASS"
+  ]
+}

@@ -1,0 +1,13 @@
+[T3 2026-11-05T10:31:42.009Z] codex up {"pid":5200,"t1":"01a1ab43-6e2b-7031-bfd6-cfccb3aa39f7","t2":"01a1ab43-99a8-7fd0-8f27-a53d47cf3936"}
+[T3 2026-11-05T10:31:49.237Z] claude up {"A":33560,"B":7028}
+[T3 2026-11-05T10:31:57.290Z] opencode up {"oc1":44316,"oc2":58312}
+[T3 2026-11-05T10:31:57.291Z] 初始拓扑全部就绪 {"codex":true,"claudeA":true,"claudeB":true,"oc1":true,"oc2":true}
+[T3 2026-11-05T10:31:58.337Z] 步骤1 claude-A 优雅终止后 {"codex":true,"claudeA":false,"claudeB":true,"oc1":true,"oc2":true,"aExitCode":0}
+[T3 2026-11-05T10:32:17.387Z] 步骤2 claude-B tiny turn {"endedBy":"result","subtype":"success","text":"收到","step2Ok":true}
+[T3 2026-11-05T10:32:18.713Z] 步骤3 claude-B 强终止后 {"codex":true,"claudeA":false,"claudeB":false,"oc1":true,"oc2":true,"bGone":true}
+[T3 2026-11-05T10:32:19.245Z] 步骤4 codex t1 逻辑 dispose 后 {"codex":true,"claudeA":false,"claudeB":false,"oc1":true,"oc2":true,"t2UsableAfterT1Dispose":true}
+[T3 2026-11-05T10:32:19.246Z] 步骤5 codex 进程停止后 {"codex":false,"claudeA":false,"claudeB":false,"oc1":true,"oc2":true,"codexGone":true}
+[T3 2026-11-05T10:32:19.918Z] 步骤6 opencode server1 停止后 {"codex":false,"claudeA":false,"claudeB":false,"oc1":false,"oc2":true,"oc1Gone":true,"oc2HttpOk":true,"s2StillThere":true}
+[T3 2026-11-05T10:32:20.625Z] 步骤7 opencode server2 停止后 {"oc2Gone":true}
+[T3 2026-11-05T10:32:20.625Z] 有序终止序列 ["claude-A(dispose graceful, exit=0)","claude-B(dispose force, gone=true)","codex-t1(logical dispose, process kept)","codex-t2(dispose last → process stop, gone=true)","opencode-s1(dispose → server1 stop, gone=true)","opencode-s2(dispose last → server2 stop, gone=true)"]
+T3_VERDICT PASS {"name":"多会话按 Session 粒度逐会话有序终止、互不影响","pass":true,"steps":{"step1_claudeA_graceful":true,"step2_claudeB_usable":true,"step3_claudeB_force":true,"step4_codex_thread_granular":true,"step5_codex_last_session_stops_process":true,"step6_oc_refcount_stop_server1":true,"step7_oc_last_session_stops_server2":true},"order":["claude-A(dispose graceful, exit=0)","claude-B(dispose force, gone=true)","codex-t1(logical dispose, process kept)","codex-t2(dispose last → process stop, gone=true)","opencode-s1(dispose → server1 stop, gone=true)","opencode-s2(dispose last → server2 stop, gone=true)"]}

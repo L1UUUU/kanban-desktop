@@ -1,0 +1,11 @@
+[T4 2026-11-05T10:32:48.165Z] A: 宿主 A 就绪 {"host":56940,"ocPid":55676,"httpOk":true}
+[T4 2026-11-05T10:32:52.820Z] A: 宿主 A 强杀后孤儿存活 {"orphanAlive":true,"ocPid":55676}
+[T4 2026-11-05T10:32:57.606Z] A: 接管决策与复用 {"action":"reattach","reattachOk":true,"dupBefore":1,"dupAfter":1,"sessionCreated":true,"sessionRespKeys":["id","slug","projectID","directory","path","cost","tokens","title"]}
+[T4 2026-11-05T10:33:01.512Z] A: 幂等二次接管 {"action":"reattach","samePid":true,"processCount":1}
+[T4 2026-11-05T10:33:59.711Z] B: 宿主 B' turn 进行中 {"host":33240,"codexPid":29144,"threadId":"01a1ab45-01c0-77f1-b272-e5961688c0e2","turn1":"completed","preCrashTurns":1,"deltas":195,"magic":"T4-XV1JVW"}
+[T4 2026-11-05T10:34:05.264Z] B: 决策前核对现场 {"orphanAt1s":true,"aliveAtDecision":true,"cimFound":true,"cimCreated":"2026-11-05T18:33:03.5183940+08:00","spawnAt":"2026-11-05T10:33:03.572Z","diffMs":-54}
+[T4 2026-11-05T10:34:08.107Z] B: 核对通过并受控终止孤儿 {"pid":29144,"orphanTerminated":true}
+[T4 2026-11-05T10:34:16.932Z] B: resume 快照对比 {"sameThread":true,"preTurns":1,"postTurns":2,"allPrePresent":true,"noNewCompleted":true,"postStatuses":["completed","interrupted"]}
+[T4 2026-11-05T10:34:44.278Z] B: 暗号复现 {"turnStatus":"completed","magicFound":true,"text":"T4-XV1JVW","magic":"T4-XV1JVW"}
+[T4 2026-11-05T10:34:51.780Z] C: 负例核对结果 {"deadPid":true,"wrongSignature":true,"staleSpawnAt":true}
+T4_VERDICT PASS {"A":{"name":"A opencode 孤儿：先核对再重连复用（不重复接管）","pass":true},"B":{"name":"B codex 孤儿：核对→受控终止→resume 不重放、暗号复现","pass":true,"orphanAt1s":true,"outcome":"terminated-by-policy","adoptAction":"terminate-then-resume"},"C":{"name":"C 身份核对负例：死 pid / 签名不符 / pid 复用形态不接管","pass":true}}
