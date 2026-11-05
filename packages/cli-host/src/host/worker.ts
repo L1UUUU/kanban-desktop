@@ -18,7 +18,7 @@ if (!port) {
 const host = new CliHost(
   createDesktopAdapterFactory({
     cacheDir: process.env.KANBAN_DATA_DIR,
-    log: (k, d) => console.error(`[codex:${k}] ${d}`),
+    log: (k, d) => console.error(`[cli-host-worker:${k}] ${d}`),
   }),
 );
 

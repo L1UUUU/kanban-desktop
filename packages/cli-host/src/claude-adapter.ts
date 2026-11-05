@@ -1,0 +1,687 @@
+// 用途：ClaudeAdapter —— C1 契约的真实 Claude 实现：stream-json 行协议直连（每会话一进程，poc-7 client 演进）、stdio 审批（can_use_tool 控制请求）、interrupt 归类已取消、--resume 跨重启恢复、--settings 会话级 hook 注入产生 verified SkillObservation（t0-02 裁决：无 SDK 备选路径）
+import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import type { AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, PermMode, SessionStatus, SkillObservation } from "@kanban/ipc-schema";
+import { transformHookEvents } from "@kanban/tracker";
+import { AdapterError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
+import { resolveClaudeExe } from "./claude/exe";
+import { ClaudeStreamClient, type ClaudeStreamOptions } from "./claude/client";
+import { prepareSessionHookDir, resolveHookNodeBin, tailJsonl, writeSessionSettings, type SessionHookFiles } from "./claude/hook-inject";
+import { findTranscriptFile, parseTranscriptItems } from "./claude/transcript";
+
+/** 可注入的流客户端面（生产 ClaudeStreamClient；测试 Fake 手动驱动协议消息） */
+export interface ClaudeStreamClientLike {
+  start(): Promise<void>;
+  sendUser(text: string): void;
+  interrupt(): Promise<void>;
+  respondControlRequest(requestId: string, response: unknown): void;
+  onMessage(fn: (msg: Record<string, unknown>) => void): () => void;
+  onDead(fn: (err: Error) => void): () => void;
+  stop(): void;
+  dead: boolean;
+  exitInfo?: { code: number | null; signal: NodeJS.Signals | null } | null;
+}
+
+export interface ClaudeAdapterOptions {
+  /** 手动覆盖 exe 路径（config cliExe.claude）；缺省走探测链 */
+  exe?: string | null;
+  /** hook 临时目录基座（缺省 <tmp>/kanban-claude-hooks；不硬编码） */
+  hookDir?: string;
+  /** hook 命令使用的 node 可执行覆盖（缺省 resolveHookNodeBin 探测） */
+  hookNodeBin?: string;
+  /** 测试注入客户端工厂 */
+  clientFactory?: (options: ClaudeStreamOptions) => ClaudeStreamClientLike;
+  /** 诊断日志 */
+  log?: (kind: string, detail: string) => void;
+}
+
+/** 权限三档映射（spec B 表 Claude 列）：请求=default+permissions.ask 严格工具配置；自动=default（读自动写/Bash 问）；完全访问=--dangerously-skip-permissions（bypassPermissions） */
+const PERM_MAP: Record<PermMode, { extraArgs: string[]; strictAsk: boolean }> = {
+  ask: { extraArgs: [], strictAsk: true },
+  auto: { extraArgs: [], strictAsk: false },
+  full: { extraArgs: ["--dangerously-skip-permissions"], strictAsk: false },
+};
+
+/** 全能力（approval/interrupt/resume/readHistory 实证于 PoC 7；skillSignal 双信号自本 Adapter 落地） */
+const CLAUDE_CAPABILITIES: AdapterCapabilities = {
+  approval: true,
+  interrupt: true,
+  resume: true,
+  readHistory: true,
+  skillSignal: true,
+};
+
+/** 待决审批：挂起 wire 响应直到用户决定（onControlRequest 挂起 Promise 模式，#8 同款） */
+interface PendingApproval {
+  requestId: string;
+  itemId: string;
+  decided: boolean;
+  /** CLI 建议的 addRules 规则（allow-always 原样回传，语义不换写） */
+  addRules: Record<string, unknown> | null;
+  respond: (wire: unknown) => void;
+}
+
+interface SessionState {
+  sessionId: string;
+  nativeSessionId: string;
+  cwd: string;
+  model?: string;
+  permMode?: PermMode;
+  seq: number;
+  log: ChatEvent[];
+  status: SessionStatus;
+  turnActive: boolean;
+  interruptRequested: boolean;
+  queue: string[];
+  pendingApprovals: Map<string, PendingApproval>;
+  /** deny 决定的工具 id（tool_result 到达时映射 denied 而非 failed） */
+  deniedToolIds: Set<string>;
+  /** 文本增量累计（终文自愈依据；键 `${apiMessageId}:${blockIndex}`） */
+  parts: Map<string, string>;
+  /** tool_started 时间（durationMs 近似） */
+  toolStartedAt: Map<string, number>;
+  client: ClaudeStreamClientLike | null;
+  hookFiles: SessionHookFiles;
+  hookOffset: number;
+  dead: boolean;
+}
+
+export class ClaudeAdapter implements CliAdapter {
+  readonly capabilities = CLAUDE_CAPABILITIES;
+  private readonly sessions = new Map<string, SessionState>();
+  private readonly byNative = new Map<string, SessionState>();
+  private readonly handlers = new Set<(event: AdapterEvent) => void>();
+  private readonly hookDir: string;
+  private readonly hookNodeBin: string;
+  private readonly clientFactory: (options: ClaudeStreamOptions) => ClaudeStreamClientLike;
+  private readonly log: (kind: string, detail: string) => void;
+  private exeCache: string | null = null;
+
+  constructor(options: ClaudeAdapterOptions = {}) {
+    this.log = options.log ?? (() => {});
+    this.hookDir = options.hookDir ?? path.join(tmpdir(), "kanban-claude-hooks");
+    this.hookNodeBin = resolveHookNodeBin(options.hookNodeBin);
+    const factory = options.clientFactory;
+    if (factory) {
+      this.clientFactory = factory;
+    } else {
+      // 生产：exe 显式解析（手动覆盖 → env → npm 全局 → where/which；缓存成功结果）
+      const manualOverride = options.exe ?? null;
+      this.clientFactory = (opts) =>
+        new ClaudeStreamClient({ ...opts, exe: this.resolveExe(manualOverride) }) as unknown as ClaudeStreamClientLike;
+    }
+  }
+
+  private resolveExe(manualOverride: string | null): string {
+    if (this.exeCache) return this.exeCache;
+    const exe = resolveClaudeExe({ manualOverride });
+    this.exeCache = exe;
+    return exe;
+  }
+
+  async createSession(init: CreateSessionInput): Promise<{ sessionId: string; nativeSessionId?: string | null }> {
+    const sessionId = `s-${randomUUID().slice(0, 8)}`;
+    // native session id 由我方预生成并经 --session-id 强制指定（CLI 2.x 的 system/init 懒发射——首条 user 消息后才到，实测 2.1.317；不能等 init 拿 id）
+    const nativeSessionId = randomUUID();
+    const files = prepareSessionHookDir(this.hookDir, sessionId);
+    const settingsPath = writeSessionSettings(files, {
+      nodeBin: this.hookNodeBin,
+      strictAsk: PERM_MAP[init.permMode ?? "auto"].strictAsk,
+    });
+    try {
+      // 先登记（dead=true 占位），spawn 成功后翻转存活；失败则回滚移除
+      const s: SessionState = this.newState(sessionId, nativeSessionId, init, files, null);
+      s.dead = true;
+      this.sessions.set(sessionId, s);
+      this.byNative.set(nativeSessionId, s);
+      try {
+        await this.spawnClient({ owner: s, model: init.model, permMode: init.permMode, settingsPath, sessionArg: ["--session-id", nativeSessionId] });
+      } catch (e) {
+        this.sessions.delete(sessionId);
+        this.byNative.delete(nativeSessionId);
+        throw e;
+      }
+      this.emit(s, { type: "session_status", status: "idle" });
+    } catch (e) {
+      throw new AdapterError("E_INTERNAL", `创建 Claude 会话失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+    return { sessionId, nativeSessionId };
+  }
+
+  /** 应用重启后的会话收养（#13 恢复编排的接入点）：按 DB 持久化的 native session id 重建状态（无进程；readHistory 直读 transcript，resume 后可续问） */
+  async adoptSession(input: { sessionId: string; nativeSessionId: string; cwd: string; permMode?: PermMode; model?: string }): Promise<void> {
+    if (this.sessions.has(input.sessionId)) throw new AdapterError("E_INTERNAL", `会话已存在：${input.sessionId}`);
+    const files = prepareSessionHookDir(this.hookDir, input.sessionId);
+    const s = this.newState(input.sessionId, input.nativeSessionId, input, files, null);
+    s.dead = true; // 无进程：sendTurn 前须 resume
+    this.sessions.set(input.sessionId, s);
+    this.byNative.set(input.nativeSessionId, s);
+    this.emit(s, { type: "session_status", status: "disconnected" });
+  }
+
+  async sendTurn(input: SendTurnInput): Promise<void> {
+    const s = this.requireLiveSession(input.sessionId);
+    // 不变量 6：忙态（turn 进行中/审批待决）排队
+    if (s.turnActive || s.pendingApprovals.size > 0) {
+      s.queue.push(input.text);
+      return;
+    }
+    this.startTurn(s, input.text);
+  }
+
+  async interruptTurn(sessionId: string): Promise<void> {
+    const s = this.requireLiveSession(sessionId);
+    // 幂等：无活动 turn 时 no-op
+    if (!s.turnActive && s.pendingApprovals.size === 0) return;
+    if (s.interruptRequested) return;
+    s.interruptRequested = true;
+    // 待决审批先拒绝（否则 CLI 停在等应答，interrupt 语义不完整）
+    for (const entry of s.pendingApprovals.values()) {
+      entry.decided = true;
+      s.deniedToolIds.add(entry.itemId);
+      entry.respond({ behavior: "deny", message: "用户取消了本轮" });
+    }
+    s.pendingApprovals.clear();
+    if (s.client && !s.client.dead) void s.client.interrupt().catch(() => {});
+  }
+
+  async resolveApproval(input: ResolveApprovalInput): Promise<void> {
+    const s = this.requireLiveSession(input.sessionId);
+    const entry = s.pendingApprovals.get(input.requestId);
+    if (!entry || entry.decided) {
+      throw new AdapterError("E_APPROVAL_EXPIRED", `审批请求不存在或已终结：${input.requestId}`);
+    }
+    entry.decided = true;
+    s.pendingApprovals.delete(input.requestId);
+    entry.respond(approvalWire(input.decision, entry));
+    if (input.decision === "deny") s.deniedToolIds.add(entry.itemId);
+    if (s.turnActive) this.emit(s, { type: "session_status", status: "running" });
+  }
+
+  async readHistory(sessionId: string): Promise<ChatEvent[]> {
+    const s = this.requireSession(sessionId);
+    this.tailHookEvents(s); // 断开期间迟到的 hook 行（verified 信号）先消费
+    this.backfillFromTranscript(s);
+    return [...s.log];
+  }
+
+  async resume(sessionId: string): Promise<void> {
+    const s = this.requireSession(sessionId);
+    if (s.client && !s.client.dead && !s.dead) {
+      // 进程内存活：复位活动残留（与 Codex 同语义）
+      s.turnActive = false;
+      s.queue.length = 0;
+      s.interruptRequested = false;
+      this.emit(s, { type: "session_status", status: "idle" });
+      return;
+    }
+    // 进程死亡/收养会话：spawn 新进程 --resume（poc-7 T4：session id 不变、上下文无损续问）
+    const settingsPath = writeSessionSettings(s.hookFiles, {
+      nodeBin: this.hookNodeBin,
+      strictAsk: PERM_MAP[s.permMode ?? "auto"].strictAsk,
+    });
+    try {
+      s.queue.length = 0;
+      await this.spawnClient({ owner: s, model: s.model, permMode: s.permMode, settingsPath, sessionArg: ["--resume", s.nativeSessionId] });
+      this.emit(s, { type: "session_status", status: "idle" });
+    } catch (e) {
+      throw new AdapterError("E_INTERNAL", `恢复 Claude 会话失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  async dispose(input?: DisposeInput): Promise<void> {
+    if (input?.sessionId) {
+      // Session 粒度：停止本会话进程并移除状态（每会话一进程，无共享）
+      const s = this.sessions.get(input.sessionId);
+      if (!s) return;
+      await this.stopClient(s.client);
+      this.sessions.delete(input.sessionId);
+      this.byNative.delete(s.nativeSessionId);
+      return;
+    }
+    // 全局：受控终止全部进程并等待实际退出（onDead 链发 session_exit/disconnected；状态保留供 resume；有限等待防挂）
+    await Promise.all([...this.sessions.values()].map((s) => this.stopClient(s.client)));
+  }
+
+  /** 受控终止单个客户端：等待实际退出（≤3s 兜底），保证 dispose 返回时 session_exit 已入事件流 */
+  private async stopClient(client: ClaudeStreamClientLike | null): Promise<void> {
+    if (!client || client.dead) return;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 3000);
+      client.onDead(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+      client.stop();
+    });
+  }
+
+  subscribe(handler: (event: AdapterEvent) => void): () => void {
+    this.handlers.add(handler);
+    return () => {
+      this.handlers.delete(handler);
+    };
+  }
+
+  /* ---------------- 内部：进程与协议挂接 ---------------- */
+
+  /** spawn 客户端并完成 initialize 握手，挂接消息/死亡处理后翻转会话存活（--session-id/--resume 经 sessionArg 传入） */
+  private async spawnClient(input: {
+    owner: SessionState;
+    model?: string;
+    permMode?: PermMode;
+    settingsPath: string;
+    sessionArg: string[];
+  }): Promise<void> {
+    const s = input.owner;
+    const args = ["--settings", input.settingsPath, ...PERM_MAP[input.permMode ?? "auto"].extraArgs, ...input.sessionArg];
+    if (input.model) args.push("--model", input.model);
+    const wire = this.clientFactory({ cwd: s.cwd, args, log: this.log });
+    wire.onDead((err) => this.handleProcessDeath(s, err));
+    await wire.start();
+    wire.onMessage((msg) => this.onStreamMessage(s, msg));
+    s.client = wire;
+    s.dead = false;
+    s.turnActive = false;
+  }
+
+  private newState(
+    sessionId: string,
+    nativeSessionId: string,
+    init: { cwd: string; model?: string; permMode?: PermMode },
+    files: SessionHookFiles,
+    wire: ClaudeStreamClientLike | null,
+  ): SessionState {
+    return {
+      sessionId,
+      nativeSessionId,
+      cwd: init.cwd,
+      model: init.model,
+      permMode: init.permMode,
+      seq: 0,
+      log: [],
+      status: "idle",
+      turnActive: false,
+      interruptRequested: false,
+      queue: [],
+      pendingApprovals: new Map(),
+      deniedToolIds: new Set(),
+      parts: new Map(),
+      toolStartedAt: new Map(),
+      client: wire,
+      hookFiles: files,
+      hookOffset: 0,
+      dead: false,
+    };
+  }
+
+  /** 全部 stdout 消息分发（system/assistant/user/stream_event/result/control_request） */
+  private onStreamMessage(s: SessionState, msg: Record<string, unknown>): void {
+    if (s.dead) return;
+    switch (msg.type) {
+      case "system":
+        // 防御：init 懒到达时校验实报 id 与 --session-id 预指定一致；不一致以实报为准重挂索引
+        if (msg.subtype === "init" && typeof msg.session_id === "string" && msg.session_id !== s.nativeSessionId) {
+          this.log("session-id-mismatch", `${s.nativeSessionId} -> ${msg.session_id}`);
+          this.byNative.delete(s.nativeSessionId);
+          s.nativeSessionId = msg.session_id;
+          this.byNative.set(s.nativeSessionId, s);
+        }
+        break;
+      case "stream_event":
+        this.handleStreamEvent(s, msg);
+        break;
+      case "assistant":
+        this.handleAssistant(s, msg);
+        break;
+      case "user":
+        this.handleUserMessage(s, msg);
+        break;
+      case "result":
+        this.handleResult(s, msg);
+        break;
+      case "control_request":
+        this.handleControlRequest(s, msg);
+        break;
+      default:
+        break;
+    }
+    // 消息驱动的 hook JSONL 增量消费（stream_event 高频不触发，assistant/user/result 才可能伴随 hook）
+    if (msg.type !== "stream_event") this.tailHookEvents(s);
+  }
+
+  /** 文本增量（--include-partial-messages）：content_block_delta(text_delta) → message_delta（thinking 不映射） */
+  private handleStreamEvent(s: SessionState, msg: Record<string, unknown>): void {
+    const event = msg.event as Record<string, unknown> | undefined;
+    if (!event || event.type !== "content_block_delta") return;
+    const delta = event.delta as Record<string, unknown> | undefined;
+    if (!delta || delta.type !== "text_delta" || typeof delta.text !== "string") return;
+    const itemId = String(msg.api_message_id ?? "");
+    const partId = String(event.index ?? 0);
+    if (!itemId) return;
+    const key = `${itemId}:${partId}`;
+    s.parts.set(key, (s.parts.get(key) ?? "") + delta.text);
+    this.emit(s, { type: "message_delta", itemId, partId, delta: delta.text });
+  }
+
+  /** assistant 消息：text 块终文自愈补 delta + message_completed；tool_use 块 → tool_started + Skill 流内 self_reported */
+  private handleAssistant(s: SessionState, msg: Record<string, unknown>): void {
+    const message = msg.message as { id?: string; content?: unknown } | undefined;
+    if (!message || !Array.isArray(message.content) || !message.id) return;
+    const blocks = message.content as Record<string, unknown>[];
+    blocks.forEach((block, index) => {
+      if (block.type === "text" && typeof block.text === "string") {
+        const itemId = String(message.id);
+        const partId = String(index);
+        const key = `${itemId}:${partId}`;
+        const acc = s.parts.get(key) ?? "";
+        if (block.text.startsWith(acc) && block.text.length > acc.length) {
+          this.emit(s, { type: "message_delta", itemId, partId, delta: block.text.slice(acc.length) });
+        } else if (!block.text.startsWith(acc)) {
+          this.log("text-mismatch", `itemId=${itemId} acc(${acc.length})!=final(${block.text.length})`);
+        }
+        s.parts.set(key, block.text);
+        this.emit(s, { type: "message_completed", itemId, partId });
+      } else if (block.type === "tool_use" && typeof block.id === "string") {
+        const name = String(block.name ?? "tool");
+        s.toolStartedAt.set(block.id, Date.now());
+        this.emit(s, { type: "tool_started", itemId: block.id, tool: name, argsSummary: safeJson(block.input) });
+        // SkillObservation 流内信号（spec B：stream 中 tool_use:Skill → self_reported；verified 由 hook 升级）
+        if (name === "Skill") {
+          const input = (block.input ?? {}) as Record<string, unknown>;
+          const skill = (input.skill as string | undefined) ?? (input.command as string | undefined);
+          if (skill) {
+            this.emitObservation(s, {
+              eventId: `claude-stream:${s.sessionId}:${block.id}`,
+              skill,
+              evidenceLevel: "self_reported",
+              source: "claude-stream",
+              occurredAt: new Date().toISOString(),
+            });
+          }
+        }
+      }
+    });
+  }
+
+  /** user 消息（tool_result）：→ tool_completed（deny 决定的 id → denied） */
+  private handleUserMessage(s: SessionState, msg: Record<string, unknown>): void {
+    const message = msg.message as { content?: unknown } | undefined;
+    if (!message || !Array.isArray(message.content)) return;
+    for (const it of message.content as Record<string, unknown>[]) {
+      if (it.type !== "tool_result" || typeof it.tool_use_id !== "string") continue;
+      const itemId = it.tool_use_id;
+      const started = s.toolStartedAt.get(itemId);
+      const durationMs = started ? Date.now() - started : 0;
+      s.toolStartedAt.delete(itemId);
+      const denied = s.deniedToolIds.delete(itemId);
+      this.emit(s, {
+        type: "tool_completed",
+        itemId,
+        status: denied ? "denied" : "completed",
+        durationMs,
+        output: flattenToolResult(it.content),
+      });
+    }
+  }
+
+  /** result 轮终态：success → completed；error_during_execution+已请求中断 → 已取消（GUI 非报错，PoC 7 T2）；其余 → session_error */
+  private handleResult(s: SessionState, msg: Record<string, unknown>): void {
+    const subtype = String(msg.subtype ?? "");
+    if (subtype === "success") {
+      this.finishTurn(s, "completed");
+      this.scheduleLateHookScan(s);
+      return;
+    }
+    if (subtype === "error_during_execution" && s.interruptRequested) {
+      this.finishTurn(s, "interrupted");
+      return;
+    }
+    this.emit(s, {
+      type: "session_error",
+      code: "E_CLAUDE_TURN",
+      message: String(msg.result ?? `claude turn 失败（${subtype || "unknown"}）`),
+    });
+    this.finishTurn(s, "failed");
+    this.scheduleLateHookScan(s);
+  }
+
+  /** CLI→host 控制请求：can_use_tool 审批（--permission-prompt-tool=stdio 前提） */
+  private handleControlRequest(s: SessionState, msg: Record<string, unknown>): void {
+    const request = (msg.request ?? {}) as Record<string, unknown>;
+    if (request.subtype !== "can_use_tool") {
+      this.log("unknown-control-request", String(request.subtype ?? ""));
+      return;
+    }
+    const requestId = String(msg.request_id ?? "");
+    if (!requestId) return;
+    const toolName = String(request.tool_name ?? "");
+    const input = (request.input ?? {}) as Record<string, unknown>;
+    const itemId = typeof request.tool_use_id === "string" ? request.tool_use_id : `ap-${requestId}`;
+    const suggestions = Array.isArray(request.permission_suggestions) ? (request.permission_suggestions as Record<string, unknown>[]) : [];
+    const addRules = suggestions.find((x) => x.type === "addRules") ?? null;
+    this.emit(s, {
+      type: "approval_requested",
+      requestId,
+      itemId,
+      command: describeCommand(toolName, input),
+      suggestions: suggestions.map(mapSuggestion),
+    });
+    this.emit(s, { type: "session_status", status: "waiting" });
+    s.pendingApprovals.set(requestId, {
+      requestId,
+      itemId,
+      decided: false,
+      addRules,
+      respond: (wire) => s.client?.respondControlRequest(requestId, wire),
+    });
+  }
+
+  /* ---------------- 内部：turn 驱动与终态 ---------------- */
+
+  private startTurn(s: SessionState, text: string): void {
+    s.turnActive = true;
+    s.interruptRequested = false;
+    this.emit(s, { type: "session_status", status: "running" });
+    this.emit(s, { type: "turn_started", turnId: `t-${randomUUID().slice(0, 8)}` });
+    s.client?.sendUser(text);
+  }
+
+  /** turn 终态统一收尾（interrupted/failed 丢弃排队，completed 续发） */
+  private finishTurn(s: SessionState, status: "completed" | "interrupted" | "failed"): void {
+    s.turnActive = false;
+    s.interruptRequested = false;
+    // 防护：终态后残留审批强制拒绝（CLI 进程侧无害；UI 不留挂起卡）
+    for (const entry of s.pendingApprovals.values()) {
+      entry.decided = true;
+      s.deniedToolIds.add(entry.itemId);
+      entry.respond({ behavior: "deny", message: "turn 已结束" });
+    }
+    s.pendingApprovals.clear();
+    if (status === "interrupted") {
+      s.queue.length = 0;
+      this.emit(s, { type: "turn_interrupted", reason: "user" });
+      this.emit(s, { type: "session_status", status: "interrupted" });
+      return;
+    }
+    if (status === "failed") {
+      s.queue.length = 0; // 明确报错不重放（spec H）
+      this.emit(s, { type: "session_status", status: "idle" });
+      return;
+    }
+    this.emit(s, { type: "turn_completed" });
+    this.emit(s, { type: "session_status", status: "idle" });
+    const next = s.queue.shift();
+    if (next) this.startTurn(s, next);
+  }
+
+  /** 进程死亡：明确报错不重放；状态保留供 resume */
+  private handleProcessDeath(s: SessionState, err: Error): void {
+    if (s.dead) return;
+    s.dead = true;
+    s.queue.length = 0;
+    s.turnActive = false;
+    for (const entry of s.pendingApprovals.values()) {
+      this.emit(s, { type: "approval_expired", requestId: entry.requestId, reason: "session_dead" });
+    }
+    s.pendingApprovals.clear();
+    const exitCode = s.client?.exitInfo?.code;
+    this.emit(s, { type: "session_exit", exitCode: typeof exitCode === "number" ? exitCode : 1, reason: err.message });
+    this.emit(s, { type: "session_status", status: "disconnected" });
+  }
+
+  /* ---------------- 内部：hook verified 信号与 transcript 回填 ---------------- */
+
+  /** hook JSONL 增量消费 → transformHookEvents → verified SkillObservation（native sessionId → 应用侧映射；eventId 幂等） */
+  private tailHookEvents(s: SessionState): void {
+    const { lines, offset } = tailJsonl(s.hookFiles.eventsPath, s.hookOffset);
+    if (offset > s.hookOffset) s.hookOffset = offset;
+    if (lines.length === 0) return;
+    for (const ev of transformHookEvents(lines)) {
+      if (!ev.sessionId || !ev.skill) continue;
+      const owner = this.byNative.get(ev.sessionId);
+      if (!owner || owner.sessionId !== s.sessionId) continue; // 他会话 hook 行不误认
+      this.emitObservation(owner, {
+        eventId: ev.eventId,
+        skill: ev.skill,
+        evidenceLevel: "verified",
+        source: "claude-hook",
+        occurredAt: ev.occurredAt,
+      });
+    }
+  }
+
+  /** result 后延迟复扫（PostToolUse hook 进程与 result 消息存在写入竞态） */
+  private scheduleLateHookScan(s: SessionState): void {
+    setTimeout(() => {
+      if (!s.dead) this.tailHookEvents(s);
+    }, 500).unref();
+  }
+
+  /** transcript 直读回填：与本进程实时流同键去重后补入事件日志（快照+增量无缝拼接，不变量 4） */
+  private backfillFromTranscript(s: SessionState): void {
+    const file = findTranscriptFile(s.nativeSessionId, s.cwd);
+    if (!file) return;
+    let content: string;
+    try {
+      content = readFileSync(file, "utf8");
+    } catch {
+      return; // CLI 并发写入窗口的极端读取失败：本轮跳过（下次 readHistory 重试）
+    }
+    const existing = new Set<string>();
+    for (const e of s.log) {
+      if (e.type === "message_delta" || e.type === "message_completed") existing.add(`msg:${e.itemId}:${e.partId}`);
+      else if (e.type === "tool_started" || e.type === "tool_completed") existing.add(`tool:${e.itemId}`);
+    }
+    for (const turn of parseTranscriptItems(content)) {
+      const unseen = turn.items.filter((item) => item.dedupeKeys.some((k) => !existing.has(k)));
+      if (unseen.length === 0) continue; // 该轮已全部实时见过 → 整轮跳过（无重复）
+      this.emit(s, { type: "turn_started", turnId: `t-${randomUUID().slice(0, 8)}` }, turn.at);
+      for (const item of turn.items) {
+        for (const { seed, at } of item.seeds) this.emit(s, seed, at);
+      }
+      this.emit(s, { type: "turn_completed" }, turn.at);
+    }
+  }
+
+  /* ---------------- 内部：事件与工具 ---------------- */
+
+  /** ChatEvent 唯一出口：seq 单调 + at（可指定 transcript 时间戳）+ 广播；SkillObservation 直发订阅者不入日志 */
+  private emit(s: SessionState, ev: ChatEventSeed, at?: string): void {
+    s.seq += 1;
+    const full = { ...ev, sessionId: s.sessionId, seq: s.seq, at: at ?? new Date().toISOString() } as ChatEvent;
+    s.log.push(full);
+    for (const h of this.handlers) h(full);
+  }
+
+  private emitObservation(s: SessionState, base: { eventId: string; skill: string; evidenceLevel: "verified" | "self_reported"; source: string; occurredAt: string }): void {
+    const obs: SkillObservation = {
+      eventId: base.eventId,
+      kind: "skill",
+      sessionId: s.sessionId,
+      cli: "claude-code",
+      skill: base.skill,
+      stage: null,
+      requirementId: null,
+      occurredAt: base.occurredAt,
+      receivedAt: new Date().toISOString(),
+      seq: null,
+      evidenceLevel: base.evidenceLevel,
+      source: base.source,
+    };
+    for (const h of this.handlers) h(obs);
+  }
+
+  private requireSession(sessionId: string): SessionState {
+    const s = this.sessions.get(sessionId);
+    if (!s) throw new AdapterError("E_SESSION_NOT_FOUND", `会话不存在：${sessionId}`);
+    return s;
+  }
+
+  private requireLiveSession(sessionId: string): SessionState {
+    const s = this.requireSession(sessionId);
+    if (s.dead || !s.client || s.client.dead) {
+      throw new AdapterError("E_INTERNAL", "Claude 进程已退出，会话已断开（请读取原生历史恢复或新建会话）");
+    }
+    return s;
+  }
+}
+
+/* ---------------- wire 映射工具 ---------------- */
+
+/** 统一审批决定 → can_use_tool wire 响应（SDK PermissionResult 形状；allow-always 原样回传 CLI 建议的 addRules 规则，语义不换写） */
+function approvalWire(decision: string, entry: PendingApproval): unknown {
+  if (decision === "allow-once") return { behavior: "allow" };
+  if (decision === "allow-always") {
+    return entry.addRules
+      ? { behavior: "allow", updatedPermissions: [entry.addRules] }
+      : { behavior: "allow" }; // CLI 未给规则建议：退化为本次放行
+  }
+  return { behavior: "deny", message: "用户在 kanban-desktop 拒绝了该操作" };
+}
+
+/** 审批卡命令摘要：按工具取最具信息量的输入字段 */
+function describeCommand(toolName: string, input: Record<string, unknown>): string {
+  const pick = (...keys: string[]): string | null => {
+    for (const k of keys) {
+      const v = input[k];
+      if (typeof v === "string" && v.length > 0) return v;
+    }
+    return null;
+  };
+  const described = pick("command", "file_path", "notebook_path", "path", "url", "skill", "command_name", "pattern", "prompt", "description");
+  if (described) return `${toolName}: ${described}`;
+  const json = safeJson(input);
+  return json ? `${toolName}: ${json.slice(0, 120)}` : toolName;
+}
+
+/** permission_suggestions（addRules/addDirectories）→ 审批建议项（spec I-5 建议行） */
+function mapSuggestion(s: Record<string, unknown>): ApprovalSuggestion {
+  if (s.type === "addRules" && Array.isArray(s.rules)) {
+    const rules = s.rules as Array<{ toolName?: string; ruleContent?: string }>;
+    const label = rules.map((r) => `${r.toolName ?? ""}(${r.ruleContent ?? ""})`).join(" ").trim();
+    return { kind: "rule", label: label || "允许同类操作", detail: `总是允许（${String(s.destination ?? "session")}）` };
+  }
+  if (s.type === "addDirectories" && Array.isArray(s.directories)) {
+    return { kind: "directory", label: (s.directories as string[]).join("、"), detail: "允许访问以下目录（本会话）" };
+  }
+  return { kind: String(s.type ?? "other"), label: safeJson(s).slice(0, 80), detail: "" };
+}
+
+function flattenToolResult(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return (content as Record<string, unknown>[]).map((c) => (typeof c.text === "string" ? c.text : "")).join("");
+  }
+  return safeJson(content);
+}
+
+function safeJson(v: unknown): string {
+  try {
+    return JSON.stringify(v) ?? "";
+  } catch {
+    return "";
+  }
+}

@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@kanban/ipc-schema": "workspace:*"
+    "@kanban/ipc-schema": "workspace:*",
+    "@kanban/tracker": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24",

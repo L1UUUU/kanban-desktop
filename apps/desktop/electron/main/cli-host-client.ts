@@ -59,6 +59,8 @@ export interface CliHostClientOptions {
   dataDir: string;
   /** config cliExe.codex 手动覆盖（经 env 传给 worker） */
   codexExe?: string | null;
+  /** config cliExe.claude 手动覆盖（经 env 传给 worker） */
+  claudeExe?: string | null;
   /** 诊断日志 */
   log?: (kind: string, detail: string) => void;
 }
@@ -86,6 +88,7 @@ export class CliHostClient implements CliAdapter {
     // env 传参：worker 侧 createDesktopAdapterFactory 读取（utilityProcess 继承父 env）
     process.env.KANBAN_DATA_DIR = options.dataDir;
     if (options.codexExe) process.env.KANBAN_CODEX_BIN = options.codexExe;
+    if (options.claudeExe) process.env.KANBAN_CLAUDE_BIN = options.claudeExe;
     this.proc = utilityProcess.fork(options.workerPath, [], { serviceName: "cli-host" });
     this.proc.on("message", (msg: unknown) => this.onMessage(msg));
     this.proc.on("exit", (code) => {

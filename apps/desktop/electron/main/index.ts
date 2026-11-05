@@ -22,17 +22,17 @@ function createHostedAdapter(appConfig: AppConfig): CliAdapter {
   const workerPath = join(__dirname, "cli-host-worker.js");
   if (existsSync(workerPath)) {
     try {
-      return new CliHostClient({ workerPath, dataDir, codexExe: appConfig.cliExe.codex });
+      return new CliHostClient({ workerPath, dataDir, codexExe: appConfig.cliExe.codex, claudeExe: appConfig.cliExe.claude });
     } catch (e) {
       console.error(`[cli-host] utilityProcess 托管不可用，回退进程内：${e instanceof Error ? e.message : String(e)}`);
     }
   }
   return new AdapterRouter(
-    createDesktopAdapterFactory({ codexExe: appConfig.cliExe.codex, cacheDir: dataDir, log: (k, d) => console.error(`[cli-host:${k}] ${d}`) }),
+    createDesktopAdapterFactory({ codexExe: appConfig.cliExe.codex, claudeExe: appConfig.cliExe.claude, cacheDir: dataDir, log: (k, d) => console.error(`[cli-host:${k}] ${d}`) }),
   );
 }
 
-// Adapter 门面：fake/codex 经 CliHost 分发（utilityProcess 托管；KANBAN_DISABLE_CODEX=1 时 codex 回落 Fake 演示模式）
+// Adapter 门面：fake/codex/claude 经 CliHost 分发（utilityProcess 托管；KANBAN_DISABLE_CODEX/KANBAN_DISABLE_CLAUDE=1 时对应 CLI 回落 Fake 演示模式）
 let adapter: CliAdapter;
 
 let mainWindow: BrowserWindow | null = null;

@@ -20,7 +20,8 @@ async function launchApp(): Promise<{ app: ElectronApplication; win: Page; clean
   const { userData, repoDir } = makeFixture();
   const app = await _electron.launch({
     args: [resolve(__dirname, "..")],
-    env: { ...process.env, KANBAN_USER_DATA: userData, KANBAN_TEST_PICK_DIRECTORY: repoDir },
+    // KANBAN_DISABLE_CLAUDE=1：Claude 走 Fake 演示模式——本套验证 UI 行为，真实 Claude 链路由 cli-host e2e（KANBAN_E2E=1）覆盖
+    env: { ...process.env, KANBAN_USER_DATA: userData, KANBAN_TEST_PICK_DIRECTORY: repoDir, KANBAN_DISABLE_CLAUDE: "1" },
   });
   const win = await app.firstWindow();
   // 空态引导 → 注册 → 项目行；再经「＋」菜单建首个会话（原型一致项 2）

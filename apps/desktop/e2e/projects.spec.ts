@@ -36,6 +36,7 @@ async function launchApp(userData: string, repoDir?: string): Promise<{ app: Ele
       ...process.env,
       KANBAN_USER_DATA: userData,
       KANBAN_DISABLE_CODEX: "1",
+      KANBAN_DISABLE_CLAUDE: "1",
       ...(repoDir ? { KANBAN_TEST_PICK_DIRECTORY: repoDir } : {}),
     },
   });

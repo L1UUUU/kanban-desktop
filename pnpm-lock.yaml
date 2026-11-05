@@ -102,6 +102,9 @@ importers:
       '@kanban/ipc-schema':
         specifier: workspace:*
         version: link:../ipc-schema
+      '@kanban/tracker':
+        specifier: workspace:*
+        version: link:../tracker
     devDependencies:
       '@types/node':
         specifier: ^24
