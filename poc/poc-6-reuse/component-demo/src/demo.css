@@ -1,0 +1,94 @@
+/* 演示页布局 + PI-Desktop turn-changes.css 所需的最小设计 token（上游 28 个
+   ds/radius/font/text 系列 CSS 变量的浅色近似值，仅用于证明 CSS 可脱离
+   上游主题系统渲染）。 */
+
+:root {
+  --chat-prose-max-width: 720px;
+  --radius-lg: 10px;
+  --radius-sm: 6px;
+  --ds-tile: #f4f5f7;
+  --ds-bg-hover: #e9ebee;
+  --ds-text-primary: #1c1e26;
+  --ds-text-secondary: #444753;
+  --ds-text-muted: #6b6f7e;
+  --ds-text-faint: #8b8f9e;
+  --ds-focus: #3b6ef0;
+  --font-mono: "JetBrains Mono", Consolas, monospace;
+  --font-sans: system-ui, "Segoe UI", sans-serif;
+  --text-2xs: 10.5px;
+  --text-xs-plus: 11.5px;
+  --text-sm: 12.5px;
+  --font-weight-semibold: 600;
+  --motion-duration-fast: 120ms;
+  --motion-ease-out: ease-out;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background: #fafbfc;
+  color: var(--ds-text-primary);
+}
+
+.demo-page {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 24px 20px 60px;
+}
+
+.demo-section {
+  margin-top: 28px;
+}
+
+.demo-note {
+  color: var(--ds-text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.demo-log {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: #eef1f6;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.demo-terminal {
+  height: 340px;
+  border: 1px solid #d8dbe3;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+/* demo 最小按钮（替代上游 Tailwind 按钮体系） */
+.demo-button {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.demo-button-ghost:hover {
+  background: var(--ds-bg-hover);
+}
+
+/* diff 计数徽标（上游 turn-changes.css 引用的相邻类） */
+.diff-counts {
+  display: inline-flex;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+
+.diff-count-add { color: #1a7f37; }
+.diff-count-del { color: #cf222e; }
+
+/* ReviewFileIcon 的容器对齐（上游由 Tailwind 提供） */
+.review-file-type {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--ds-text-muted);
+}

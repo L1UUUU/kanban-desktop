@@ -1,0 +1,25 @@
+{
+  "name": "poc6-component-demo",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "PoC 6: 独立编译实测——从 PI-Desktop 与旧 Kanban 抽离组件的最小 Vite+React 工程",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^5.5.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^4.6.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.6"
+  }
+}
