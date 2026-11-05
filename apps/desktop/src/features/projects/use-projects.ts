@@ -11,6 +11,8 @@ export interface ProjectsController {
   currentProject: ProjectRow | null;
   /** 操作反馈（注册重复/切换失败等；一次性文案，渲染后可清） */
   notice: string | null;
+  /** 写入一次性提示（工作区把「项目不存在」等新建拒绝原因落到侧栏提示区） */
+  setNotice(message: string | null): void;
   refresh(): Promise<void>;
   register(): Promise<RegisterOutcome>;
   switchTo(projectId: string): Promise<void>;
@@ -77,5 +79,5 @@ export function useProjects(transport: ChatTransport | null): ProjectsController
 
   const currentProject = projects.find((p) => p.id === currentProjectId) ?? null;
 
-  return { projects, currentProjectId, currentProject, notice, refresh, register, switchTo };
+  return { projects, currentProjectId, currentProject, notice, setNotice, refresh, register, switchTo };
 }

@@ -8,6 +8,8 @@ export const appInfoSchema = z.object({
   chrome: z.string(),
   platform: z.string(),
   sqliteEntry: z.string(),
+  /** Fake 演示会话 cwd（Main 注入：env KANBAN_FAKE_DEMO_CWD 覆盖、缺省用户主目录；renderer 不内置任何路径） */
+  fakeDemoCwd: z.string(),
 });
 
 export type AppInfo = z.infer<typeof appInfoSchema>;

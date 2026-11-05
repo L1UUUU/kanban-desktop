@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AdapterEvent, IpcRequest, IpcResult, TerminalEvent } from "@kanban/ipc-schema";
+import type { AdapterEvent, IpcRequest, IpcResult, ProjectRow, TerminalEvent } from "@kanban/ipc-schema";
 import { FakeAdapter, VirtualClock } from "@kanban/cli-host";
 import { openDatabase } from "../../../electron/main/db";
 import { handleIpc, type IpcDeps } from "../../../electron/main/ipc";
@@ -14,7 +14,7 @@ import { ProjectStore } from "../../../electron/main/project-store";
 import { SessionStore } from "../../../electron/main/session-store";
 import { ChatWorkspace } from "./ChatWorkspace";
 import type { ChatController } from "./use-chat";
-import { FAKE_DEMO_CWD } from "./use-chat";
+import { resolveSessionCwd } from "./use-chat";
 import type { ChatTransport } from "../../lib/kanban-api";
 import { useProjects } from "../projects/use-projects";
 
@@ -139,6 +139,9 @@ function makeTransport(
   };
 }
 
+// 测试注入的演示 cwd（等价生产 AppInfo.fakeDemoCwd：Main 经 KANBAN_FAKE_DEMO_CWD/主目录注入，renderer 不内置任何路径）
+const DEMO_CWD = join(tmpdir(), "kb-fake-demo");
+
 /** 挂载工作区（含真实 useProjects host）并暴露 controller（供测试直接驱动动作） */
 function mount(transport?: ChatTransport) {
   const clock = new VirtualClock();
@@ -150,7 +153,7 @@ function mount(transport?: ChatTransport) {
   };
   function Host() {
     const projects = useProjects(tr);
-    return <ChatWorkspace transport={tr} projects={projects} onController={onController} />;
+    return <ChatWorkspace transport={tr} projects={projects} demoCwd={DEMO_CWD} onController={onController} />;
   }
   render(<Host />);
   const ctl = (): ChatController => {
@@ -358,7 +361,7 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     await t.flush();
     expect(screen.queryByText(/OpenCode 权限档位为 server 级/)).toBeNull(); // fake 会话不显示
     await act(async () => {
-      await t.ctl().createSession("opencode", { cwd: FAKE_DEMO_CWD, title: "演示会话 · OpenCode" });
+      await t.ctl().createSession("opencode", { cwd: DEMO_CWD, title: "演示会话 · OpenCode" });
     });
     expect(screen.getByText(/OpenCode 权限档位为 server 级（同项目下会话共享）；切换后新会话生效/)).toBeTruthy();
     // 切回 fake 会话：说明消失
@@ -397,6 +400,29 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     await t.flush();
     expect(screen.getByText("新会话 · Fake")).toBeTruthy();
     expect(screen.getAllByText("新会话 · Fake").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("真实 CLI 无显式 cwd：拒绝创建（不得以任何隐式演示目录创建真实会话，code-review 硬违规回归）", async () => {
+    const t = mount();
+    await t.flush();
+    const before = t.ctl().sessions.length;
+    await act(async () => {
+      await t.ctl().createSession("claude");
+    });
+    await t.flush();
+    expect(t.ctl().sessions.length).toBe(before);
+  });
+
+  it("Fake 无显式 cwd：用注入的演示目录创建（cwd 来自注入而非 renderer 内置路径）", async () => {
+    const t = mount();
+    await t.flush();
+    await act(async () => {
+      await t.ctl().createSession("fake");
+    });
+    await t.flush();
+    const created = t.ctl().sessions.filter((s) => s.title === "新会话 · Fake");
+    expect(created).toHaveLength(1);
+    expect(created[0]?.cwd).toBe(DEMO_CWD);
   });
 
   it("IPC 错误结果展示：发送失败（错误码）在聊天区显示错误提示", async () => {
@@ -680,5 +706,25 @@ describe("主仓库并行冲突提示条（spec I-4/#13）", () => {
     });
     await t.flush();
     expect(screen.queryByTestId("conflict-banner")).toBeNull();
+  });
+});
+
+describe("「＋」新建 cwd 解析（resolveSessionCwd：项目查不到不回退任何路径，code-review 硬违规回归）", () => {
+  const proj: ProjectRow = { id: "p1", name: "repo", canonicalPath: "C:\\repo", status: "ok", createdAt: "2026-01-01T00:00:00Z" };
+
+  it("项目在列表：返回 canonicalPath", () => {
+    expect(resolveSessionCwd([proj], "p1", "claude", null)).toBe("C:\\repo");
+    expect(resolveSessionCwd([proj], "p1", "pty", null)).toBe("C:\\repo");
+  });
+
+  it("项目查不到 + 真实 CLI/PTY：返回 null（不得回退演示目录或任何内置路径）", () => {
+    expect(resolveSessionCwd([proj], "ghost", "claude", "C:\\demo")).toBeNull();
+    expect(resolveSessionCwd([proj], "ghost", "codex", "C:\\demo")).toBeNull();
+    expect(resolveSessionCwd([proj], "ghost", "pty", "C:\\demo")).toBeNull();
+  });
+
+  it("项目查不到 + Fake：回落注入的演示 cwd；未注入则 null", () => {
+    expect(resolveSessionCwd([proj], "ghost", "fake", "C:\\demo")).toBe("C:\\demo");
+    expect(resolveSessionCwd([proj], "ghost", "fake", null)).toBeNull();
   });
 });

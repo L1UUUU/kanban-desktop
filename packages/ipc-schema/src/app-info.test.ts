@@ -10,6 +10,7 @@ const validInput = {
   chrome: "148.0.7000.0",
   platform: "win32",
   sqliteEntry: "DatabaseSync",
+  fakeDemoCwd: "C:\\Users\\demo",
 };
 
 describe("appInfoSchema 往返", () => {

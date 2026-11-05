@@ -1,11 +1,9 @@
 // 用途：聊天控制器 hook —— transport → ChatStore 接线：启动恢复（session:list 断开会话登记）+ 无项目时 boot 演示会话 + 全部会话始终归并（切会话不中断，一致项 7），动作经 IPC 单通道发出
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { AdapterEvent, ApprovalDecision, ChatEvent, CliKind, IpcResult, PermMode } from "@kanban/ipc-schema";
+import type { AdapterEvent, ApprovalDecision, ChatEvent, CliKind, IpcResult, PermMode, ProjectRow } from "@kanban/ipc-schema";
 import type { ChatTransport } from "../../lib/kanban-api";
 import { ChatStore, type SessionView } from "./chat-store";
 
-// Fake 演示会话的项目目录（无项目时的 boot 链路；真实会话 cwd 一律来自已注册项目）
-export const FAKE_DEMO_CWD = "C:\\project2\\kanban-desktop";
 export const DEFAULT_MODEL = "默认模型";
 
 /** createSession 可选项（cwd 必填：挂当前项目的会话传项目 canonicalPath） */
@@ -38,30 +36,45 @@ export interface ChatController extends ChatControllerActions {
   store: ChatStore;
 }
 
+/**
+ * 「＋」新建的 cwd 解析：项目在列表 → canonicalPath；查不到（DB 重置后残留 id 等）不回退任何路径——
+ * 真实 CLI/PTY 返回 null 由调用方提示「项目不存在」并拒绝新建，仅 Fake 回落注入的演示 cwd
+ */
+export function resolveSessionCwd(projects: ProjectRow[], projectId: string, cli: CliKind | "pty", demoCwd: string | null): string | null {
+  const canonical = projects.find((p) => p.id === projectId)?.canonicalPath;
+  if (canonical) return canonical;
+  return cli === "fake" ? demoCwd : null;
+}
+
 /** ChatEvent 判别（SkillObservation 无 type 判别字段） */
 function isChatEvent(e: AdapterEvent): e is ChatEvent {
   return "type" in e;
 }
 
-export function useChatController(transport: ChatTransport | null): ChatController {
+/**
+ * 聊天控制器 hook。demoCwd 为 Fake 演示会话 cwd（App 层经 AppInfo 注入：Main 读 KANBAN_FAKE_DEMO_CWD、
+ * 缺省用户主目录）；未注入（null/undefined）前不自举 boot 演示会话，真实会话 cwd 一律来自已注册项目。
+ */
+export function useChatController(transport: ChatTransport | null, demoCwd: string | null = null): ChatController {
   // useState 初始化器保证每 hook 实例一个 store（渲染期可安全读取）
   const [store] = useState(() => new ChatStore());
   const snap = useSyncExternalStore(store.subscribe, store.getSnapshot);
   // 启动自举一次性标记（仅 effect 内读写：StrictMode 双挂载下只跑一次，订阅仍每次重建）
   const bootRef = useRef(false);
 
-  // 事件订阅 + 启动自举：事件对全部会话始终归并（与激活视图无关 —— 切换不停止）
+  // 事件订阅 + 启动自举：事件对全部会话始终归并（与激活视图无关 —— 切换不停止）；
+  // 自举等 demoCwd 注入到位（AppInfo 异步拉取）再跑，避免演示会话缺失或以未知目录创建
   useEffect(() => {
     if (!transport) return;
     const off = transport.onEvent((e) => {
       if (isChatEvent(e)) store.applyEvent(e);
     });
-    if (!bootRef.current) {
+    if (!bootRef.current && demoCwd !== null) {
       bootRef.current = true;
-      void bootstrap(transport, store);
+      void bootstrap(transport, store, demoCwd);
     }
     return off;
-  }, [transport, store]);
+  }, [transport, store, demoCwd]);
 
   const actions = useMemo<ChatControllerActions>(() => {
     const activeId = (): string | null => store.getSnapshot().activeId;
@@ -99,7 +112,13 @@ export function useChatController(transport: ChatTransport | null): ChatControll
       },
       createSession: async (cli, opts) => {
         if (!transport) return;
-        await createCliSession(transport, store, cli, opts ?? { cwd: FAKE_DEMO_CWD });
+        // cwd 必须显式携带，或（仅 fake）回落注入的演示目录；真实 CLI 缺 cwd 直接拒绝，不以任何隐式路径创建
+        const resolved = opts ?? (cli === "fake" && demoCwd ? { cwd: demoCwd } : null);
+        if (!resolved) {
+          console.error("[kanban] 会话创建失败：缺少 cwd（真实会话须挂已注册项目，演示目录未注入）");
+          return;
+        }
+        await createCliSession(transport, store, cli, resolved);
       },
       switchTo: (sessionId) => store.setActive(sessionId),
       setPerm: (mode) => {
@@ -125,15 +144,15 @@ export function useChatController(transport: ChatTransport | null): ChatControll
         }
       },
     };
-  }, [transport, store]);
+  }, [transport, store, demoCwd]);
 
   const activeSession = snap.activeId ? (store.getSession(snap.activeId) ?? null) : null;
 
   return { ...actions, sessions: snap.sessions, activeSession, activeId: snap.activeId, version: snap.version, store };
 }
 
-/** 启动自举：恢复 DB 历史会话（统一断开态）；无项目且无历史时建 Fake 演示会话（#6 链路保持） */
-async function bootstrap(transport: ChatTransport, store: ChatStore): Promise<void> {
+/** 启动自举：恢复 DB 历史会话（统一断开态）；无项目且无历史时用注入的 demoCwd 建 Fake 演示会话（#6 链路保持） */
+async function bootstrap(transport: ChatTransport, store: ChatStore, demoCwd: string): Promise<void> {
   const [projRes, sessRes] = await Promise.all([
     transport.invoke({ channel: "project:list" }),
     transport.invoke({ channel: "session:list" }),
@@ -143,7 +162,7 @@ async function bootstrap(transport: ChatTransport, store: ChatStore): Promise<vo
   }
   const hasProjects = projRes.ok && (projRes.projects?.length ?? 0) > 0;
   if (!hasProjects && store.getSnapshot().sessions.length === 0) {
-    await createCliSession(transport, store, "fake", { cwd: FAKE_DEMO_CWD, title: "演示会话 · Fake" });
+    await createCliSession(transport, store, "fake", { cwd: demoCwd, title: "演示会话 · Fake" });
   }
 }
 

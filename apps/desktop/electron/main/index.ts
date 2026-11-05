@@ -2,6 +2,7 @@
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import * as nodePty from "node-pty";
 import { appInfoSchema, shutdownNoticeSchema, terminalEventSchema } from "@kanban/ipc-schema";
@@ -199,6 +200,8 @@ app.whenReady().then(async () => {
       chrome: process.versions.chrome,
       platform: process.platform,
       sqliteEntry: SQLITE_ENTRY,
+      // Fake 演示会话 cwd：e2e/部署经 KANBAN_FAKE_DEMO_CWD 固定；缺省用户主目录（不内置开发机路径）
+      fakeDemoCwd: process.env.KANBAN_FAKE_DEMO_CWD || homedir(),
     }),
   );
   ipcMain.handle("kanban:ipc", (_event, raw: unknown) => handleIpc(deps, raw));

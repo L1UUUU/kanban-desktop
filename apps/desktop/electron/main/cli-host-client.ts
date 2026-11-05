@@ -1,6 +1,6 @@
 // 用途：Main 侧 CliHost 托管客户端 —— utilityProcess fork worker（ADR-0001 形态）+ Windows Job Object 绑定（t0-01 验证策略）+ CliAdapter 远程代理（Renderer/路由无感托管形态）
 import { spawn } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AdapterEvent, ChatEvent } from "@kanban/ipc-schema";
@@ -235,4 +235,3 @@ export class CliHostClient implements CliAdapter {
 
 /** 供测试/降级路径写 guard 脚本（显式导出脚本常量以便断言 ASCII-only） */
 export { JOB_GUARD_PS as JOB_GUARD_SCRIPT };
-void mkdirSync;

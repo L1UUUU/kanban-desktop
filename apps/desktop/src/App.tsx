@@ -31,7 +31,12 @@ export function App() {
           正在退出应用：已停止接收新请求，正在有序结束会话…
         </div>
       ) : null}
-      <ChatWorkspace transport={transport} projects={projects} sidebarFooter={<AppInfoLine info={info} />} />
+      <ChatWorkspace
+        transport={transport}
+        projects={projects}
+        demoCwd={info?.fakeDemoCwd ?? null}
+        sidebarFooter={<AppInfoLine info={info} />}
+      />
     </div>
   );
 }
