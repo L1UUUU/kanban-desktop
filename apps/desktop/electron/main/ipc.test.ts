@@ -149,6 +149,33 @@ describe("Main 入站强制校验", () => {
     expect(res2.ok).toBe(false);
     if (!res2.ok) expect(res2.error.code).toBe("E_INTERNAL");
   });
+
+  it("session:readHistory：返回 adapter 快照（与实时流同键同 seq）；未知会话 → E_SESSION_NOT_FOUND；session:resume ok（#9 恢复入口）", async () => {
+    const { clock, handle } = makeRouter();
+    const created = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p" });
+    const sessionId = created.ok ? created.sessionId! : "";
+    await handle({ channel: "session:send", sessionId, text: "默认演示" });
+    clock.runToIdle();
+
+    const read = await handle({ channel: "session:readHistory", sessionId });
+    expect(read.ok).toBe(true);
+    if (read.ok) {
+      expect(read.events!.length).toBeGreaterThan(0);
+      // 快照成员形状与终态一致（契约：事件日志 = 消息流恢复源）
+      const seqs = read.events!.map((e) => e.seq);
+      expect([...seqs].sort((a, b) => a - b)).toEqual(seqs);
+      expect(read.events!.at(-1)!.type).toBe("session_status");
+    }
+    const resume = await handle({ channel: "session:resume", sessionId });
+    expect(resume.ok).toBe(true);
+
+    const ghostRead = await handle({ channel: "session:readHistory", sessionId: "ghost" });
+    expect(ghostRead.ok).toBe(false);
+    if (!ghostRead.ok) expect(ghostRead.error.code).toBe("E_SESSION_NOT_FOUND");
+    const ghostResume = await handle({ channel: "session:resume", sessionId: "ghost" });
+    expect(ghostResume.ok).toBe(false);
+    if (!ghostResume.ok) expect(ghostResume.error.code).toBe("E_SESSION_NOT_FOUND");
+  });
 });
 
 describe("project 通道（#7）", () => {

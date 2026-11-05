@@ -1,6 +1,6 @@
 // 用途：IPC 请求/结果/错误码契约 —— 单通道 kanban:ipc + channel 判别（spec E/C4；错误码形状由 ipc-schema 定义，不变量 6）
 import { z } from "zod";
-import { approvalDecisionSchema, permModeSchema, sessionIdSchema, sessionStatusSchema } from "./chat";
+import { approvalDecisionSchema, chatEventSchema, permModeSchema, sessionIdSchema, sessionStatusSchema } from "./chat";
 
 // 首版错误码：E_SCHEMA 入站不合契约 / E_SESSION_NOT_FOUND 未知会话 / E_APPROVAL_EXPIRED 过期或已决审批 / E_PROJECT_NOT_FOUND 未知项目 / E_INTERNAL 兜底
 export const ERROR_CODES = [
@@ -72,6 +72,10 @@ export const ipcRequestSchema = z.discriminatedUnion("channel", [
     requestId: z.string().min(1),
     decision: approvalDecisionSchema,
   }),
+  /** 断开会话「读取原生历史并恢复」：readHistory 快照（不变量 4，消息流恢复，缓存不替代原生历史） */
+  z.object({ channel: z.literal("session:readHistory"), sessionId: sessionIdSchema }),
+  /** 断开会话恢复续连：Adapter.resume 重连原生会话（真实 CLI 由 #8/#10/#11 实现，Fake 复位语义） */
+  z.object({ channel: z.literal("session:resume"), sessionId: sessionIdSchema }),
   z.object({ channel: z.literal("session:list"), projectId: z.string().min(1).optional() }),
   z.object({ channel: z.literal("project:list") }),
   /** 注册项目：Main 弹原生目录选择对话框，路径归一化与去重在 Main 侧完成 */
@@ -102,6 +106,8 @@ export const ipcOkSchema = z.object({
   projects: z.array(projectRowSchema).optional(),
   currentProjectId: z.string().nullable().optional(),
   sessions: z.array(sessionRowSchema).optional(),
+  /** session:readHistory 附带：原生历史快照（ChatEvent 日志，与实时流同键同 seq） */
+  events: z.array(chatEventSchema).optional(),
 });
 export type IpcOk = z.infer<typeof ipcOkSchema>;
 

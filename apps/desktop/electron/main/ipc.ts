@@ -123,6 +123,15 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
         decision: req.decision,
       });
       return { ok: true };
+    case "session:readHistory": {
+      // 断开会话恢复第一步：原生历史快照（不变量 4：与实时流同键同 seq，renderer 侧无缝拼接）
+      const events = await deps.adapter.readHistory(req.sessionId);
+      return { ok: true, events };
+    }
+    case "session:resume":
+      // 断开会话恢复第二步：重连原生会话（真实 CLI 语义由 #8/#10/#11 Adapter 实现）
+      await deps.adapter.resume(req.sessionId);
+      return { ok: true };
   }
 }
 

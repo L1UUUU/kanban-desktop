@@ -24,6 +24,8 @@ export interface ChatControllerActions {
   switchTo(sessionId: string): void;
   setPerm(mode: PermMode): void;
   setModel(model: string): void;
+  /** 断开会话「读取原生历史并恢复」：readHistory 快照重建消息流 → resume 重连（状态经实时事件流回 idle） */
+  resumeSession(sessionId: string): Promise<void>;
 }
 
 export interface ChatController extends ChatControllerActions {
@@ -105,6 +107,20 @@ export function useChatController(transport: ChatTransport | null): ChatControll
       setModel: (model) => {
         const id = activeId();
         if (id) store.updateSession(id, { model });
+      },
+      resumeSession: async (sessionId) => {
+        if (!transport) return;
+        // 第一步：读原生历史（事件溯源快照）重建消息流；第二步：resume 重连，状态经实时事件流回 idle
+        const r = await transport.invoke({ channel: "session:readHistory", sessionId });
+        if (!r.ok) {
+          store.setError(sessionId, r.error.code, r.error.message);
+          return;
+        }
+        store.applySnapshot(sessionId, r.events ?? []);
+        const r2 = await transport.invoke({ channel: "session:resume", sessionId });
+        if (!r2.ok) {
+          store.setError(sessionId, r2.error.code, r2.error.message);
+        }
       },
     };
   }, [transport, store]);

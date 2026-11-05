@@ -106,6 +106,15 @@ describe("ipcRequestSchema 最小消息集", () => {
     expect(() => ipcRequestSchema.parse({ ...req, decision: "approved" })).toThrow();
   });
 
+  it("session:readHistory / session:resume：仅需 sessionId（断开会话恢复入口，#9）", () => {
+    const read = { channel: "session:readHistory", sessionId: "s-1" };
+    expect(ipcRequestSchema.parse(read)).toEqual(read);
+    const resume = { channel: "session:resume", sessionId: "s-1" };
+    expect(ipcRequestSchema.parse(resume)).toEqual(resume);
+    expect(() => ipcRequestSchema.parse({ channel: "session:readHistory", sessionId: "" })).toThrow();
+    expect(() => ipcRequestSchema.parse({ channel: "session:resume" })).toThrow();
+  });
+
   it("未知 channel / 非 discriminated 对象被拒", () => {
     expect(() => ipcRequestSchema.parse({ channel: "session:nuke", sessionId: "s-1" })).toThrow();
     expect(() => ipcRequestSchema.parse(null)).toThrow();
@@ -159,5 +168,20 @@ describe("错误码与结果形状", () => {
     ).toMatchObject({ dirIdentity: "worktree", worktreeName: "poc7" });
     expect(ipcResultSchema.parse({ ok: true, sessions: [demoSession] })).toEqual({ ok: true, sessions: [demoSession] });
     expect(() => ipcResultSchema.parse({ ok: true, sessions: [{ ...demoSession, status: "busy" }] })).toThrow();
+  });
+
+  it("成功结果：session:readHistory 附 events（ChatEvent 快照数组，#9 恢复载荷）", () => {
+    const delta = {
+      sessionId: "s-1",
+      seq: 3,
+      at: "2026-11-05T10:00:03.000Z",
+      type: "message_delta",
+      itemId: "m-1",
+      partId: "0",
+      delta: "好的",
+    };
+    expect(ipcResultSchema.parse({ ok: true, events: [delta] })).toEqual({ ok: true, events: [delta] });
+    expect(() => ipcResultSchema.parse({ ok: true, events: [{ ...delta, seq: -1 }] })).toThrow();
+    expect(() => ipcResultSchema.parse({ ok: true, events: [{ ...delta, type: "made_up" }] })).toThrow();
   });
 });

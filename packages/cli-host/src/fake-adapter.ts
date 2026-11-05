@@ -1,5 +1,5 @@
 // 用途：FakeAdapter —— C1 契约的脚本化 mock 实现：事件溯源日志（readHistory=重放，天然满足不变量 4）、可注入时钟、演示脚本驱动（原型行为规格）
-import type { AdapterEvent, ChatEvent, ChatEventSeed, PermMode, SessionStatus } from "@kanban/ipc-schema";
+import type { AdapterEvent, ChatEvent, ChatEventSeed, PermMode, SessionStatus, SkillObservation } from "@kanban/ipc-schema";
 import { AdapterError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
 import { SystemClock, type FakeClock } from "./clock";
 import { pickScript, type ScriptStep } from "./fake-scripts";
@@ -318,6 +318,27 @@ export class FakeAdapter implements CliAdapter {
           : () => undefined;
         s.pendingApproval = { requestId, itemId, step, cancelExpire };
         return; // 暂停：不续排 tick，等 resolveApproval/过期
+      }
+      case "skill": {
+        // SkillObservation 直发订阅者：不入 chat 日志（readHistory 恢复的是消息流，skill 观察信号经 tracker stage_events 持久化）
+        const at = new Date(this.clock.now()).toISOString();
+        const obs: SkillObservation = {
+          eventId: randomId("sk"),
+          kind: "skill",
+          sessionId: s.sessionId,
+          cli: step.cli,
+          skill: step.skill,
+          stage: null,
+          requirementId: null,
+          occurredAt: at,
+          receivedAt: at,
+          seq: null,
+          evidenceLevel: step.evidenceLevel,
+          source: "fake-script",
+        };
+        for (const h of this.handlers) h(obs);
+        this.scheduleTick(s, STEP_DELAY_MS);
+        return;
       }
       case "error": {
         // 明确报错、不崩溃、不重放：丢弃脚本与队列，状态回空闲，不宣称 turn_completed

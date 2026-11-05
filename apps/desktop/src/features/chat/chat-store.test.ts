@@ -162,3 +162,66 @@ describe("chat-store 事件归并", () => {
     expect(store.getSnapshot()).not.toBe(snap1);
   });
 });
+
+describe("chat-store 断开会话恢复（#9：readHistory 快照 + 实时增量无缝拼接契约）", () => {
+  // 一个完整 Fake turn 的事件日志（两条助手消息 + 工具卡 + 状态流转）
+  const fullLog: ChatEvent[] = [
+    ev(1, { type: "turn_started", turnId: "t-1" }),
+    ev(2, { type: "message_delta", itemId: "m-1", partId: "0", delta: "基线全绿。" }),
+    ev(3, { type: "message_completed", itemId: "m-1", partId: "0" }),
+    ev(4, { type: "tool_started", itemId: "tl-1", tool: "Bash", argsSummary: "pnpm test" }),
+    ev(5, { type: "tool_update", itemId: "tl-1", outputDelta: " ✓ 3 passed\n" }),
+    ev(6, { type: "tool_completed", itemId: "tl-1", status: "completed", durationMs: 1200, output: "done" }),
+    ev(7, { type: "message_delta", itemId: "m-2", partId: "0", delta: "拆分" }),
+    ev(8, { type: "message_delta", itemId: "m-2", partId: "0", delta: "完成。" }),
+    ev(9, { type: "message_completed", itemId: "m-2", partId: "0" }),
+    ev(10, { type: "turn_completed" }),
+    ev(11, { type: "session_status", status: "idle" }),
+  ];
+
+  /** 断开会话登记（registerRestored 最小行） */
+  function makeRestored(): ChatStore {
+    const store = new ChatStore();
+    store.registerRestored({
+      id: "s-1",
+      kind: "structured",
+      cli: "fake",
+      nativeSessionId: null,
+      projectId: null,
+      title: "历史会话",
+      cwd: null,
+      permMode: "auto",
+      status: "idle",
+      lastActiveAt: null,
+      dirIdentity: "none",
+      worktreeName: null,
+    });
+    return store;
+  }
+
+  it("applySnapshot(前半) + 实时(后半) 拼接 == 全量重放终态（无重复无丢失，#9 契约断言）", () => {
+    // 参照：全新会话直接全量重放
+    const whole = makeStore();
+    for (const e of fullLog) whole.applyEvent(e);
+
+    // 被测：断开会话登记 → 快照重建（前 6 条，截在工具完成后）→ 实时增量续上（后 5 条）
+    const restored = makeRestored();
+    const k = 6;
+    restored.applySnapshot("s-1", fullLog.slice(0, k));
+    for (const e of fullLog.slice(k)) restored.applyEvent(e);
+
+    const a = whole.getSession("s-1")!;
+    const b = restored.getSession("s-1")!;
+    expect(b.items).toEqual(a.items); // 条目级终态相等（同一合并键归并，快照/实时无分叉）
+    expect(b.items).toHaveLength(3); // m-1 + 工具卡 + m-2（两条 delta 合并为一条）
+  });
+
+  it("applySnapshot 跳过状态类事件：断开态不被历史 session_status 冒充（resume 后由实时流驱动）", () => {
+    const store = makeRestored();
+    store.applySnapshot("s-1", fullLog); // 日志末尾有 session_status(idle)
+    expect(store.getSession("s-1")!.status).toBe("disconnected");
+    // resume 成功：实时 session_status(idle) 到达后转正常态
+    store.applyEvent(ev(12, { type: "session_status", status: "idle" }));
+    expect(store.getSession("s-1")!.status).toBe("idle");
+  });
+});

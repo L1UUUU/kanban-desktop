@@ -2,7 +2,7 @@
   "name": "@kanban/tracker",
   "version": "0.1.0",
   "private": true,
-  "description": "RequirementTracker 状态机 + Engine + SQLite Store（本工单仅建包占位，阶段 2 前保持薄壳）",
+  "description": "RequirementTracker 状态机 + TrackerEngine（事件落库/重启重放恢复）+ SQLite Store —— C2 归一化事件 schema（validateEvent）硬校验",
   "exports": {
     ".": "./src/index.ts"
   },
