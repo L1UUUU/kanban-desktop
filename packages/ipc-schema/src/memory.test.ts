@@ -59,8 +59,8 @@ const summaryRow = {
   proposedContent: null,
 };
 
-describe("memory:ipc 七请求联合（Main 入站强制校验形状）", () => {
-  it("七种请求的合法形状全部通过", () => {
+describe("memory:ipc 八请求联合（Main 入站强制校验形状）", () => {
+  it("八种请求的合法形状全部通过", () => {
     const reqs: unknown[] = [
       { channel: "memory:extract", requirementId: "REQ-001" },
       { channel: "memory:cancel", requirementId: "REQ-001" },
@@ -79,6 +79,8 @@ describe("memory:ipc 七请求联合（Main 入站强制校验形状）", () => 
       { channel: "memory:projectMemory", projectId: "P1", query: "spawn" },
       { channel: "memory:editAccepted", candidateId: "c1", claim: "修订后的 claim" },
       { channel: "memory:editAccepted", candidateId: "c1", scope: "修订后的范围" },
+      // 总结正文编辑（issue #38，spec #27 I-8/US13：requirementId + 完整正文，空白与否交 UI，非空下限在此守住）
+      { channel: "memory:editSummary", requirementId: "REQ-001", content: "# 人工编辑后的总结正文" },
     ];
     for (const raw of reqs) {
       expect(memoryRequestSchema.safeParse(raw).success).toBe(true);
@@ -95,6 +97,9 @@ describe("memory:ipc 七请求联合（Main 入站强制校验形状）", () => 
       { channel: "memory:resolveSummary", requirementId: "REQ-001", choice: "discard" },
       { channel: "memory:editAccepted", candidateId: "c1" }, // 至少一项编辑
       { channel: "memory:projectMemory" }, // 缺 projectId
+      { channel: "memory:editSummary", requirementId: "REQ-001" }, // 缺正文
+      { channel: "memory:editSummary", requirementId: "REQ-001", content: "" }, // 空正文
+      { channel: "memory:editSummary", requirementId: "", content: "正文" }, // 空需求标识
     ];
     for (const raw of bad) {
       expect(memoryRequestSchema.safeParse(raw).success).toBe(false);
@@ -153,7 +158,7 @@ describe("memory:ipc 结果形状（业务拒绝 ok:false + reason，不新增�
     expect(memoryResultSchema.safeParse({ ok: false, reason: "" }).success).toBe(false);
   });
 
-  it("成功结果：extract 启动 / cancel / 审核与编辑回候选 / 需求一次读 / 项目一次读 各载荷通过", () => {
+  it("成功结果：extract 启动 / cancel / 审核与编辑回候选 / 需求一次读 / 项目一次读 / editSummary 无载荷确认 各载荷通过", () => {
     const cases: unknown[] = [
       { ok: true, started: true, batchId: "b1" },
       { ok: true, cancelled: true },
@@ -161,6 +166,8 @@ describe("memory:ipc 结果形状（业务拒绝 ok:false + reason，不新增�
       { ok: true, batches: [batchRow], candidates: [candidateRow], summary: summaryRow },
       { ok: true, batches: [], candidates: [], summary: null },
       { ok: true, knowledge: [candidateRow], summaries: [summaryRow] },
+      // memory:editSummary / memory:resolveSummary 成功形状：ok:true 无附加载荷（UI 成功后经一次读刷新）
+      { ok: true },
     ];
     for (const raw of cases) {
       expect(memoryResultSchema.safeParse(raw).success).toBe(true);

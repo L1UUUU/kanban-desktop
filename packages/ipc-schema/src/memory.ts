@@ -1,4 +1,4 @@
-// 用途：memory wire 契约（issue #31，spec #27 H 节）—— memory:ipc 七请求单通道联合 + 结果形状（业务拒绝 ok:false + reason，不新增全局错误码）+ memory:event 推送（批次状态与段进度），对齐 kanban:ipc 既有模式（Main 入站 zod 强制校验）
+// 用途：memory wire 契约（issue #31，spec #27 H 节；#38 补 editSummary 总结编辑通道）—— memory:ipc 八请求单通道联合 + 结果形状（业务拒绝 ok:false + reason，不新增全局错误码）+ memory:event 推送（批次状态与段进度），对齐 kanban:ipc 既有模式（Main 入站 zod 强制校验）
 import { z } from "zod";
 
 // 批次状态（与 @kanban/memory BatchStatus 对齐：running 进行中 / completed 完整产出 / failed 整批失败 / cancelled 用户取消）
@@ -85,7 +85,7 @@ export const memorySummaryRowSchema = z.object({
 });
 export type MemorySummaryRow = z.infer<typeof memorySummaryRowSchema>;
 
-// memory:ipc 请求单通道七联合（对齐 kanban:ipc discriminatedUnion 模式；Main 入站强制校验）
+// memory:ipc 请求单通道八联合（对齐 kanban:ipc discriminatedUnion 模式；Main 入站强制校验）
 export const memoryRequestSchema = z.discriminatedUnion("channel", [
   /** 提取需求经验（手动触发，US1）；本票占位拒绝，真实管线 S3-05 */
   z.object({ channel: z.literal("memory:extract"), requirementId: z.string().min(1) }),
@@ -117,6 +117,12 @@ export const memoryRequestSchema = z.discriminatedUnion("channel", [
       scope: z.string().optional(),
     })
     .refine((v) => v.claim != null || v.scope != null, { message: "claim 与 scope 至少提供一项" }),
+  /** 总结正文编辑（issue #38，spec #27 I-8/US13：完整正文写回并纳入防覆盖基准；空白与否交 UI 把关，此处守住非空下限） */
+  z.object({
+    channel: z.literal("memory:editSummary"),
+    requirementId: z.string().min(1),
+    content: z.string().min(1),
+  }),
 ]);
 export type MemoryRequest = z.infer<typeof memoryRequestSchema>;
 

@@ -1,4 +1,4 @@
-// 用途：SummaryStore —— 需求开发总结防覆盖与版本（memory_summaries 行 + requirements/<REQ>/summary.md）：内容 hash 基准、人工编辑后重提取走 proposed 暂存不覆盖、resolveSummary 二选一、新 proposed 替换旧未处置 proposed（spec #27 D/F 节 US14/US23，演进自 poc-5 store.writeSummary）
+// 用途：SummaryStore —— 需求开发总结防覆盖与版本（memory_summaries 行 + requirements/<REQ>/summary.md）：内容 hash 基准、人工编辑后重提取走 proposed 暂存不覆盖、resolveSummary 二选一、新 proposed 替换旧未处置 proposed、应用内总结编辑写回（issue #38，spec #27 D/F/I 节 US13/US23，演进自 poc-5 store.writeSummary）
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { proposedMdPath, sha256Text, summaryMdPath, writeAtomic } from "./markdown";
 import { ensureMemoryTables, type SqliteDb } from "./ddl";
@@ -71,6 +71,24 @@ export class SummaryStore {
       )
       .run(input.requirementId, input.projectId, sha256Text(input.content), mdPath, this.now());
     return { mode: "written", mdPath };
+  }
+
+  /**
+   * 应用内总结正文编辑写回（issue #38，spec #27 I-8/US13）：summary.md 落人工版（temp+rename 双写序，
+   * Markdown 先写 → SQLite 后提交）+ updated_at 刷新。
+   * content_hash 基准刻意保持「机器最后写出版」：磁盘（人工版）≠ 基准即人工编辑标记，后续重提取的
+   * writeSummary 由此走 proposed 不覆盖——与外部编辑器直接改文件同一待遇，防覆盖闭环（#30）自然衔接。
+   * 未处置 proposed 的指针与暂存文件不受影响（编辑的是当前正文，对比处置仍可用）。
+   */
+  editSummary(requirementId: string, content: string): void {
+    const row = this.getSummary(requirementId);
+    if (!row) {
+      throw new Error(`需求 ${requirementId} 无总结（应用内编辑的前提是已有总结）`);
+    }
+    writeAtomic(row.mdPath, content);
+    this.db
+      .prepare("UPDATE memory_summaries SET updated_at = ? WHERE requirement_id = ?")
+      .run(this.now(), requirementId);
   }
 
   /** 处置 proposed：accept-new 采纳新版（覆盖 summary.md 并更新 hash 基准）/ keep-human 保留人工版；处置后暂存清除 */

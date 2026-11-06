@@ -1,5 +1,5 @@
 // 用途：memory B 类 e2e（issue #31 审核/检索/重启 + #35 删除级联 + #32 提取管线全流程）—— 经真实 handleIpc（kanban:ipc）与 handleMemoryIpc（memory:ipc）完成「提取（fake 桥经 runOnce seam 注入，含进度事件序列与取消/删除竞态）→ 审核 → 检索 → 重启保持」；fake/预置数据驱动部分默认跑；真实 Claude headless 一条用例 KANBAN_E2E=1 门控（#37 验收前预演）
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -332,6 +332,45 @@ describe("memory:ipc B 类 e2e：审核 → 检索 → 重启保持（预置数�
     expect(noRunning).toMatchObject({ ok: false, reason: "no-extraction-running" });
     relaunched.db.close();
   });
+
+  it("总结编辑闭环（issue #38，spec #27 I-8/US13）：editSummary 落盘人工版 → 再提取（fake 桥）走 proposed 不覆盖 → keep-human 处置收尾", async () => {
+    const app = makeApp();
+    const { projectId, requirementId } = await seedRequirement(app);
+
+    // 应用内编辑保存（真实 memory:ipc 通道）：磁盘落人工版
+    const edited = await app.handleMemory({
+      channel: "memory:editSummary",
+      requirementId,
+      content: "# 需求开发总结（e2e）\n人工编辑版：补充验收要点。",
+    });
+    expect(edited.ok).toBe(true);
+    const summaryMd = app.service.summaries.getSummary(requirementId)?.mdPath ?? "";
+    expect(summaryMd).toBeTruthy();
+    expect(readFileSync(summaryMd, "utf8")).toContain("人工编辑版");
+
+    // 再提取（fake 桥真实管线完成批次）→ 人工版不被覆盖，新版走 proposed 暂存（#30 防覆盖闭环衔接）
+    const started = await app.handleMemory({ channel: "memory:extract", requirementId });
+    expect(started).toMatchObject({ ok: true, started: true });
+    if (!started.ok || !started.batchId) return;
+    const batch = await waitBatchTerminal(app, started.batchId);
+    expect(batch.status).toBe("completed");
+    expect(readFileSync(summaryMd, "utf8")).toContain("人工编辑版"); // 磁盘人工版仍在
+
+    const detail = await app.handleMemory({ channel: "memory:requirementMemory", requirementId });
+    expect(detail.ok).toBe(true);
+    if (!detail.ok) return;
+    expect(detail.summary?.content).toContain("人工编辑版"); // 正文仍是人工版
+    expect(detail.summary?.proposedBatchId).toBe(started.batchId); // 新版暂存指针
+    expect(detail.summary?.proposedContent).toContain("e2e 段小结"); // 新版内容（fake 段小结合并产出）
+
+    // 处置收尾：keep-human 保留人工版 → 指针清除、proposed 文件删除
+    const keep = await app.handleMemory({ channel: "memory:resolveSummary", requirementId, choice: "keep-human" });
+    expect(keep.ok).toBe(true);
+    expect(readFileSync(summaryMd, "utf8")).toContain("人工编辑版");
+    expect(app.service.summaries.getSummary(requirementId)).toMatchObject({ proposedBatchId: null, proposedMdPath: null });
+    expect(existsSync(join(app.dataRoot, projectId, "requirements", requirementId, `summary.proposed.${started.batchId}.md`))).toBe(false);
+    app.db.close();
+  }, 15_000);
 
   it("伪造 running 批次（崩溃遗留）重启后对账为 failed，不锁死需求", async () => {
     const app = makeApp();

@@ -220,6 +220,18 @@ export class MemoryService {
     return { ok: true };
   }
 
+  /** 总结正文编辑写回（issue #38，spec #27 I-8/US13）：写盘人工版并保持防覆盖基准；成功后 UI 经一次读刷新 */
+  editSummary(requirementId: string, content: string): MemoryRejectionResult | { ok: true } {
+    if (this.deps.requirementExists && !this.deps.requirementExists(requirementId)) {
+      return { ok: false, reason: "requirement-not-found", detail: `需求 ${requirementId} 不存在，无法编辑总结` };
+    }
+    if (!this.summaries.getSummary(requirementId)) {
+      return { ok: false, reason: "no-summary", detail: `需求 ${requirementId} 尚无总结（先完成一次提取）` };
+    }
+    this.summaries.editSummary(requirementId, content);
+    return { ok: true };
+  }
+
   /** 详情面板一次读（US13/US18）：需求全部批次 + 跨批次全部候选 + 总结（无数据宽容返回空集） */
   requirementMemory(requirementId: string): {
     ok: true;
