@@ -1,4 +1,4 @@
-// 用途：SQLite 迁移 v2 单测（#16，spec #15 F 节）—— v1 库加 project_id 列 + 按最早关联会话回填 + 补写旧事件 payload projectId + 单事务（中断重入幂等、无关联会话失败回滚）+ 迁移后重放态=迁移前在线态
+// 用途：SQLite 迁移 v2 单测（#16，spec #15 F 节）—— v1 库加 project_id 列 + 按最早关联会话回填 + 补写旧事件 payload projectId + 单事务（中断重入幂等、无关联会话失败回滚）+ 迁移后重放态=迁移前在线态 + TD6 跨项目旧 link 重放兼容性钉子
 import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -169,6 +169,74 @@ describe("迁移 v2：v1 库 → project_id 回填 + payload 补写", () => {
     const db = openDatabase(path);
     openDbs.push(db);
     expect(db.prepare("SELECT project_id FROM requirements WHERE id = 'REQ-009'").get(), "最早 link 的 s-a 属 p-2").toEqual({ project_id: "p-2" });
+    // TD6（spec #15 F/TD6）：迁移后 restore 重放——本用例的 link-only 合成形态（需求行无建卡事件）重放不可重建 REQ-009，
+    // 两条旧跨项目 link 均按拒绝处理（link_no_requirement），不产生任何关联（s-b 未关联）；
+    // 回填投影不被 restore 改写（restore 纯重放不落库，若误触持久化会被墓碑对账删行 → 断言失败）
+    const eng = new TrackerEngine(db);
+    eng.restore();
+    expect(eng.tracker.log.filter((l) => l.decision === "link_no_requirement")).toHaveLength(2);
+    expect(eng.tracker.sessionToReq.size).toBe(0);
+    expect(eng.snapshot()).toEqual([]);
+    expect(db.prepare("SELECT project_id, stage FROM requirements WHERE id = 'REQ-009'").get()).toEqual({ project_id: "p-2", stage: null });
+  });
+
+  it("TD6 兼容：跨项目旧 link 事件迁移后重放被拒（link_project_mismatch），需求保持回填原态且 s-b 未关联", () => {
+    const path = tmpDbPath("td6-cross-link");
+    buildV1Db(path, (db) => {
+      seedProject(db, "p-1");
+      seedProject(db, "p-2");
+      seedSession(db, "s-f", "p-1"); // REQ-001 建卡会话
+      seedSession(db, "s-a", "p-2"); // REQ-002 建卡会话（目标需求）
+      seedSession(db, "s-b", "p-1"); // 跨项目旧 link 来源
+      seedSkillEvent(db, "ev-f", "s-f", "design-feature", "2026-11-05T10:00:00.000Z"); // → REQ-001
+      seedSkillEvent(db, "ev-a", "s-a", "design-feature", "2026-11-05T10:00:01.000Z"); // → REQ-002
+      // s-b 对 REQ-003 的最早 link：使回填把 s-b 全部旧事件 payload 补写 p-1（重放时 s-b 项目可知）
+      seedLinkEvent(db, "l-3a", "s-b", "REQ-003", "2026-11-05T10:00:02.000Z");
+      // 跨项目旧 link：v1 无项目校验可存在；v2 重放应按 link_project_mismatch 拒绝（spec #15 TD6）
+      seedLinkEvent(db, "l-old", "s-b", "REQ-002", "2026-11-05T10:00:03.000Z");
+      seedRequirement(db, "REQ-001", "Design");
+      seedRequirement(db, "REQ-002", "Design");
+      seedRequirement(db, "REQ-003", null);
+    });
+    const db = openDatabase(path);
+    openDbs.push(db);
+    expect(db.prepare("SELECT id, project_id FROM requirements ORDER BY id").all(), "回填：REQ-002 取建卡会话 s-a 属 p-2；s-b 关联的 REQ-003 属 p-1（其旧事件含 l-old 补写 p-1）").toEqual([
+      { id: "REQ-001", project_id: "p-1" },
+      { id: "REQ-002", project_id: "p-2" },
+      { id: "REQ-003", project_id: "p-1" },
+    ]);
+    const eng = new TrackerEngine(db);
+    eng.restore();
+    // 旧跨项目 link 在新规则下重放被拒（l-3a 因 REQ-003 不可重建按 link_no_requirement 拒；l-old 按跨项目拒）
+    expect(eng.tracker.log.some((l) => l.decision === "link_project_mismatch" && l.sessionId === "s-b" && l.requirementId === "REQ-002")).toBe(true);
+    expect(eng.tracker.sessionToReq.get("s-b")).toBeUndefined();
+    // REQ-002 保持回填原态：项目 p-2 / Design / 仅建卡会话 s-a，不因拒绝事件分叉（REQ-003 无建卡事件重放不重建）
+    expect(eng.snapshot()).toEqual([
+      {
+        id: "REQ-001",
+        title: "待命名需求",
+        stage: "Design",
+        stageBasis: { kind: "skill", skill: "design-feature", cli: "claude-code", evidenceLevel: "verified", eventId: "ev-f", at: "2026-11-05T10:00:00.000Z" },
+        uncertain: false,
+        sessions: ["s-f"],
+        projectId: "p-1",
+      },
+      {
+        id: "REQ-002",
+        title: "待命名需求",
+        stage: "Design",
+        stageBasis: { kind: "skill", skill: "design-feature", cli: "claude-code", evidenceLevel: "verified", eventId: "ev-a", at: "2026-11-05T10:00:01.000Z" },
+        uncertain: false,
+        sessions: ["s-a"],
+        projectId: "p-2",
+      },
+    ]);
+    // 投影不分叉：restore 纯重放不落库，回填的 project_id/stage 保持
+    expect(db.prepare("SELECT id, project_id, stage FROM requirements ORDER BY id").all()).toEqual([
+      { id: "REQ-001", project_id: "p-1", stage: "Design" },
+      { id: "REQ-002", project_id: "p-2", stage: "Design" },
+      { id: "REQ-003", project_id: "p-1", stage: null },
+    ]);
   });
 
   it("自动建卡会话早于后续 link 时以建卡会话为准", () => {

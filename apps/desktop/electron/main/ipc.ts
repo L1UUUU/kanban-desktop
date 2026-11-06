@@ -8,7 +8,7 @@ import {
   type SessionRow,
 } from "@kanban/ipc-schema";
 import { AdapterError, detectSkillConflicts, resolveUserClaudeDir, type CliAdapter } from "@kanban/cli-host";
-import { TrackerEngine, type Cli, type NormalizedEvent, type TrackerChange } from "@kanban/tracker";
+import { TrackerEngine, formatRequirementId, type Cli, type NormalizedEvent, type TrackerChange } from "@kanban/tracker";
 import { detectDirIdentity } from "./git-identity";
 import type { PtyHost } from "./pty-host";
 import type { ProjectStore } from "./project-store";
@@ -220,66 +220,34 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
     }
     case "kanban:create": {
       const id = nextRequirementId(deps.engine.tracker);
-      const at = nowIso();
-      processAndEmit(deps, {
-        eventId: `create:${id}:${at}`,
+      processAndEmit(deps, guiEvent(`create:${id}`, {
         kind: "create",
-        sessionId: null,
-        cli: null,
-        skill: null,
-        stage: null,
+        source: "gui-create",
         requirementId: id,
         title: req.title ?? "待命名需求",
         projectId: req.projectId,
-        occurredAt: at,
-        receivedAt: at,
-        seq: null,
-        evidenceLevel: "verified",
-        source: "gui-create",
-      });
+      }));
       return { ok: true, requirementId: id };
     }
     case "kanban:rename": {
       if (!deps.engine.tracker.req(req.requirementId)) return requirementNotFound(req.requirementId);
-      const at = nowIso();
-      processAndEmit(deps, {
-        eventId: `rename:${req.requirementId}:${at}`,
+      processAndEmit(deps, guiEvent(`rename:${req.requirementId}`, {
         kind: "rename",
-        sessionId: null,
-        cli: null,
-        skill: null,
-        stage: null,
+        source: "gui-rename",
         requirementId: req.requirementId,
         title: req.title,
-        projectId: null,
-        occurredAt: at,
-        receivedAt: at,
-        seq: null,
-        evidenceLevel: "verified",
-        source: "gui-rename",
-      });
+      }));
       return { ok: true };
     }
     case "kanban:setStage": {
       // uncertain 确认 = setStage 当前阶段（manual 立即生效、uncertain 清除、不锁定）；"none" 由 validateEvent 归一为未开始
       if (!deps.engine.tracker.req(req.requirementId)) return requirementNotFound(req.requirementId);
-      const at = nowIso();
-      processAndEmit(deps, {
-        eventId: `manual:${req.requirementId}:${req.stage}:${at}`,
+      processAndEmit(deps, guiEvent(`manual:${req.requirementId}:${req.stage}`, {
         kind: "manual",
-        sessionId: null,
-        cli: null,
-        skill: null,
-        stage: req.stage,
-        requirementId: req.requirementId,
-        title: null,
-        projectId: null,
-        occurredAt: at,
-        receivedAt: at,
-        seq: null,
-        evidenceLevel: "verified",
         source: "gui-manual",
-      });
+        requirementId: req.requirementId,
+        stage: req.stage,
+      }));
       return { ok: true };
     }
     case "kanban:link": {
@@ -314,44 +282,21 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
         return { ok: false, error: { code: "E_SESSION_NOT_FOUND", message: `会话不存在：${req.sessionId}` } };
       }
       if (!deps.engine.tracker.sessionToReq.has(req.sessionId)) return { ok: true }; // 幂等：本就未关联
-      const at = nowIso();
-      processAndEmit(deps, {
-        eventId: `unlink:${req.sessionId}:${at}`,
+      processAndEmit(deps, guiEvent(`unlink:${req.sessionId}`, {
         kind: "unlink",
-        sessionId: req.sessionId,
-        cli: null,
-        skill: null,
-        stage: null,
-        requirementId: null,
-        title: null,
-        projectId: null,
-        occurredAt: at,
-        receivedAt: at,
-        seq: null,
-        evidenceLevel: "verified",
         source: "gui",
-      });
+        requirementId: null,
+        sessionId: req.sessionId,
+      }));
       return { ok: true };
     }
     case "kanban:delete": {
       if (!deps.engine.tracker.req(req.requirementId)) return requirementNotFound(req.requirementId);
-      const at = nowIso();
-      processAndEmit(deps, {
-        eventId: `delete:${req.requirementId}:${at}`,
+      processAndEmit(deps, guiEvent(`delete:${req.requirementId}`, {
         kind: "delete",
-        sessionId: null,
-        cli: null,
-        skill: null,
-        stage: null,
-        requirementId: req.requirementId,
-        title: null,
-        projectId: null,
-        occurredAt: at,
-        receivedAt: at,
-        seq: null,
-        evidenceLevel: "verified",
         source: "gui-delete",
-      });
+        requirementId: req.requirementId,
+      }));
       return { ok: true };
     }
   }
@@ -401,8 +346,35 @@ function requirementNotFound(requirementId: string): IpcResult {
 /** 下一个可用确定性需求 id（REQ-00N；跳过已占用编号；create 事件进 tracker 后推进 nextId 防自动建卡编号冲突） */
 function nextRequirementId(tracker: TrackerEngine["tracker"]): string {
   let n = tracker.nextId;
-  while (tracker.requirements.has(`REQ-${String(n).padStart(3, "0")}`)) n++;
-  return `REQ-${String(n).padStart(3, "0")}`;
+  while (tracker.requirements.has(formatRequirementId(n))) n++;
+  return formatRequirementId(n);
+}
+
+/** GUI 通道事件工厂（S1 评审收敛）：kanban:create/rename/setStage/unlink/delete 与 link 共用——缺省空 sessionId/cli/skill/
+ *  stage/title/projectId/seq、verified 证据、同一 nowIso 时刻（eventId 后缀与 occurredAt/receivedAt 一致）；eventId = `${prefix}:${at}` */
+function guiEvent(
+  prefix: string,
+  partial: { kind: NormalizedEvent["kind"]; source: string; requirementId: string | null } & Partial<
+    Pick<NormalizedEvent, "sessionId" | "cli" | "stage" | "title" | "projectId">
+  >,
+): NormalizedEvent {
+  const at = nowIso();
+  return {
+    eventId: `${prefix}:${at}`,
+    kind: partial.kind,
+    sessionId: partial.sessionId ?? null,
+    cli: partial.cli ?? null,
+    skill: null,
+    stage: partial.stage ?? null,
+    requirementId: partial.requirementId,
+    title: partial.title ?? null,
+    projectId: partial.projectId ?? null,
+    occurredAt: at,
+    receivedAt: at,
+    seq: null,
+    evidenceLevel: "verified",
+    source: partial.source,
+  };
 }
 
 /** 创建会话后的原子关联（session:create / terminal:create + requirementId 共用）：需求须存在且与会话同项目；
@@ -416,7 +388,7 @@ function linkAfterCreate(
 ): { linked: boolean; reason?: string } {
   const r = deps.engine.tracker.req(requirementId);
   if (!r) return { linked: false, reason: `需求不存在：${requirementId}` };
-  if (!projectId) return { linked: false, reason: "会话未归属项目，无法关联需求" };
+  if (!projectId) return { linked: false, reason: "会话未归属项目，无法关联需求（请先在项目中创建会话）" };
   if (r.projectId !== projectId) {
     return { linked: false, reason: `跨项目关联被拒绝：会话属项目 ${projectId}，需求属项目 ${r.projectId}` };
   }
@@ -426,23 +398,14 @@ function linkAfterCreate(
 
 /** 构造 link 事件经 engine 落事件流并推送变更（kanban:link 与 session:create/terminal:create+requirementId 共用原子路径） */
 function processLink(deps: IpcDeps, sessionId: string, requirementId: string, projectId: string, cli: Cli): TrackerChange[] {
-  const at = nowIso();
-  return processAndEmit(deps, {
-    eventId: `link:${sessionId}:${requirementId}:${at}`,
+  return processAndEmit(deps, guiEvent(`link:${sessionId}:${requirementId}`, {
     kind: "link",
+    source: "gui-card",
+    requirementId,
     sessionId,
     cli,
-    skill: null,
-    stage: null,
-    requirementId,
-    title: null,
     projectId,
-    occurredAt: at,
-    receivedAt: at,
-    seq: null,
-    evidenceLevel: "verified",
-    source: "gui-card",
-  });
+  }));
 }
 
 /** 经 engine 落事件流并把引发的 tracker 变更推送 renderer（状态变化唯一路径：事件溯源 + tracker:event） */

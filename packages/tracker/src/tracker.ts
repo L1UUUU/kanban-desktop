@@ -50,6 +50,17 @@ function parseTs(ts: string | null): number | null {
   return Number.isNaN(t) ? null : t;
 }
 
+/** REQ 编号单一权威（S2 评审收敛）：n → `REQ-00N`（n ≥ 1000 自动进位四位）；建卡/回填/手动建卡编号共用 */
+export function formatRequirementId(n: number): string {
+  return `REQ-${String(n).padStart(3, "0")}`;
+}
+
+/** REQ 编号解析（S2 评审收敛）：`REQ-00N` → N，不匹配返回 null；onCreate 推进 nextId 等编号判断共用 */
+export function parseRequirementId(id: string): number | null {
+  const m = /^REQ-(\d+)$/.exec(id);
+  return m ? Number(m[1]) : null;
+}
+
 export class RequirementTracker {
   readonly requirements = new Map<string, RequirementState>();
   readonly sessionToReq = new Map<string, string>();
@@ -77,7 +88,7 @@ export class RequirementTracker {
   }
 
   createRequirement({ title = "待命名需求", sessionId, projectId = null }: { title?: string; sessionId?: string; projectId?: string | null }): string {
-    const id = `REQ-${String(this.nextId++).padStart(3, "0")}`;
+    const id = formatRequirementId(this.nextId++);
     const r: RequirementState = { id, title, stage: null, stageBasisAt: null, stageBasis: null, uncertain: false, sessions: new Set(), projectId };
     this.requirements.set(id, r);
     if (sessionId) {
@@ -282,8 +293,8 @@ export class RequirementTracker {
     };
     this.requirements.set(r.id, r);
     // 确定性编号推进：REQ-005 手动建卡后 nextId 至少 6，后续自动建卡不冲突
-    const parsed = /^REQ-(\d+)$/.exec(r.id);
-    if (parsed) this.nextId = Math.max(this.nextId, Number(parsed[1]) + 1);
+    const parsedNo = parseRequirementId(r.id);
+    if (parsedNo !== null) this.nextId = Math.max(this.nextId, parsedNo + 1);
     changes.push({ type: "requirement_created", requirementId: r.id, stage: null, sessionId: null });
     this.log.push({ decision: "create_requirement", requirementId: r.id, sessionId: null, projectId: r.projectId, title: r.title });
     return changes;

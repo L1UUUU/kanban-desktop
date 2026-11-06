@@ -41,6 +41,8 @@ export function useKanban(transport: ChatTransport | null): KanbanController {
   const refresh = useCallback(async () => {
     if (!transport) return;
     const res = await transport.invoke({ channel: "kanban:list" });
+    // 已知竞态窗口（接受不改行为）：await 在途时到达的补丁事件会被本次 hydrate 整表替换吞掉（list 快照早于该事件落库时）；
+    // 本地 IPC 下窗口极小，自愈 = 后续任意 kanban:list 再水化（requirement_created 变更或重挂载触发）
     if (res.ok && res.requirements) store.hydrate(res.requirements, res.sessionToReq ?? {});
   }, [transport, store]);
 

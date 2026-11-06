@@ -16,6 +16,8 @@ export {
 } from "./schema";
 export {
   RequirementTracker,
+  formatRequirementId,
+  parseRequirementId,
   transformHookEvents,
   type DecisionLogEntry,
   type RequirementSnapshot,

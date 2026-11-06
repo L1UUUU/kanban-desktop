@@ -1,4 +1,5 @@
 // 用途：SQLite 访问层（D2 定版 node:sqlite；#16 起 v2：打开即建/迁 requirements.project_id，spec #15 F 节单事务迁移）—— 纯 Node 模块，供 Electron 主进程与 vitest 共用
+import { formatRequirementId } from "@kanban/tracker";
 import * as nodeSqlite from "node:sqlite";
 
 type SqliteDatabase = import("node:sqlite").DatabaseSync;
@@ -138,7 +139,7 @@ function backfillProjectId(db: SqliteDatabase): void {
   let next = 1;
   for (const ev of events) {
     if (ev.kind === "skill" && ev.skill === "design-feature" && ev.evidence_level === "verified" && ev.session_id && !sessionToReq.has(ev.session_id)) {
-      const id = `REQ-${String(next++).padStart(3, "0")}`; // v1 只有自动建卡，编号按建卡顺序
+      const id = formatRequirementId(next++); // v1 只有自动建卡，编号按建卡顺序（REQ 格式权威在 @kanban/tracker）
       sessionToReq.set(ev.session_id, id);
       if (!firstSession.has(id)) firstSession.set(id, ev.session_id);
     } else if (ev.kind === "link" && ev.session_id && ev.requirement_id) {

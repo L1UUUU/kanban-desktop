@@ -64,6 +64,8 @@ export class KanbanStore {
         break;
       case "stage_changed": {
         const r = this.requirements.get(change.requirementId);
+        // 补丁目标不在本地表时丢弃（本 guard 与下方各 case 同型）：refresh 在途竞态下卡片可能尚未水化，
+        // 窗口与自愈路径见 use-kanban.ts refresh 注释；不改行为
         if (!r) return;
         r.stage = change.stage;
         r.stageBasis = change.basis;
