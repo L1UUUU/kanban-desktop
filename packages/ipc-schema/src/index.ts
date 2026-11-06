@@ -3,5 +3,6 @@ export * from "./app-info";
 export * from "./chat";
 export * from "./ipc";
 export * from "./kanban";
+export * from "./memory";
 export * from "./terminal";
 export * from "./transcript";

@@ -245,6 +245,48 @@ export class MemoryStore {
     return rows.map(rowToCandidate);
   }
 
+  /** 需求全部候选（跨批次，按创建序）—— 详情面板 requirementMemory 一次读（US18：pending 跨批次累计 + 已处置按批次折叠共用同一数据源） */
+  listRequirementCandidates(requirementId: string): MemoryCandidateRecord[] {
+    const rows = this.db
+      .prepare("SELECT * FROM memory_candidates WHERE requirement_id = ? ORDER BY created_at, rowid")
+      .all(requirementId) as unknown as CandidateRow[];
+    return rows.map(rowToCandidate);
+  }
+
+  /**
+   * 已接受知识再编辑（issue #31，US21：claim/适用范围可再编辑、溯源不可变）：仅 accepted/edited 可编辑；
+   * 传入字段覆盖 edited 值（未提供保持既有），md 重写（双写序：Markdown 先写 → SQLite 事务后提交），
+   * reviewed_at 保留原审核时间（再编辑不是审核）。
+   */
+  editAccepted(id: string, edit: { claim?: string; scope?: string }): MemoryCandidateRecord {
+    const current = this.getCandidate(id);
+    if (!current) throw new Error(`候选不存在: ${id}`);
+    if (current.status !== "accepted" && current.status !== "edited") {
+      throw new Error(`候选 ${current.displayNo} 状态为 ${current.status}，仅 accepted/edited 知识可再编辑`);
+    }
+    if (edit.claim == null && edit.scope == null) {
+      throw new Error("editAccepted 需要 claim 或 scope 至少一项修改");
+    }
+    const next: MemoryCandidateRecord = {
+      ...current,
+      editedClaim: edit.claim != null ? edit.claim.trim() : current.editedClaim,
+      editedScope: edit.scope != null ? edit.scope.trim() : current.editedScope,
+    };
+    const mdPath = current.mdPath ?? acceptedMdPath(this.dataRoot, current.projectId, current.displayNo);
+    writeAtomic(mdPath, renderAcceptedMd(next));
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db
+        .prepare("UPDATE memory_candidates SET edited_claim = ?, edited_scope = ?, md_path = ? WHERE id = ?")
+        .run(next.editedClaim, next.editedScope, mdPath, id);
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+    return this.getCandidateOrThrow(id);
+  }
+
   private getCandidateOrThrow(id: string): MemoryCandidateRecord {
     const c = this.getCandidate(id);
     if (!c) throw new Error(`候选不存在: ${id}`);

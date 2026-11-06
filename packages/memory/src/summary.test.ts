@@ -161,3 +161,17 @@ describe("resolveSummary（二选一处置，处置后暂存清除）", () => {
     expect(() => store.resolveSummary("REQ-001", "accept-new")).toThrow(/缺失/);
   });
 });
+
+describe("项目总结一次读（issue #31 projectMemory 的 store 支撑）", () => {
+  it("listSummaries：按项目返回总结行、最近更新优先，不含其他项目", () => {
+    const { store } = mkStore();
+    store.writeSummary({ requirementId: "REQ-001", projectId: "p1", batchId: "B1", content: "总结一" });
+    store.writeSummary({ requirementId: "REQ-002", projectId: "p1", batchId: "B1", content: "总结二" });
+    store.writeSummary({ requirementId: "REQ-003", projectId: "p2", batchId: "B1", content: "别的项目" });
+    const rows = store.listSummaries("p1");
+    expect(rows.map((r) => r.requirementId)).toEqual(["REQ-002", "REQ-001"]); // 同 now 下 rowid 逆序=最近插入优先
+    expect(rows.every((r) => r.projectId === "p1")).toBe(true);
+    expect(must(rows[0]).contentHash).toBe(sha256Text("总结二"));
+    expect(store.listSummaries("p-none")).toEqual([]);
+  });
+});
