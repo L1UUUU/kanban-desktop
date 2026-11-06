@@ -1,7 +1,8 @@
-// 用途：CliHost seam（spec C5 冻结：command/subscribe/shutdown，纯 Node 无 Electron 依赖）—— utilityProcess worker 的核心；多 Adapter 经 AdapterRouter 分发
+// 用途：CliHost seam（spec C5 冻结：command/subscribe/shutdown，纯 Node 无 Electron 依赖）—— utilityProcess worker 的核心；多 Adapter 经 AdapterRouter 分发；run-once 一次性执行（#29 C5 演进）
 import type { AdapterEvent, ChatEvent, TranscriptEvent } from "@kanban/ipc-schema";
 import { AdapterError } from "../adapter";
 import { AdapterRouter, type AdapterFactory } from "../router-adapter";
+import { RunOnceRunner, type RunOnceResult } from "./run-once";
 
 /** 宿主命令（C1 方法面的 wire 形状；错误经 AdapterError 形状回传） */
 export type HostCommand =
@@ -13,14 +14,17 @@ export type HostCommand =
   | { kind: "readTranscript"; sessionId: string }
   | { kind: "resume"; sessionId: string }
   | { kind: "adoptSession"; sessionId: string; nativeSessionId: string; cwd: string; cli: string; permMode?: string; model?: string }
-  | { kind: "dispose"; sessionId?: string };
+  | { kind: "dispose"; sessionId?: string }
+  | { kind: "run-once"; runId: string; cli: string; args: string[]; cwd: string; stdin?: string; timeoutMs?: number }
+  | { kind: "cancel-run-once"; runId: string };
 
-/** 命令结果载荷（createSession 附 sessionId/nativeSessionId；readHistory 附事件数组；readTranscript 附双视角剧本；其余 void） */
+/** 命令结果载荷（createSession 附 sessionId/nativeSessionId；readHistory 附事件数组；readTranscript 附双视角剧本；run-once 附执行结果；其余 void） */
 export interface HostCommandResult {
   sessionId?: string;
   nativeSessionId?: string | null;
   events?: ChatEvent[];
   transcript?: TranscriptEvent[];
+  runOnce?: RunOnceResult;
 }
 
 /** 有序停机原因（spec H：停止新请求→有序取消→有限等待→受控终止） */
@@ -36,6 +40,7 @@ export interface ShutdownOptions {
  */
 export class CliHost {
   private readonly router: AdapterRouter;
+  private readonly runOnceRunner = new RunOnceRunner();
   private readonly handlers = new Set<(event: AdapterEvent) => void>();
   private shuttingDown = false;
 
@@ -92,6 +97,11 @@ export class CliHost {
       case "dispose":
         await this.router.dispose(cmd.sessionId ? { sessionId: cmd.sessionId } : undefined);
         return {};
+      case "run-once":
+        return { runOnce: await this.runOnceRunner.run(cmd) };
+      case "cancel-run-once":
+        this.runOnceRunner.cancel(cmd.runId);
+        return {};
     }
   }
 
@@ -102,12 +112,15 @@ export class CliHost {
     };
   }
 
-  /** 有序停机：标记拒绝新命令 → 全量 dispose（各 Adapter 内部受控终止）→ 有限等待 */
+  /** 有序停机：标记拒绝新命令 → 终止进行中的一次性执行（cancelled 收口，不留守夜进程）→ 全量 dispose（各 Adapter 内部受控终止）→ 有限等待 */
   async shutdown(options: ShutdownOptions): Promise<void> {
     this.shuttingDown = true;
     const timeoutMs = options.timeoutMs ?? 3000;
     await Promise.race([
-      this.router.dispose(),
+      (async () => {
+        await this.runOnceRunner.disposeAll(timeoutMs);
+        await this.router.dispose();
+      })(),
       new Promise((r) => setTimeout(r, timeoutMs)),
     ]);
   }

@@ -1,0 +1,46 @@
+// 用途：Windows KILL_ON_JOB_CLOSE Job guard PowerShell 脚本（t0-01 T1 实证语义；#29 起为单一事实源，desktop cli-host-client 与 e2e Job 覆盖验证共用）—— guard 持 job 句柄等宿主(main)死亡后退出 → 句柄关 → OS 终止 job 内全部 CLI 子孙进程（worker 内 spawn 的一次性进程自动入 job）
+// 修正记录（#29）：历史版本把 C# 结构体字段缩写为 LF 但赋值仍写 .LimitFlags（PS PropertyAssignmentException → guard 必然 exit 1，Job 保护从未生效且静默），且 TargetPid 句柄权限 0x0010 非 SYNCHRONIZE；本版按 t0-01 原版语义修正（字段名全程一致 + 0x00100000）
+/** ASCII-only 防 PS5.1 ANSI 解析坑（无 BOM 文件被 PS 5.1 按 ANSI 解析，ASCII 内容两种解析等价） */
+export const JOB_GUARD_PS = [
+  "param(",
+  "  [Parameter(Mandatory = $true)][int]$MemberPid,",
+  "  [Parameter(Mandatory = $true)][int]$TargetPid,",
+  "  [Parameter(Mandatory = $true)][string]$JobName",
+  ")",
+  "$ErrorActionPreference = 'Stop'",
+  "$src = @'",
+  "using System;",
+  "using System.Runtime.InteropServices;",
+  "public static class JobGuardNative {",
+  "  [DllImport(\"kernel32.dll\", CharSet = CharSet.Unicode, SetLastError = true)]",
+  "  public static extern IntPtr CreateJobObject(IntPtr a, string n);",
+  "  [DllImport(\"kernel32.dll\", SetLastError = true)]",
+  "  public static extern bool SetInformationJobObject(IntPtr h, int c, ref JOBOBJECT_EXTENDED_LIMIT_INFORMATION i, int cb);",
+  "  [DllImport(\"kernel32.dll\", SetLastError = true)]",
+  "  public static extern bool AssignProcessToJobObject(IntPtr h, IntPtr p);",
+  "  [DllImport(\"kernel32.dll\", SetLastError = true)]",
+  "  public static extern IntPtr OpenProcess(uint a, bool i, int pid);",
+  "  [DllImport(\"kernel32.dll\", SetLastError = true)]",
+  "  public static extern int WaitForSingleObject(IntPtr h, int ms);",
+  "  [StructLayout(LayoutKind.Sequential)]",
+  "  public struct IO_COUNTERS { public ulong R, W, O, RT, WT, OT; }",
+  "  [StructLayout(LayoutKind.Sequential)]",
+  "  public struct JOBOBJECT_BASIC_LIMIT_INFORMATION { public long PUT, JUT; public uint LimitFlags; public UIntPtr MWS, XWS; public uint APL; public UIntPtr AF; public int PC, SC; }",
+  "  [StructLayout(LayoutKind.Sequential)]",
+  "  public struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION { public JOBOBJECT_BASIC_LIMIT_INFORMATION B; public IO_COUNTERS IO; public UIntPtr PM, JM, PP, PJ; }",
+  "}",
+  "'@",
+  "Add-Type -TypeDefinition $src",
+  "$job = [JobGuardNative]::CreateJobObject([IntPtr]::Zero, $JobName)",
+  "if ($job -eq [IntPtr]::Zero) { exit 1 }",
+  "$info = New-Object JobGuardNative+JOBOBJECT_EXTENDED_LIMIT_INFORMATION",
+  "$info.B.LimitFlags = 0x2000 # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE", // 字段名与 C# 声明一致（历史版缩写成 LF 但赋值写 .LimitFlags，PS 属性赋值异常致 guard 恒败）
+  "$size = [System.Runtime.InteropServices.Marshal]::SizeOf([type][JobGuardNative+JOBOBJECT_EXTENDED_LIMIT_INFORMATION])",
+  "if (-not [JobGuardNative]::SetInformationJobObject($job, 9, [ref]$info, $size)) { exit 1 }",
+  "$member = [JobGuardNative]::OpenProcess(0x0101, $false, $MemberPid)", // PROCESS_SET_QUOTA|PROCESS_TERMINATE（AssignProcessToJobObject 要求）
+  "if ($member -eq [IntPtr]::Zero) { exit 1 }",
+  "if (-not [JobGuardNative]::AssignProcessToJobObject($job, $member)) { exit 1 }",
+  "$target = [JobGuardNative]::OpenProcess(0x00100000, $false, $TargetPid)", // SYNCHRONIZE（等待句柄必需权限；0x0010 是 VM_READ 会立刻 WAIT_FAILED）
+  "if ($target -eq [IntPtr]::Zero) { exit 0 }",
+  "[void][JobGuardNative]::WaitForSingleObject($target, -1)",
+].join("\n");

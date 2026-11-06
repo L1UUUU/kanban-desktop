@@ -24,7 +24,8 @@ function createHostedAdapter(appConfig: AppConfig): CliAdapter {
   const workerPath = join(__dirname, "cli-host-worker.js");
   if (existsSync(workerPath)) {
     try {
-      return new CliHostClient({ workerPath, dataDir, codexExe: appConfig.cliExe.codex, claudeExe: appConfig.cliExe.claude, opencodeExe: appConfig.cliExe.opencode, fullDisposeWaitMs: appConfig.shutdown.graceMs });
+      // log：Job guard 失败等治理事件不再静默（#29 复盘：guard 脚本缺陷曾长期无感知）
+      return new CliHostClient({ workerPath, dataDir, codexExe: appConfig.cliExe.codex, claudeExe: appConfig.cliExe.claude, opencodeExe: appConfig.cliExe.opencode, fullDisposeWaitMs: appConfig.shutdown.graceMs, log: (k, d) => console.error(`[cli-host:${k}] ${d}`) });
     } catch (e) {
       console.error(`[cli-host] utilityProcess 托管不可用，回退进程内：${e instanceof Error ? e.message : String(e)}`);
     }

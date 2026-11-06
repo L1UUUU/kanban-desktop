@@ -1,4 +1,4 @@
-// 用途：SQLite 迁移 v2 单测（#16，spec #15 F 节）—— v1 库加 project_id 列 + 按最早关联会话回填 + 补写旧事件 payload projectId + 单事务（中断重入幂等、无关联会话失败回滚）+ 迁移后重放态=迁移前在线态 + TD6 跨项目旧 link 重放兼容性钉子
+// 用途：SQLite 迁移单测 —— v2（#16，spec #15 F 节）：v1 库加 project_id 列 + 按最早关联会话回填 + 补写旧事件 payload projectId + 单事务（中断重入幂等、无关联会话失败回滚）+ 迁移后重放态=迁移前在线态 + TD6 跨项目旧 link 重放兼容性钉子；v3（#30，spec #27 D 节）：memory 三表单事务迁移/幂等重入/新库直建
 import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -124,6 +124,7 @@ describe("迁移 v2：v1 库 → project_id 回填 + payload 补写", () => {
     expect(migrations).toEqual([
       { version: 1, name: "v1-c3-base" },
       { version: 2, name: "v2-requirements-project" },
+      { version: 3, name: "v3-memory-tables" },
     ]);
   });
 
@@ -316,7 +317,73 @@ describe("迁移 v2：单事务（失败回滚 + 中断重入幂等）", () => {
     const again = openDatabase(path);
     openDbs.push(again);
     const migrations = again.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as unknown as Array<{ version: number }>;
-    expect(migrations.map((m) => m.version)).toEqual([1, 2]);
+    expect(migrations.map((m) => m.version)).toEqual([1, 2, 3]);
+  });
+});
+
+// ========== 迁移 v3（memory 三表，#30 spec #27 D 节） ==========
+describe("迁移 v3：v2 老库 → memory 三表", () => {
+  /** v2 形态库（无 memory 三表；带一条 v2 数据验证不受影响） */
+  function buildV2Db(path: string): void {
+    const raw = new RawDb(path);
+    raw.exec(`
+      CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, canonical_path TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'ok', created_at TEXT NOT NULL);
+      CREATE TABLE requirements (id TEXT PRIMARY KEY, title TEXT NOT NULL, stage TEXT, stage_basis_at INTEGER, stage_basis_json TEXT, uncertain INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, project_id TEXT);
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+      INSERT INTO schema_migrations (version, name, applied_at) VALUES (1, 'v1-c3-base', '2026-11-05T00:00:00.000Z');
+      INSERT INTO schema_migrations (version, name, applied_at) VALUES (2, 'v2-requirements-project', '2026-11-05T00:00:00.000Z');
+      INSERT INTO requirements (id, title, created_at, project_id) VALUES ('REQ-001', '老需求', '2026-11-05T00:00:00.000Z', 'p-1');
+    `);
+    raw.close();
+  }
+
+  it("v2 老库迁移：memory 三表就位、v1/v2 既有数据不受影响、记录 v3", () => {
+    const path = tmpDbPath("v3-from-v2");
+    buildV2Db(path);
+    const db = openDatabase(path);
+    openDbs.push(db);
+    for (const table of ["memory_batches", "memory_candidates"]) {
+      expect(columnsOf(db, table), `迁移建表 ${table}`).toContain("id");
+    }
+    expect(columnsOf(db, "memory_summaries"), "memory_summaries 以 requirement_id 为主键").toContain("requirement_id");
+    expect(columnsOf(db, "memory_candidates")).toEqual(
+      expect.arrayContaining(["display_no", "edited_claim", "edited_scope", "conflicts_json", "notes_json", "md_path"]),
+    );
+    expect(db.prepare("SELECT title, project_id FROM requirements WHERE id = 'REQ-001'").get()).toEqual({ title: "老需求", project_id: "p-1" });
+    const versions = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as unknown as Array<{ version: number }>;
+    expect(versions.map((r) => r.version)).toEqual([1, 2, 3]);
+  });
+
+  it("v3 幂等重入：同库二次 openDatabase 不重复迁移、记录唯一", () => {
+    const path = tmpDbPath("v3-idempotent");
+    buildV2Db(path);
+    openDbs.push(openDatabase(path));
+    openDbs.push(openDatabase(path)); // 二次打开：v3 已记录 → 快路径跳过
+    const n = (openDbs[openDbs.length - 1].prepare("SELECT count(*) AS n FROM schema_migrations WHERE version = 3").get() as { n: number }).n;
+    expect(n).toBe(1);
+  });
+
+  it("新库直建：openDatabase 内存库即 v3 形态（八表 + 完整版本链），openDatabase 幂等", () => {
+    const db = openDatabase(":memory:");
+    openDbs.push(db);
+    expect(listTables(db)).toEqual([
+      "memory_batches", "memory_candidates", "memory_summaries",
+      "projects", "requirements", "schema_migrations", "sessions", "stage_events",
+    ]);
+    const versions = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as unknown as Array<{ version: number }>;
+    expect(versions.map((r) => r.version)).toEqual([1, 2, 3]);
+    const again = openDatabase(":memory:");
+    openDbs.push(again);
+    expect(again.prepare("SELECT count(*) AS n FROM schema_migrations").get()).toEqual({ n: 3 });
+  });
+
+  it("迁移后 memory 三表可用（批次行写入往返）", () => {
+    const path = tmpDbPath("v3-usable");
+    buildV2Db(path);
+    const db = openDatabase(path);
+    openDbs.push(db);
+    db.prepare("INSERT INTO memory_batches (id, requirement_id, project_id, status, created_at) VALUES ('B1','REQ-001','p-1','running','t')").run();
+    expect(db.prepare("SELECT status FROM memory_batches WHERE id = 'B1'").get()).toEqual({ status: "running" });
   });
 });
 
@@ -325,10 +392,13 @@ describe("迁移 v2：新库", () => {
   it("新库 requirements 直建 v2 形态（含 project_id 列），openDatabase 幂等", () => {
     const db = openDatabase(":memory:");
     openDbs.push(db);
-    expect(listTables(db)).toEqual(["projects", "requirements", "schema_migrations", "sessions", "stage_events"]);
+    expect(listTables(db)).toEqual([
+      "memory_batches", "memory_candidates", "memory_summaries",
+      "projects", "requirements", "schema_migrations", "sessions", "stage_events",
+    ]);
     expect(columnsOf(db, "requirements")).toContain("project_id");
     const again = openDatabase(":memory:");
     openDbs.push(again);
-    expect(again.prepare("SELECT count(*) AS n FROM schema_migrations").get()).toEqual({ n: 2 });
+    expect(again.prepare("SELECT count(*) AS n FROM schema_migrations").get()).toEqual({ n: 3 });
   });
 });

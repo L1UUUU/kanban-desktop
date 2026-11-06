@@ -1,4 +1,5 @@
-// 用途：SQLite 访问层（D2 定版 node:sqlite；#16 起 v2：打开即建/迁 requirements.project_id，spec #15 F 节单事务迁移）—— 纯 Node 模块，供 Electron 主进程与 vitest 共用
+// 用途：SQLite 访问层（D2 定版 node:sqlite；#16 起 v2：requirements.project_id；#30 起 v3：memory 三表由 @kanban/memory 迁移）—— 纯 Node 模块，供 Electron 主进程与 vitest 共用
+import { migrateMemoryToV3 } from "@kanban/memory";
 import { formatRequirementId } from "@kanban/tracker";
 import * as nodeSqlite from "node:sqlite";
 
@@ -17,8 +18,8 @@ const DatabaseCtor = (typeof exportsRecord.Database === "function"
 export const SQLITE_ENTRY: "Database" | "DatabaseSync" =
   typeof exportsRecord.Database === "function" ? "Database" : "DatabaseSync";
 
-/** 当前 C3 基线版本号（#16 起 v2：requirements 加 project_id，spec #15 F 节） */
-export const SCHEMA_VERSION = 2;
+/** 当前 C3 基线版本号（#30 起 v3：memory 三表，spec #27 D 节；DDL/迁移由 @kanban/memory 导出） */
+export const SCHEMA_VERSION = 3;
 
 /** C3 表结构：projects/sessions 按 C3 列清单；requirements/stage_events 沿用 poc-4 冻结 DDL（#16 v2 起 requirements 加 project_id，新库直建 v2 形态；老库由 migrateToV2 在单事务内 ALTER） */
 const SCHEMA_SQL = `
@@ -86,12 +87,13 @@ INSERT OR IGNORE INTO schema_migrations (version, name, applied_at)
   VALUES (1, 'v1-c3-base', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
 `;
 
-/** 打开数据库（文件路径或 ":memory:"）并确保 C3 表结构就位（新库直建 v2 形态，老库单事务迁移 v2） */
+/** 打开数据库（文件路径或 ":memory:"）并确保表结构就位（新库直建最新形态，老库逐版本单事务迁移） */
 export function openDatabase(dbPath: string): SqliteDatabase {
   const db = new DatabaseCtor(dbPath);
   try {
     ensureSchema(db);
     migrateToV2(db);
+    migrateMemoryToV3(db); // v3：memory 三表（#30，spec #27 D 节；tracker store.ts 先例——DDL/迁移随包）
     return db;
   } catch (err) {
     db.close(); // 迁移失败连接不外泄（Windows 文件锁）

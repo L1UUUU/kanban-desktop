@@ -1,5 +1,8 @@
-// 用途：CliHost seam 单测 —— command 分发（经 AdapterRouter）、事件聚合、未支持 CLI 报错、shutdown 拒绝新命令并 dispose 全部 adapter
-import { describe, expect, it } from "vitest";
+// 用途：CliHost seam 单测 —— command 分发（经 AdapterRouter）、事件聚合、未支持 CLI 报错、shutdown 拒绝新命令并 dispose 全部 adapter；run-once/cancel-run-once 命令路由（#29 C5 演进）
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CliHost, type HostCommand } from "./cli-host";
 import { FakeAdapter } from "../fake-adapter";
 import type { AdapterEvent } from "@kanban/ipc-schema";
@@ -107,6 +110,45 @@ describe("CliHost seam（C5）", () => {
     // dispose 后原会话不可用
     await expect(host.command({ kind: "readHistory", sessionId: "any" })).rejects.toMatchObject({ code: "E_INTERNAL" });
     expect(adapters.length).toBeGreaterThan(0);
+  });
+});
+
+describe("CliHost run-once 命令（C5 演进，#29）", () => {
+  /** fake CLI（node.exe 直连；KANBAN_CLAUDE_BIN 指向 node.exe 走真实解析链） */
+  const FAKE_CLI = path.join(import.meta.dirname, "../../tests/fixtures/fake-cli.mjs");
+  let cwd: string;
+
+  beforeAll(() => {
+    cwd = mkdtempSync(path.join(tmpdir(), "kb-host-runonce-"));
+    process.env.KANBAN_CLAUDE_BIN = process.execPath;
+  });
+
+  afterAll(() => {
+    rmSync(cwd, { recursive: true, force: true });
+    delete process.env.KANBAN_CLAUDE_BIN;
+  });
+
+  it("run-once 命令：worker 协议内路由执行，结果经 runOnce 字段回传", { timeout: 20_000 }, async () => {
+    const { host } = makeHost();
+    const r = await host.command({ kind: "run-once", runId: "h-1", cli: "claude", args: [FAKE_CLI, "ok", "H1"], cwd });
+    expect(r.runOnce).toMatchObject({ status: "completed", exitCode: 0 });
+    expect(r.runOnce!.stdout).toContain("fake-out:H1");
+  });
+
+  it("cancel-run-once 命令：终结进行中执行（cancelled）；未知 runId no-op 不报错", { timeout: 20_000 }, async () => {
+    const { host } = makeHost();
+    const p = host.command({ kind: "run-once", runId: "h-2", cli: "claude", args: [FAKE_CLI, "sleep", "60000"], cwd });
+    await host.command({ kind: "cancel-run-once", runId: "h-2" });
+    expect((await p).runOnce).toMatchObject({ status: "cancelled" });
+    await expect(host.command({ kind: "cancel-run-once", runId: "nope" })).resolves.toBeDefined();
+  });
+
+  it("shutdown：终止进行中的 run-once（cancelled 收口）并拒绝新命令", { timeout: 20_000 }, async () => {
+    const { host } = makeHost();
+    const p = host.command({ kind: "run-once", runId: "h-3", cli: "claude", args: [FAKE_CLI, "sleep", "60000"], cwd });
+    await host.shutdown({ reason: "test" });
+    expect((await p).runOnce).toMatchObject({ status: "cancelled" });
+    await expect(host.command({ kind: "run-once", runId: "h-4", cli: "claude", args: [FAKE_CLI, "ok"], cwd })).rejects.toMatchObject({ code: "E_INTERNAL" });
   });
 });
 
