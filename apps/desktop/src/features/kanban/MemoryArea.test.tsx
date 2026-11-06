@@ -120,6 +120,8 @@ function makeFake(seed?: { batches: MemoryBatchRow[]; candidates: MemoryCandidat
           return { ok: true };
         case "memory:projectMemory":
           return { ok: true, knowledge: [], summaries: [] };
+        case "memory:editSummary":
+          return { ok: true };
         case "memory:editAccepted": {
           if (rejectWith.edit) return { ok: false, ...rejectWith.edit };
           state.candidates = state.candidates.map((c) =>
