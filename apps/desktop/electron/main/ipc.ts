@@ -447,7 +447,7 @@ export interface MemoryIpcDeps {
   isShuttingDown?(): boolean;
 }
 
-/** 处理一条 memory:ipc 入站请求：zod 强制校验 → 退出门闸 → 七通道路由（业务拒绝直达调用方，不新增全局错误码） */
+/** 处理一条 memory:ipc 入站请求：zod 强制校验 → 退出门闸 → 八通道路由（业务拒绝直达调用方，不新增全局错误码） */
 export async function handleMemoryIpc(deps: MemoryIpcDeps, raw: unknown): Promise<MemoryResult> {
   const parsed = memoryRequestSchema.safeParse(raw);
   if (!parsed.success) {
@@ -483,6 +483,9 @@ export async function handleMemoryIpc(deps: MemoryIpcDeps, raw: unknown): Promis
     case "memory:editAccepted": {
       const r = deps.memory.editAccepted(req.candidateId, { claim: req.claim, scope: req.scope });
       return r.ok ? { ok: true, candidate: r.candidate } : r;
+    }
+    case "memory:editSummary": {
+      return deps.memory.editSummary(req.requirementId, req.content);
     }
   }
 }

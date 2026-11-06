@@ -162,6 +162,51 @@ describe("resolveSummary（二选一处置，处置后暂存清除）", () => {
   });
 });
 
+describe("editSummary 总结正文写回（issue #38，spec #27 I-8/US13：人工编辑与防覆盖闭环衔接）", () => {
+  it("写回：summary.md 落盘人工版（temp+rename 双写序）+ updated_at 刷新；content_hash 保持机器基准（磁盘≠基准即人工编辑标记）", () => {
+    const { store } = mkStore();
+    store.writeSummary({ requirementId: "REQ-001", projectId: "p1", batchId: "B1", content: "机器版 v1" });
+    store.editSummary("REQ-001", "人工编辑版 v1'");
+    const row = must(store.getSummary("REQ-001"));
+    expect(readFileSync(row.mdPath, "utf8")).toBe("人工编辑版 v1'");
+    // 基准保持机器最后写出版：与磁盘人工版不一致 → 防覆盖判定识别为人工编辑（#30 机制的自然衔接）
+    expect(row.contentHash).toBe(sha256Text("机器版 v1"));
+    expect(row.contentHash).not.toBe(sha256Text("人工编辑版 v1'"));
+    expect(row.updatedAt).toBe(NOW);
+  });
+
+  it("防覆盖闭环：编辑后再次 writeSummary（模拟重提取）→ 走 proposed 不覆盖磁盘人工版", () => {
+    const { store } = mkStore();
+    store.writeSummary({ requirementId: "REQ-001", projectId: "p1", batchId: "B1", content: "机器版 v1" });
+    store.editSummary("REQ-001", "人工编辑版 v1'");
+    const out = store.writeSummary({ requirementId: "REQ-001", projectId: "p1", batchId: "B2", content: "重提取新版 v2" });
+    expect(out.mode).toBe("proposed");
+    // 磁盘人工版不被覆盖；新版暂存待处置
+    expect(readFileSync(out.mdPath, "utf8")).toBe("人工编辑版 v1'");
+    expect(readFileSync(out.proposedMdPath ?? "", "utf8")).toBe("重提取新版 v2");
+  });
+
+  it("未处置 proposed 存在时编辑：仅写回正文，proposed 指针与暂存文件不受影响", () => {
+    const { store } = mkStore();
+    store.writeSummary({ requirementId: "REQ-001", projectId: "p1", batchId: "B1", content: "机器版 v1" });
+    store.editSummary("REQ-001", "人工编辑版 v1'");
+    const proposed = store.writeSummary({ requirementId: "REQ-001", projectId: "p1", batchId: "B2", content: "暂存新版" });
+    expect(proposed.mode).toBe("proposed");
+    // proposed 未处置时再次人工编辑当前正文（弹层保存）—— 指针与文件保持，对比处置仍可用
+    store.editSummary("REQ-001", "人工编辑版 v1''");
+    const row = must(store.getSummary("REQ-001"));
+    expect(readFileSync(row.mdPath, "utf8")).toBe("人工编辑版 v1''");
+    expect(row.proposedBatchId).toBe("B2");
+    expect(row.proposedMdPath).toBe(proposed.proposedMdPath);
+    expect(existsSync(proposed.proposedMdPath ?? "")).toBe(true);
+  });
+
+  it("无总结行时抛错（应用内编辑前提是已有总结；service 层转业务拒绝）", () => {
+    const { store } = mkStore();
+    expect(() => store.editSummary("REQ-404", "正文")).toThrow(/总结/);
+  });
+});
+
 describe("项目总结一次读（issue #31 projectMemory 的 store 支撑）", () => {
   it("listSummaries：按项目返回总结行、最近更新优先，不含其他项目", () => {
     const { store } = mkStore();

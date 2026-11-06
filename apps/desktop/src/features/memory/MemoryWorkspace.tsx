@@ -1,4 +1,4 @@
-// 用途：记忆工作区（#34，spec #27 I 节原型一致项 1/2、US19–21）—— 当前项目分区：搜索框（占位文案声明口径）+ 已接受知识列表（claim 正文/适用范围徽标/来源会话数/状态 chip/编辑/复制路径/复制内容）+ 需求总结区（标题/更新时间/查看/编辑/复制路径）+ 无匹配/无项目空态；知识编辑弹层走 memory:editAccepted，总结编辑弹层复用同款形态（I 节第 8 条）；含侧栏底部「记忆」入口按钮（与看板入口同款形态）
+// 用途：记忆工作区（#34，spec #27 I 节原型一致项 1/2、US19–21；#38 总结编辑弹层接通保存通道）—— 当前项目分区：搜索框（占位文案声明口径）+ 已接受知识列表（claim 正文/适用范围徽标/来源会话数/状态 chip/编辑/复制路径/复制内容）+ 需求总结区（标题/更新时间/查看/编辑/复制路径）+ 无匹配/无项目空态；知识编辑弹层走 memory:editAccepted，总结编辑弹层走 memory:editSummary（I 节第 8 条）；含侧栏底部「记忆」入口按钮（与看板入口同款形态）
 import { useState } from "react";
 import type { MemoryCandidateRow, MemorySummaryRow } from "@kanban/ipc-schema";
 import type { MemoryController } from "./use-memory";
@@ -74,9 +74,11 @@ export function MemoryWorkspace({ memory, projectName }: { memory: MemoryControl
   const [editing, setEditing] = useState<{ k: MemoryCandidateRow; claim: string; scope: string } | null>(null);
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
-  // 总结查看（只读）与编辑弹层
+  // 总结查看（只读）与编辑弹层（编辑保存走 memory:editSummary，#38；保存失败保留弹层并提示）
   const [viewing, setViewing] = useState<MemorySummaryRow | null>(null);
   const [editingSummary, setEditingSummary] = useState<{ s: MemorySummaryRow; text: string } | null>(null);
+  const [summarySaving, setSummarySaving] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
 
   /** 复制并提示（路径/内容共用） */
   const copy = (text: string, notice: string): void => {
@@ -100,6 +102,20 @@ export function MemoryWorkspace({ memory, projectName }: { memory: MemoryControl
         return;
       }
       setEditing(null);
+    });
+  };
+
+  /** 保存总结编辑：memory:editSummary（完整正文写回并纳入防覆盖基准，#38）；成功关弹层，失败保留并提示 */
+  const saveSummaryEdit = (): void => {
+    if (!editingSummary || summarySaving) return;
+    setSummarySaving(true);
+    void memory.editSummary(editingSummary.s.requirementId, editingSummary.text).then((err) => {
+      setSummarySaving(false);
+      if (err) {
+        setSummaryError(err);
+        return;
+      }
+      setEditingSummary(null);
     });
   };
 
@@ -158,7 +174,10 @@ export function MemoryWorkspace({ memory, projectName }: { memory: MemoryControl
                       key={s.requirementId}
                       s={s}
                       onView={() => setViewing(s)}
-                      onEdit={() => setEditingSummary({ s, text: s.content ?? "" })}
+                      onEdit={() => {
+                        setSummaryError(null);
+                        setEditingSummary({ s, text: s.content ?? "" });
+                      }}
                       onCopyPath={() => copy(s.mdPath, "已复制路径（Markdown 绝对路径）")}
                     />
                   ))}
@@ -267,12 +286,12 @@ export function MemoryWorkspace({ memory, projectName }: { memory: MemoryControl
             </div>
           ) : null}
 
-          {/* 总结编辑弹层（原型一致项 8：复用同款弹层形态，textarea） */}
+          {/* 总结编辑弹层（原型一致项 8：同款弹层形态 textarea；保存走 memory:editSummary 写回并纳入防覆盖基准，#38） */}
           {editingSummary ? (
             <div
               data-testid="memory-summary-edit-mask"
               className="absolute inset-0 z-30 flex items-center justify-center bg-black/60 p-4"
-              onClick={() => setEditingSummary(null)}
+              onClick={() => (summarySaving ? undefined : setEditingSummary(null))}
             >
               <div
                 role="dialog"
@@ -292,16 +311,24 @@ export function MemoryWorkspace({ memory, projectName }: { memory: MemoryControl
                   value={editingSummary.text}
                   onChange={(e) => setEditingSummary({ ...editingSummary, text: e.target.value })}
                 />
-                {/* shortcut: 总结编辑保存通道缺失（#31 memory wire 七请求无总结内容编辑，resolveSummary 仅 proposed 二选一、editAccepted 仅候选）；弹层形态就绪、保存降级提示；复查触发条件 = memory wire 增补总结编辑请求后接线保存并更新 hash 基准 */}
-                <p data-testid="memory-summary-save-notice" className="mb-2 text-[11px] text-warn">
-                  保存通道尚未接入：memory wire 暂无总结内容编辑请求，编辑结果不会写回；可经「复制路径」将 summary.md 交给 CLI 处理。
-                </p>
+                {summaryError ? <p className="mb-2 text-xs text-destructive">保存失败：{summaryError}</p> : null}
                 <div className="flex justify-end gap-2">
-                  <button type="button" className={DIALOG_BTN} onClick={() => setEditingSummary(null)}>
+                  <button
+                    type="button"
+                    className={DIALOG_BTN}
+                    disabled={summarySaving}
+                    onClick={() => setEditingSummary(null)}
+                  >
                     关闭
                   </button>
-                  <button type="button" data-testid="memory-summary-save" className={DIALOG_BTN_PRIMARY} disabled>
-                    保存
+                  <button
+                    type="button"
+                    data-testid="memory-summary-save"
+                    className={DIALOG_BTN_PRIMARY}
+                    disabled={summarySaving || editingSummary.text.trim() === ""}
+                    onClick={saveSummaryEdit}
+                  >
+                    {summarySaving ? "保存中…" : "保存"}
                   </button>
                 </div>
               </div>

@@ -1,4 +1,4 @@
-// 用途：记忆视图控制器 hook（#34，US19–21）—— transport → memory:projectMemory 一次读（知识+总结，服务端口径：query 大小写不敏感子串匹配标题+正文、pending/ignored 不进）+ 知识再编辑动作（memory:editAccepted）；挂载/切项目/搜索词变化即再拉取（进视图即最新）
+// 用途：记忆视图控制器 hook（#34，US19–21；#38 补总结编辑）—— transport → memory:projectMemory 一次读（知识+总结，服务端口径：query 大小写不敏感子串匹配标题+正文、pending/ignored 不进）+ 知识再编辑动作（memory:editAccepted）+ 总结正文编辑（memory:editSummary）；挂载/切项目/搜索词变化即再拉取（进视图即最新）
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MemoryCandidateRow, MemorySummaryRow } from "@kanban/ipc-schema";
 import type { MemoryTransport } from "./memory-transport";
@@ -21,6 +21,8 @@ export interface MemoryController {
   refresh(): Promise<void>;
   /** 知识再编辑（memory:editAccepted；仅 claim/适用范围）——返回拒绝文案（null=成功），UI 直达呈现 */
   editAccepted(candidateId: string, edit: { claim?: string; scope?: string }): Promise<string | null>;
+  /** 总结正文编辑（memory:editSummary，#38；完整正文写回并纳入防覆盖基准）——返回拒绝文案（null=成功），UI 直达呈现 */
+  editSummary(requirementId: string, content: string): Promise<string | null>;
 }
 
 /** 记忆控制器 hook：transport 不可用或无项目时保持空态（App 层据此降级/空态引导） */
@@ -85,5 +87,16 @@ export function useMemory(transport: MemoryTransport | null, projectId: string |
     [transport, refresh],
   );
 
-  return { knowledge, summaries, query, setQuery, refresh, editAccepted };
+  const editSummary = useCallback(
+    async (requirementId: string, content: string): Promise<string | null> => {
+      if (!transport) return "记忆服务不可用";
+      const res = await transport.invoke({ channel: "memory:editSummary", requirementId, content });
+      if (!res.ok) return res.detail ? `${res.reason}：${res.detail}` : res.reason;
+      await refresh(); // 保存后刷新（总结正文即时更新）
+      return null;
+    },
+    [transport, refresh],
+  );
+
+  return { knowledge, summaries, query, setQuery, refresh, editAccepted, editSummary };
 }

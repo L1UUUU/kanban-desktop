@@ -1,5 +1,5 @@
 // 用途：MemoryService 密封测试 + handleMemoryIpc 入站校验与路由 + openMemoryService 启动对账（issue #31，spec #27 A/C/H 节；store 级动作全量、extract/cancel 入口拒绝语义（#32 真实现，管线全量分支见 memory-pipeline.test.ts）、projectMemory 查询过滤、需求删除级联 #35）
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -20,7 +20,7 @@ afterEach(() => {
  * 装配被测件：:memory: 库 + 独立临时 dataRoot + 可注入的 tracker 查询 fake（关联会话/需求标题），
  * 经 openMemoryService（与 index.ts 生产装配同入口）实例化。
  */
-function makeService() {
+function makeService(over?: { requirementExists?: (requirementId: string) => boolean }) {
   tmpRoot = mkdtempSync(join(tmpdir(), "kb-memory-svc-"));
   const db: SqliteDb = openDatabase(":memory:");
   const linkedSessions = new Map<string, Array<{ sessionId: string; cli: string }>>();
@@ -30,6 +30,7 @@ function makeService() {
     dataRoot: join(tmpRoot, "memory"),
     listLinkedStructuredSessions: (requirementId) => linkedSessions.get(requirementId) ?? [],
     getRequirementTitle: (requirementId) => titles.get(requirementId) ?? null,
+    requirementExists: over?.requirementExists,
   });
   return {
     service,
@@ -312,10 +313,48 @@ describe("deleteRequirementData 需求删除级联（issue #35，spec #27 J 节 
   });
 });
 
+describe("editSummary 总结正文编辑（issue #38，spec #27 I-8/US13）", () => {
+  it("写回成功：磁盘更新人工版 + 再次 writeSummary（模拟重提取）走 proposed 不覆盖（#30 防覆盖闭环衔接）", () => {
+    const ctx = makeService();
+    seedExtracted(ctx);
+    const before = ctx.service.summaries.getSummary("REQ-001");
+
+    const r = ctx.service.editSummary("REQ-001", "# 需求开发总结\n人工编辑版正文。");
+    expect(r).toMatchObject({ ok: true });
+
+    // 磁盘写回人工版（requirementMemory 读回口径）
+    expect(readFileSync(before!.mdPath, "utf8")).toBe("# 需求开发总结\n人工编辑版正文。");
+    const after = ctx.service.requirementMemory("REQ-001");
+    expect(after.ok).toBe(true);
+    if (after.ok) expect(after.summary?.content).toContain("人工编辑版正文。");
+
+    // 防覆盖闭环：磁盘≠库基准 → 重提取新版走 proposed 暂存，磁盘人工版不被覆盖
+    const rewrite = ctx.service.summaries.writeSummary({
+      requirementId: "REQ-001", projectId: "p1", batchId: "B2", content: "重提取新版",
+    });
+    expect(rewrite.mode).toBe("proposed");
+    expect(readFileSync(before!.mdPath, "utf8")).toBe("# 需求开发总结\n人工编辑版正文。");
+  });
+
+  it("无总结行 → no-summary；需求不存在（tracker 口径注入）→ requirement-not-found；均不触碰磁盘", () => {
+    const exists = new Set(["REQ-001", "REQ-404"]);
+    const ctx = makeService({ requirementExists: (id) => exists.has(id) });
+    seedExtracted(ctx);
+    const diskBefore = readFileSync(ctx.service.summaries.getSummary("REQ-001")!.mdPath, "utf8");
+    // 需求已被删除（tracker 口径）：防御性拒绝，不写盘
+    const gone = ctx.service.editSummary("REQ-999", "迟到的人工编辑");
+    expect(gone).toMatchObject({ ok: false, reason: "requirement-not-found" });
+    // 需求在但从未提取过总结（无行）
+    const none = ctx.service.editSummary("REQ-404", "正文");
+    expect(none).toMatchObject({ ok: false, reason: "no-summary" });
+    expect(readFileSync(ctx.service.summaries.getSummary("REQ-001")!.mdPath, "utf8")).toBe(diskBefore);
+  });
+});
+
 describe("handleMemoryIpc 入站校验与路由（memory:ipc 通道）", () => {
   it("非法消息 → ok:false + reason invalid-request + zod 摘要（Main 入站强制校验）", async () => {
     const ctx = makeService();
-    for (const raw of [null, "memory:extract", { channel: "memory:nuke" }, { channel: "memory:extract", requirementId: "" }]) {
+    for (const raw of [null, "memory:extract", { channel: "memory:nuke" }, { channel: "memory:extract", requirementId: "" }, { channel: "memory:editSummary", requirementId: "REQ-001", content: "" }]) {
       const res = await ctx.handle(raw);
       expect(res.ok).toBe(false);
       if (!res.ok) {
@@ -325,7 +364,7 @@ describe("handleMemoryIpc 入站校验与路由（memory:ipc 通道）", () => {
     }
   });
 
-  it("七通道真实路由：requirementMemory / reviewCandidate / projectMemory / editAccepted 往返 wire 形状", async () => {
+  it("八通道真实路由：requirementMemory / reviewCandidate / projectMemory / editAccepted / editSummary 往返 wire 形状", async () => {
     const ctx = makeService();
     const { candidates } = seedExtracted(ctx);
 
@@ -349,6 +388,13 @@ describe("handleMemoryIpc 入站校验与路由（memory:ipc 通道）", () => {
 
     const cancel = await ctx.handle({ channel: "memory:cancel", requirementId: "REQ-002" });
     expect(cancel).toMatchObject({ ok: false, reason: "no-extraction-running" });
+
+    // editSummary 真实路由：成功 ok:true 无附加载荷 + 磁盘写回；未知需求走业务拒绝
+    const summaryEdit = await ctx.handle({ channel: "memory:editSummary", requirementId: "REQ-001", content: "路由层写回正文" });
+    expect(summaryEdit).toEqual({ ok: true });
+    expect(readFileSync(ctx.service.summaries.getSummary("REQ-001")!.mdPath, "utf8")).toBe("路由层写回正文");
+    const summaryMiss = await ctx.handle({ channel: "memory:editSummary", requirementId: "REQ-404", content: "正文" });
+    expect(summaryMiss).toMatchObject({ ok: false, reason: "no-summary" });
   });
 
   it("退出中拒新请求（reason shutting-down）", async () => {

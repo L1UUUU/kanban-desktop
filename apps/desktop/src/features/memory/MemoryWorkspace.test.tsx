@@ -379,18 +379,42 @@ describe("复制与编辑动作（#34；US21）", () => {
     expect(screen.queryByTestId("memory-summary-dialog")).toBeNull();
   });
 
-  it("总结编辑弹层：textarea 呈现正文；保存提示通道尚未接入且不发任何写 IPC（memory wire 无总结编辑请求）", async () => {
+  it("总结编辑弹层（#38 接通）：编辑保存 → memory:editSummary IPC 载荷 + 弹层关闭 + 磁盘写回 + 列表刷新新正文", async () => {
     const mem = await bootMemoryView(dataRoot);
-    const callsBefore = mem.calls.length;
     fireEvent.click(screen.getByTestId("memory-summary-edit"));
     const dialog = screen.getByTestId("memory-summary-edit-dialog");
     const textarea = within(dialog).getByTestId("memory-summary-textarea") as HTMLTextAreaElement;
     expect(textarea.value).toContain("统一 CLI Adapter 契约与三实现");
-    fireEvent.change(textarea, { target: { value: "人工编辑版正文" } });
-    fireEvent.click(within(dialog).getByTestId("memory-summary-save"));
-    // 降级提示出现且弹层保留（内容可经复制路径交 CLI 处理），未发出任何写请求
-    await waitFor(() => expect(screen.getByTestId("memory-summary-save-notice").textContent).toContain("尚未接入"));
-    expect(screen.getByTestId("memory-summary-edit-dialog")).toBeTruthy();
+    fireEvent.change(textarea, { target: { value: "人工编辑版总结正文" } });
+    // 保存按钮可用（空白正文禁用：清空后 disabled，恢复后可点）
+    const save = within(dialog).getByTestId("memory-summary-save") as HTMLButtonElement;
+    fireEvent.change(textarea, { target: { value: "  " } });
+    expect(save.disabled).toBe(true);
+    fireEvent.change(textarea, { target: { value: "人工编辑版总结正文" } });
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    // 成功：弹层关闭 + 无降级提示
+    await waitFor(() => expect(screen.queryByTestId("memory-summary-edit-dialog")).toBeNull());
+    expect(screen.queryByTestId("memory-summary-save-notice")).toBeNull();
+    // IPC 断言：editSummary 通道且载荷为需求标识 + 新正文
+    const editCall = mem.calls.find((c) => c.channel === "memory:editSummary");
+    expect(editCall).toMatchObject({ channel: "memory:editSummary", requirementId: "REQ-001", content: "人工编辑版总结正文" });
+    // 磁盘写回（requirements/<REQ>/summary.md）
+    expect(readFileSync(join(dataRoot, PROJECT.id, "requirements", "REQ-001", "summary.md"), "utf8")).toBe("人工编辑版总结正文");
+    // 列表刷新：搜索命中新正文（旧正文不再命中）
+    const search = screen.getByTestId("memory-search");
+    fireEvent.change(search, { target: { value: "人工编辑版总结正文" } });
+    await waitFor(() => expect(screen.getAllByTestId("memory-summary-row")).toHaveLength(1));
+    fireEvent.change(search, { target: { value: "统一 CLI Adapter 契约" } });
+    await waitFor(() => expect(screen.getByTestId("memory-empty-search")).toBeTruthy());
+  });
+
+  it("总结编辑：关闭弹层且不发 IPC", async () => {
+    const mem = await bootMemoryView(dataRoot);
+    const callsBefore = mem.calls.length;
+    fireEvent.click(screen.getByTestId("memory-summary-edit"));
+    fireEvent.click(within(screen.getByTestId("memory-summary-edit-dialog")).getByRole("button", { name: "关闭" }));
+    expect(screen.queryByTestId("memory-summary-edit-dialog")).toBeNull();
     expect(mem.calls.length).toBe(callsBefore);
   });
 });
