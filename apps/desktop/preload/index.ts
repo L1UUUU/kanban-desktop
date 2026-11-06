@@ -1,6 +1,6 @@
-// 用途：contextBridge 薄层 —— 向 renderer 暴露最小 IPC 面（app:getInfo + kanban:ipc 单通道 invoke + chat:event/terminal:event/app:shutdown 订阅）；全部通道形状由 @kanban/ipc-schema 契约化，preload 不做校验（两端校验，spec E）
+// 用途：contextBridge 薄层 —— 向 renderer 暴露最小 IPC 面（app:getInfo + kanban:ipc 单通道 invoke + chat:event/terminal:event/tracker:event/app:shutdown 订阅）；全部通道形状由 @kanban/ipc-schema 契约化，preload 不做校验（两端校验，spec E）
 import { contextBridge, ipcRenderer } from "electron";
-import type { AdapterEvent, AppInfo, IpcRequest, IpcResult, ShutdownNotice, TerminalEvent } from "@kanban/ipc-schema";
+import type { AdapterEvent, AppInfo, IpcRequest, IpcResult, ShutdownNotice, TerminalEvent, TrackerChangeWire } from "@kanban/ipc-schema";
 
 const api = {
   /** 拉取应用运行信息（名称/版本/平台/SQLite 入口），用于骨架冒烟展示 */
@@ -18,6 +18,12 @@ const api = {
     const listener = (_e: unknown, event: TerminalEvent): void => handler(event);
     ipcRenderer.on("terminal:event", listener);
     return () => ipcRenderer.off("terminal:event", listener);
+  },
+  /** #17：订阅 tracker 变更流（requirement_created/stage_changed/session_linked/... 看板实时刷新载荷，schema 见 trackerChangeSchema），返回注销函数 */
+  onTrackerEvent: (handler: (change: TrackerChangeWire) => void): (() => void) => {
+    const listener = (_e: unknown, change: TrackerChangeWire): void => handler(change);
+    ipcRenderer.on("tracker:event", listener);
+    return () => ipcRenderer.off("tracker:event", listener);
   },
   /** 订阅退出通知（统一退出序列第 1 步「停止接收新请求」的 UI 提示，#13/spec H），返回注销函数 */
   onShutdownNotice: (handler: (notice: ShutdownNotice) => void): (() => void) => {

@@ -1,9 +1,11 @@
-// 用途：Main 入站 IPC 路由单测 —— zod 强制校验（非法消息明确错误码 E_SCHEMA）+ 各通道路由到 Adapter/store + AdapterError 错误码透传（spec E/#6 验收第 4 条/#7 project/session 通道）
+// 用途：Main 入站 IPC 路由单测 —— zod 强制校验（非法消息明确错误码 E_SCHEMA）+ 各通道路由到 Adapter/store + AdapterError 错误码透传（spec E/#6 验收第 4 条/#7 project/session 通道；#17 kanban 七通道 + 原子关联 + tracker 推送）
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeAdapter, VirtualClock, type CliAdapter } from "@kanban/cli-host";
+import { trackerChangeSchema } from "@kanban/ipc-schema";
+import { TrackerEngine, type TrackerChange } from "@kanban/tracker";
 import { openDatabase } from "./db";
 import { handleIpc, type IpcDeps } from "./ipc";
 import type { PtyHost } from "./pty-host";
@@ -50,12 +52,13 @@ function makeRouter() {
   return { clock, adapter, deps, handle: (raw: unknown) => handleIpc(deps, raw) };
 }
 
-/** 完整 deps：内存 store + 可注入的目录选择与当前项目存取 */
+/** 完整 deps：内存 store + 可注入的目录选择与当前项目存取（#17 起挂 TrackerEngine：kanban 通道落事件流） */
 function makeDeps(adapter: CliAdapter, pick: () => Promise<string | null> = async () => null): IpcDeps {
   const db = openDatabase(":memory:");
   let currentProjectId: string | null = null;
   return {
     adapter,
+    engine: new TrackerEngine(db),
     projects: new ProjectStore(db),
     sessions: new SessionStore(db),
     pickDirectory: pick,
@@ -357,6 +360,7 @@ describe("terminal 通道（#12：terminalApi × terminalId 参数化）", () =>
     const ptyState = makePtyHost();
     const deps: IpcDeps = {
       adapter: new FakeAdapter({ clock }),
+      engine: new TrackerEngine(db),
       projects: new ProjectStore(db),
       sessions: new SessionStore(db),
       pickDirectory: async () => projDir,
@@ -457,5 +461,338 @@ describe("退出序列 IPC 门闸（#13/spec H 停止接收新请求）", () => 
     }
     shuttingDown = false;
     expect((await handle({ channel: "project:list" })).ok).toBe(true);
+  });
+});
+
+describe("kanban 通道（#17 spec #15 C 节：全量经 TrackerEngine.process 落事件流）", () => {
+  /** kanban 专用路由：双项目 fixture + TrackerEngine + 推送 spy（changes 收集后逐条过 trackerChangeSchema） */
+  function makeKanbanRouter() {
+    tmpRoot = mkdtempSync(join(tmpdir(), "kb-ipc-kanban-"));
+    const projA = join(tmpRoot, "proj-a");
+    const projB = join(tmpRoot, "proj-b");
+    mkdirSync(projA, { recursive: true });
+    mkdirSync(projB, { recursive: true });
+    let picked: string | null = projA;
+    const clock = new VirtualClock();
+    const db = openDatabase(":memory:");
+    const engine = new TrackerEngine(db);
+    const changes: TrackerChange[] = [];
+    const deps: IpcDeps = {
+      adapter: new FakeAdapter({ clock }),
+      engine,
+      projects: new ProjectStore(db),
+      sessions: new SessionStore(db),
+      emitTrackerChange: (c) => changes.push(c),
+      pickDirectory: async () => picked,
+      getCurrentProjectId: () => null,
+      setCurrentProjectId: () => undefined,
+      pty: makePtyHost().host,
+    };
+    return {
+      deps,
+      engine,
+      changes,
+      projA,
+      projB,
+      pickNext: (dir: string | null) => {
+        picked = dir;
+      },
+      handle: (raw: unknown) => handleIpc(deps, raw),
+    };
+  }
+
+  /** 注册项目并返回 id */
+  async function registerProject(r: ReturnType<typeof makeKanbanRouter>, dir: string): Promise<string> {
+    r.pickNext(dir);
+    const reg = await r.handle({ channel: "project:register" });
+    if (!reg.ok || !reg.project) throw new Error("项目注册失败");
+    return reg.project.id;
+  }
+
+  /** 建会话并返回 sessionId */
+  async function createSession(r: ReturnType<typeof makeKanbanRouter>, cli: "fake" | "codex" | "claude" | "opencode", projectId?: string): Promise<string> {
+    const res = await r.handle({ channel: "session:create", cli, cwd: r.projA, projectId });
+    if (!res.ok || !res.sessionId) throw new Error("会话创建失败");
+    return res.sessionId;
+  }
+
+  it("kanban:create/list：确定性 REQ-00N 建卡（缺省待命名需求）、按项目过滤、sessionToReq 反查、推送 schema 化", async () => {
+    const r = makeKanbanRouter();
+    const pa = await registerProject(r, r.projA);
+    const pb = await registerProject(r, r.projB);
+
+    const c1 = await r.handle({ channel: "kanban:create", projectId: pa, title: "手动需求" });
+    expect(c1.ok).toBe(true);
+    if (c1.ok) expect(c1.requirementId).toBe("REQ-001");
+    const c2 = await r.handle({ channel: "kanban:create", projectId: pa }); // 缺省标题 + 计数推进
+    expect(c2.ok).toBe(true);
+    if (c2.ok) expect(c2.requirementId).toBe("REQ-002");
+    const c3 = await r.handle({ channel: "kanban:create", projectId: pb, title: "B 项目需求" });
+    expect(c3.ok).toBe(true);
+    if (c3.ok) expect(c3.requirementId).toBe("REQ-003");
+
+    const listA = await r.handle({ channel: "kanban:list", projectId: pa });
+    expect(listA.ok).toBe(true);
+    if (listA.ok) {
+      expect(listA.requirements).toHaveLength(2);
+      expect(listA.requirements![0]).toMatchObject({ id: "REQ-001", title: "手动需求", stage: null, uncertain: false, projectId: pa, sessions: [] });
+      expect(listA.requirements![1]).toMatchObject({ id: "REQ-002", title: "待命名需求" });
+      expect(listA.sessionToReq).toEqual({});
+    }
+    const listB = await r.handle({ channel: "kanban:list", projectId: pb });
+    if (!listB.ok) throw new Error("kanban:list(B) 失败");
+    expect(listB.requirements).toHaveLength(1);
+    expect(listB.requirements![0]).toMatchObject({ id: "REQ-003", projectId: pb });
+
+    // 手动建卡推送 requirement_created（sessionId=null，schema 化）
+    expect(r.changes).toHaveLength(3);
+    for (const c of r.changes) expect(() => trackerChangeSchema.parse(c)).not.toThrow();
+    expect(r.changes.filter((c) => c.type === "requirement_created")).toHaveLength(3);
+  });
+
+  it("未知需求 id：kanban:rename/setStage/delete → E_REQUIREMENT_NOT_FOUND", async () => {
+    const r = makeKanbanRouter();
+    const pa = await registerProject(r, r.projA);
+    await r.handle({ channel: "kanban:create", projectId: pa });
+    for (const raw of [
+      { channel: "kanban:rename", requirementId: "REQ-404", title: "x" },
+      { channel: "kanban:setStage", requirementId: "REQ-404", stage: "Design" },
+      { channel: "kanban:delete", requirementId: "REQ-404" },
+      { channel: "kanban:link", sessionId: "s-x", requirementId: "REQ-404" },
+    ]) {
+      const res = await r.handle(raw);
+      expect(res.ok, JSON.stringify(raw)).toBe(false);
+      if (!res.ok) expect(res.error.code).toBe("E_REQUIREMENT_NOT_FOUND");
+    }
+  });
+
+  it("kanban:setStage：四阶段与 none（归一未开始）经 manual 事件生效；rename 经事件流改标题", async () => {
+    const r = makeKanbanRouter();
+    const pa = await registerProject(r, r.projA);
+    await r.handle({ channel: "kanban:create", projectId: pa, title: "原标题" });
+
+    const set = await r.handle({ channel: "kanban:setStage", requirementId: "REQ-001", stage: "Implement" });
+    expect(set.ok).toBe(true);
+    let list = await r.handle({ channel: "kanban:list", projectId: pa });
+    if (!list.ok) throw new Error("kanban:list 失败");
+    expect(list.requirements![0]).toMatchObject({ stage: "Implement", uncertain: false });
+    expect(list.requirements![0].stageBasis).toMatchObject({ kind: "manual" });
+
+    const none = await r.handle({ channel: "kanban:setStage", requirementId: "REQ-001", stage: "none" });
+    expect(none.ok).toBe(true);
+    list = await r.handle({ channel: "kanban:list", projectId: pa });
+    if (!list.ok) throw new Error("kanban:list 失败");
+    expect(list.requirements![0].stage).toBe(null);
+
+    const rename = await r.handle({ channel: "kanban:rename", requirementId: "REQ-001", title: "新标题" });
+    expect(rename.ok).toBe(true);
+    list = await r.handle({ channel: "kanban:list", projectId: pa });
+    if (!list.ok) throw new Error("kanban:list 失败");
+    expect(list.requirements![0].title).toBe("新标题");
+    expect(r.changes.filter((c) => c.type === "requirement_renamed")).toHaveLength(1);
+    expect(r.changes.filter((c) => c.type === "stage_changed")).toHaveLength(2);
+  });
+
+  it("kanban:link：成功关联（会话行进卡片 + 反查映射）；已关联他卡/跨项目/无项目会话三类业务拒绝（linked=false + reason）", async () => {
+    const r = makeKanbanRouter();
+    const pa = await registerProject(r, r.projA);
+    const pb = await registerProject(r, r.projB);
+    await r.handle({ channel: "kanban:create", projectId: pa });
+    await r.handle({ channel: "kanban:create", projectId: pa }); // REQ-002（他卡）
+    const sidA = await createSession(r, "claude", pa);
+    const sidB = await createSession(r, "codex", pb); // B 项目会话
+    const sidNone = await createSession(r, "fake"); // 无项目演示会话
+
+    // 成功：同项目关联
+    const ok = await r.handle({ channel: "kanban:link", sessionId: sidA, requirementId: "REQ-001" });
+    expect(ok).toMatchObject({ ok: true, linked: true });
+    let list = await r.handle({ channel: "kanban:list", projectId: pa });
+    if (!list.ok) throw new Error("kanban:list 失败");
+    expect(list.requirements![0].sessions).toEqual([sidA]);
+    expect(list.sessionToReq).toEqual({ [sidA]: "REQ-001" });
+    expect(r.changes.some((c) => c.type === "session_linked" && c.requirementId === "REQ-001")).toBe(true);
+
+    // 拒绝 1：已关联他卡
+    const conflict = await r.handle({ channel: "kanban:link", sessionId: sidA, requirementId: "REQ-002" });
+    expect(conflict.ok).toBe(true);
+    if (conflict.ok) {
+      expect(conflict.linked).toBe(false);
+      expect(conflict.reason).toContain("已关联");
+    }
+
+    // 拒绝 2：跨项目（B 项目会话 × A 项目需求）
+    const mismatch = await r.handle({ channel: "kanban:link", sessionId: sidB, requirementId: "REQ-001" });
+    expect(mismatch.ok).toBe(true);
+    if (mismatch.ok) {
+      expect(mismatch.linked).toBe(false);
+      expect(mismatch.reason).toContain("跨项目");
+    }
+
+    // 拒绝 3：无项目会话
+    const unprojected = await r.handle({ channel: "kanban:link", sessionId: sidNone, requirementId: "REQ-001" });
+    expect(unprojected.ok).toBe(true);
+    if (unprojected.ok) {
+      expect(unprojected.linked).toBe(false);
+      expect(unprojected.reason).toContain("未归属项目");
+    }
+
+    // 三类拒绝均不落 session_linked
+    list = await r.handle({ channel: "kanban:list", projectId: pa });
+    if (!list.ok) throw new Error("kanban:list 失败");
+    expect(list.requirements![0].sessions).toEqual([sidA]);
+    expect(list.requirements![1].sessions).toEqual([]);
+  });
+
+  it("kanban:link 幂等（已关联同一需求 → linked=true）；unlink 解除并保留阶段；未知会话 → E_SESSION_NOT_FOUND", async () => {
+    const r = makeKanbanRouter();
+    const pa = await registerProject(r, r.projA);
+    await r.handle({ channel: "kanban:create", projectId: pa });
+    await r.handle({ channel: "kanban:setStage", requirementId: "REQ-001", stage: "PR" });
+    const sid = await createSession(r, "opencode", pa);
+
+    const again = await r.handle({ channel: "kanban:link", sessionId: sid, requirementId: "REQ-001" });
+    expect(again).toMatchObject({ ok: true, linked: true });
+    const dup = await r.handle({ channel: "kanban:link", sessionId: sid, requirementId: "REQ-001" });
+    expect(dup).toMatchObject({ ok: true, linked: true }); // 幂等成功，无新事件
+
+    const ghost = await r.handle({ channel: "kanban:link", sessionId: "ghost", requirementId: "REQ-001" });
+    expect(ghost.ok).toBe(false);
+    if (!ghost.ok) expect(ghost.error.code).toBe("E_SESSION_NOT_FOUND");
+
+    const unlink = await r.handle({ channel: "kanban:unlink", sessionId: sid });
+    expect(unlink.ok).toBe(true);
+    const list = await r.handle({ channel: "kanban:list", projectId: pa });
+    if (!list.ok) throw new Error("kanban:list 失败");
+    expect(list.requirements![0]).toMatchObject({ stage: "PR", sessions: [] }); // 解除不回退阶段
+    expect(list.sessionToReq).toEqual({});
+    expect(r.changes.some((c) => c.type === "session_unlinked" && c.sessionId === sid)).toBe(true);
+  });
+
+  it("kanban:delete：墓碑（行消失 + 关联解除 + 事件日志保留 + requirement_deleted 推送）", async () => {
+    const r = makeKanbanRouter();
+    const pa = await registerProject(r, r.projA);
+    await r.handle({ channel: "kanban:create", projectId: pa });
+    const sid = await createSession(r, "claude", pa);
+    await r.handle({ channel: "kanban:link", sessionId: sid, requirementId: "REQ-001" });
+    const eventsBefore = r.engine.store.snapshotTables().stageEventCount;
+
+    const del = await r.handle({ channel: "kanban:delete", requirementId: "REQ-001" });
+    expect(del.ok).toBe(true);
+    const list = await r.handle({ channel: "kanban:list", projectId: pa });
+    if (!list.ok) throw new Error("kanban:list 失败");
+    expect(list.requirements).toEqual([]);
+    expect(list.sessionToReq).toEqual({});
+    expect(r.engine.store.snapshotTables().stageEventCount, "事件日志永不删除").toBe(eventsBefore + 1);
+    expect(r.changes.some((c) => c.type === "requirement_deleted" && c.requirementId === "REQ-001")).toBe(true);
+  });
+
+  it("session:create+requirementId：同项目原子落 link（create+link 两事件一次完成）；跨项目/无项目/未知需求返回拒绝原因且不落 link", async () => {
+    const r = makeKanbanRouter();
+    const pa = await registerProject(r, r.projA);
+    const pb = await registerProject(r, r.projB);
+    await r.handle({ channel: "kanban:create", projectId: pa });
+
+    // 同项目：创建成功即关联（无 renderer 两步编排）
+    const ok = await r.handle({ channel: "session:create", cli: "claude", cwd: r.projA, projectId: pa, requirementId: "REQ-001" });
+    expect(ok.ok).toBe(true);
+    if (ok.ok) {
+      expect(ok.linked).toBe(true);
+      expect(ok.sessionId).toBeTruthy();
+    }
+    const snap = r.engine.snapshot();
+    expect(snap[0].sessions.length).toBe(1);
+    expect(r.engine.store.snapshotTables().stageEventCount).toBe(2); // create + link
+    expect(r.changes.some((c) => c.type === "session_linked")).toBe(true);
+
+    // 跨项目：会话仍创建成功，但 link 被拒并返回原因
+    const eventsBefore = r.engine.store.snapshotTables().stageEventCount;
+    const mismatch = await r.handle({ channel: "session:create", cli: "codex", cwd: r.projB, projectId: pb, requirementId: "REQ-001" });
+    expect(mismatch.ok).toBe(true);
+    if (mismatch.ok) {
+      expect(mismatch.linked).toBe(false);
+      expect(mismatch.reason).toContain("跨项目");
+      expect(mismatch.sessionId).toBeTruthy(); // 会话本身创建成功
+    }
+    expect(r.engine.store.snapshotTables().stageEventCount).toBe(eventsBefore); // 不落 link 事件
+    expect(r.engine.snapshot()[0].sessions.length).toBe(1);
+
+    // 无项目会话：拒绝关联
+    const unprojected = await r.handle({ channel: "session:create", cli: "fake", cwd: r.projA, requirementId: "REQ-001" });
+    expect(unprojected).toMatchObject({ ok: true, linked: false });
+    if (unprojected.ok) expect(unprojected.reason).toContain("未归属项目");
+
+    // 未知需求：会话创建成功 + 拒绝原因（业务拒绝合法结果）
+    const ghost = await r.handle({ channel: "session:create", cli: "opencode", cwd: r.projA, projectId: pa, requirementId: "REQ-404" });
+    expect(ghost).toMatchObject({ ok: true, linked: false });
+    if (ghost.ok) expect(ghost.reason).toContain("REQ-404");
+    expect(r.engine.snapshot()[0].sessions.length).toBe(1);
+  });
+
+  it("session:create cli=claude 响应含 skillConflicts 空数组（#17 占位，真实检测 #21）；非 claude 不带该字段", async () => {
+    const r = makeKanbanRouter();
+    const claude = await r.handle({ channel: "session:create", cli: "claude", cwd: r.projA });
+    expect(claude.ok).toBe(true);
+    if (claude.ok) expect(claude.skillConflicts).toEqual([]);
+    const codex = await r.handle({ channel: "session:create", cli: "codex", cwd: r.projA });
+    expect(codex.ok).toBe(true);
+    if (codex.ok) expect(codex.skillConflicts).toBeUndefined();
+  });
+
+  it("restore() 重放不产生推送；renderer 启动靠 kanban:list 再水化（spec #15 C/G 节）", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "kb-ipc-restore-"));
+    const projDir = join(tmpRoot, "proj");
+    mkdirSync(projDir, { recursive: true });
+    const dbFile = join(tmpRoot, "kanban.db");
+    const clock = new VirtualClock();
+
+    // 第一段：建卡落事件流后退出
+    const projectId = await (async () => {
+      const db = openDatabase(dbFile);
+      const engine = new TrackerEngine(db);
+      engine.restore();
+      const deps: IpcDeps = {
+        adapter: new FakeAdapter({ clock }),
+        engine,
+        projects: new ProjectStore(db),
+        sessions: new SessionStore(db),
+        emitTrackerChange: () => undefined,
+        pickDirectory: async () => projDir,
+        getCurrentProjectId: () => null,
+        setCurrentProjectId: () => undefined,
+        pty: makePtyHost().host,
+      };
+      const reg = await handleIpc(deps, { channel: "project:register" });
+      const id = reg.ok && reg.project ? reg.project.id : "";
+      const created = await handleIpc(deps, { channel: "kanban:create", projectId: id, title: "重启水化" });
+      expect(created).toMatchObject({ ok: true, requirementId: "REQ-001" });
+      engine.close();
+      return id;
+    })();
+
+    // 第二段：重启 restore → 零推送；kanban:list 水化出行；此后新操作恢复推送
+    const db2 = openDatabase(dbFile);
+    const engine2 = new TrackerEngine(db2);
+    const pushed: TrackerChange[] = [];
+    const deps2: IpcDeps = {
+      adapter: new FakeAdapter({ clock }),
+      engine: engine2,
+      projects: new ProjectStore(db2),
+      sessions: new SessionStore(db2),
+      emitTrackerChange: (c) => pushed.push(c),
+      pickDirectory: async () => projDir,
+      getCurrentProjectId: () => null,
+      setCurrentProjectId: () => undefined,
+      pty: makePtyHost().host,
+    };
+    engine2.restore();
+    expect(pushed, "restore 重放不产生 changes 推送").toEqual([]);
+
+    const list = await handleIpc(deps2, { channel: "kanban:list", projectId });
+    expect(list.ok).toBe(true);
+    if (list.ok) expect(list.requirements).toMatchObject([{ id: "REQ-001", title: "重启水化", projectId }]);
+
+    await handleIpc(deps2, { channel: "kanban:setStage", requirementId: "REQ-001", stage: "Design" });
+    expect(pushed.filter((c) => c.type === "stage_changed")).toHaveLength(1); // 推送路径本身可用
+    engine2.close();
   });
 });

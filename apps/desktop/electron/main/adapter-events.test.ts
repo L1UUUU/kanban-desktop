@@ -1,10 +1,11 @@
-// 用途：Adapter 事件流接线单测（#9）—— SkillObservation 经 handler 进 Engine 落库驱动状态机（幂等）、session_status/turn_started 落 sessions 表、事件转发不因 tracker 失败中断、主进程级重启恢复一致
+// 用途：Adapter 事件流接线单测（#9）—— SkillObservation 经 handler 进 Engine 落库驱动状态机（幂等）、session_status/turn_started 落 sessions 表、事件转发不因 tracker 失败中断、主进程级重启恢复一致；#17 起 tracker 变更经 sendChange 推送（schema 化）
 import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import type { AdapterEvent, SkillObservation } from "@kanban/ipc-schema";
-import { TrackerEngine } from "@kanban/tracker";
+import { trackerChangeSchema } from "@kanban/ipc-schema";
+import { TrackerEngine, type TrackerChange } from "@kanban/tracker";
 import { openDatabase, type SqliteDb } from "./db";
 import { createAdapterEventHandler } from "./adapter-events";
 import { SessionStore } from "./session-store";
@@ -16,15 +17,20 @@ afterAll(() => {
   for (const f of dbFiles) rmSync(f, { force: true });
 });
 
-/** 组装 main 同款接线：FakeAdapter（verified skill 注入脚本）→ handler → sessions 表 + TrackerEngine */
-function makeWiring(dbPath: string) {
+/** 组装 main 同款接线：FakeAdapter（verified skill 注入脚本）→ handler → sessions 表 + TrackerEngine（#17 起可挂变更推送 spy） */
+function makeWiring(dbPath: string, onChanges?: TrackerChange[]) {
   const db = openDatabase(dbPath);
   openDbs.push(db);
   const sessions = new SessionStore(db);
   const engine = new TrackerEngine(db);
   engine.restore(); // 重启场景：新实例先恢复
   const forwarded: AdapterEvent[] = [];
-  const handler = createAdapterEventHandler({ sessions, engine, send: (e) => forwarded.push(e) });
+  const handler = createAdapterEventHandler({
+    sessions,
+    engine,
+    send: (e) => forwarded.push(e),
+    sendChange: onChanges ? (c) => onChanges.push(c) : undefined,
+  });
   return { db, sessions, engine, handler, forwarded };
 }
 
@@ -75,6 +81,20 @@ describe("SkillObservation → Engine 落库（#9 接线）", () => {
     handler(verifiedDesignFeature("s-demo", "2026-11-05T10:00:01.000Z", "sk-np"));
     expect(engine.snapshot()).toEqual([]);
     expect(engine.store.snapshotTables().stageEventCount, "事件仍落日志（审计）").toBe(1);
+  });
+
+  it("#17：SkillObservation 引发的 tracker 变更经 sendChange 推送（schema 化）；无项目不建卡则无推送", () => {
+    const changes: TrackerChange[] = [];
+    const { db, handler } = makeWiring(":memory:", changes);
+    insertSession(db, "s-app-1", "p-1");
+    handler(verifiedDesignFeature("s-app-1", "2026-11-05T10:00:01.000Z", "sk-push"));
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({ type: "requirement_created", requirementId: "REQ-001", stage: "Design", sessionId: "s-app-1" });
+    expect(() => trackerChangeSchema.parse(changes[0]), "推送载荷过 zod 契约").not.toThrow();
+
+    insertSession(db, "s-demo", null);
+    handler(verifiedDesignFeature("s-demo", "2026-11-05T10:00:02.000Z", "sk-push-np"));
+    expect(changes, "无项目会话不建卡 → 无变更推送").toHaveLength(1);
   });
 
   it("同 eventId 重发（重连重放）→ 状态不变化、stage_events 不重复（INSERT OR IGNORE）", () => {

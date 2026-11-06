@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AdapterEvent, IpcRequest, IpcResult, ProjectRow, TerminalEvent } from "@kanban/ipc-schema";
 import { FakeAdapter, VirtualClock } from "@kanban/cli-host";
+import { TrackerEngine } from "@kanban/tracker";
 import { openDatabase } from "../../../electron/main/db";
 import { handleIpc, type IpcDeps } from "../../../electron/main/ipc";
 import { createPtyHost, type PtyLike, type PtyProcess } from "../../../electron/main/pty-host";
@@ -120,6 +121,8 @@ function makeTransport(
   const deps: IpcDeps = {
     adapter,
     pty,
+    // #17：IpcDeps 必挂 TrackerEngine（kanban 通道落事件流；本测试不触发 kanban 通道，仅补齐依赖形状）
+    engine: new TrackerEngine(db),
     projects: new ProjectStore(db),
     sessions: new SessionStore(db),
     pickDirectory: opts?.pick ?? (async () => null),

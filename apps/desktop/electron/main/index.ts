@@ -5,9 +5,9 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import * as nodePty from "node-pty";
-import { appInfoSchema, shutdownNoticeSchema, terminalEventSchema } from "@kanban/ipc-schema";
+import { appInfoSchema, shutdownNoticeSchema, terminalEventSchema, trackerChangeSchema } from "@kanban/ipc-schema";
 import { AdapterRouter, createDesktopAdapterFactory, type CliAdapter } from "@kanban/cli-host";
-import { TrackerEngine } from "@kanban/tracker";
+import { TrackerEngine, type TrackerChange } from "@kanban/tracker";
 import { defaultConfig, loadConfig, saveConfig, type AppConfig } from "./config";
 import { createAdapterEventHandler } from "./adapter-events";
 import { CliHostClient } from "./cli-host-client";
@@ -100,6 +100,13 @@ app.whenReady().then(async () => {
   adapter = createHostedAdapter(appConfig);
 
   // Adapter 事件流：出站校验 + 会话状态落库 + SkillObservation 进 tracker 落库（#9）→ 转发 renderer；窗口不在时静默丢弃转发
+  // #17：tracker 变更出站过 schema 校验后经 tracker:event 转发 renderer（看板事件驱动刷新；与 chat:event/terminal:event 同模式）
+  const sendTrackerChange = (change: TrackerChange): void => {
+    trackerChangeSchema.parse(change);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("tracker:event", change);
+    }
+  };
   adapter.subscribe(
     createAdapterEventHandler({
       sessions,
@@ -109,6 +116,7 @@ app.whenReady().then(async () => {
           mainWindow.webContents.send("chat:event", event);
         }
       },
+      sendChange: sendTrackerChange,
     }),
   );
 
@@ -182,6 +190,9 @@ app.whenReady().then(async () => {
     pty: ptyHost,
     projects,
     sessions,
+    // #17：kanban:* 通道经 TrackerEngine 落事件流；变更推送与事件泵共用 sendTrackerChange（tracker:event）
+    engine: trackerEngine,
+    emitTrackerChange: sendTrackerChange,
     pickDirectory,
     getCurrentProjectId: () => appConfig.currentProjectId,
     setCurrentProjectId: (id) => {

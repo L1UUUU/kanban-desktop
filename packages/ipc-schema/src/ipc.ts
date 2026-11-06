@@ -1,14 +1,16 @@
-// 用途：IPC 请求/结果/错误码契约 —— 单通道 kanban:ipc + channel 判别（spec E/C4；错误码形状由 ipc-schema 定义，不变量 6）
+// 用途：IPC 请求/结果/错误码契约 —— 单通道 kanban:ipc + channel 判别（spec E/C4；错误码形状由 ipc-schema 定义，不变量 6；#17 起 kanban:* 七通道，spec #15 C 节）
 import { z } from "zod";
 import { approvalDecisionSchema, chatEventSchema, permModeSchema, sessionIdSchema, sessionStatusSchema } from "./chat";
+import { kanbanStageInputSchema, requirementCardRowSchema } from "./kanban";
 import { terminalCreatePayloadSchema, terminalIdSchema } from "./terminal";
 
-// 首版错误码：E_SCHEMA 入站不合契约 / E_SESSION_NOT_FOUND 未知会话 / E_APPROVAL_EXPIRED 过期或已决审批 / E_PROJECT_NOT_FOUND 未知项目 / E_INTERNAL 兜底
+// 首版错误码：E_SCHEMA 入站不合契约 / E_SESSION_NOT_FOUND 未知会话 / E_APPROVAL_EXPIRED 过期或已决审批 / E_PROJECT_NOT_FOUND 未知项目 / E_INTERNAL 兜底；#17 加 E_REQUIREMENT_NOT_FOUND 未知需求 id
 export const ERROR_CODES = [
   "E_SCHEMA",
   "E_SESSION_NOT_FOUND",
   "E_APPROVAL_EXPIRED",
   "E_PROJECT_NOT_FOUND",
+  "E_REQUIREMENT_NOT_FOUND",
   "E_INTERNAL",
 ] as const;
 export const errorCodeSchema = z.enum(ERROR_CODES);
@@ -57,6 +59,8 @@ export const ipcRequestSchema = z.discriminatedUnion("channel", [
     title: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
     permMode: permModeSchema.optional(),
+    /** #17（spec #15 C 节）：创建成功后由 Main 原子落 link 事件（会话须与需求同项目，避免 renderer 两步编排竞态） */
+    requirementId: z.string().min(1).optional(),
   }),
   z.object({
     channel: z.literal("session:send"),
@@ -92,6 +96,19 @@ export const ipcRequestSchema = z.discriminatedUnion("channel", [
     rows: z.number().int().positive(),
   }),
   z.object({ channel: z.literal("terminal:kill"), terminalId: terminalIdSchema }),
+  // 看板通道（#17 spec #15 C 节：全部经 TrackerEngine.process 落事件流；link 业务拒绝是合法结果不走错误码）
+  z.object({ channel: z.literal("kanban:list"), projectId: z.string().min(1).optional() }),
+  z.object({
+    channel: z.literal("kanban:create"),
+    projectId: z.string().min(1),
+    /** 缺省「待命名需求」（S2-09：初始标题可编辑） */
+    title: z.string().min(1).optional(),
+  }),
+  z.object({ channel: z.literal("kanban:rename"), requirementId: z.string().min(1), title: z.string().min(1) }),
+  z.object({ channel: z.literal("kanban:setStage"), requirementId: z.string().min(1), stage: kanbanStageInputSchema }),
+  z.object({ channel: z.literal("kanban:link"), sessionId: sessionIdSchema, requirementId: z.string().min(1) }),
+  z.object({ channel: z.literal("kanban:unlink"), sessionId: sessionIdSchema }),
+  z.object({ channel: z.literal("kanban:delete"), requirementId: z.string().min(1) }),
 ]);
 export type IpcRequest = z.infer<typeof ipcRequestSchema>;
 
@@ -119,6 +136,18 @@ export const ipcOkSchema = z.object({
   sessions: z.array(sessionRowSchema).optional(),
   /** session:readHistory 附带：原生历史快照（ChatEvent 日志，与实时流同键同 seq） */
   events: z.array(chatEventSchema).optional(),
+  /** #17 kanban:list 附带：需求卡片行数组（按 projectId 过滤后的终态视图） */
+  requirements: z.array(requirementCardRowSchema).optional(),
+  /** #17 kanban:list 附带：会话→需求反查映射（侧栏会话行徽标用） */
+  sessionToReq: z.record(z.string(), z.string()).optional(),
+  /** #17 kanban:link / session:create+requirementId 附带：关联结果（业务拒绝是合法结果） */
+  linked: z.boolean().optional(),
+  /** linked=false 时的拒绝原因（已关联他卡/跨项目/无项目会话，直达调用方） */
+  reason: z.string().optional(),
+  /** #17 kanban:create 附带：新建需求的确定性 id（详情面板即开即用） */
+  requirementId: z.string().optional(),
+  /** #17 session:create（cli=claude）附带：项目级/用户级同名 skill 冲突名（本票固定空数组，真实检测 #21 接入） */
+  skillConflicts: z.array(z.string()).optional(),
 });
 export type IpcOk = z.infer<typeof ipcOkSchema>;
 
