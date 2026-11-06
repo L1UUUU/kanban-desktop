@@ -120,27 +120,28 @@ app.whenReady().then(async () => {
     }
   };
   const hostedAdapter = adapter instanceof CliHostClient ? adapter : null;
+  // 需求当前关联会话查询（两闭包同形遍历的共享形状）：按 kind 过滤收集，structured 附加 CLI 名（pty 侧仅取 sessionId）
+  const listLinkedSessions = (
+    requirementId: string,
+    kind: "structured" | "pty",
+  ): Array<{ sessionId: string; cli: string }> => {
+    const out: Array<{ sessionId: string; cli: string }> = [];
+    for (const [sessionId, reqId] of trackerEngine.tracker.sessionToReq) {
+      if (reqId !== requirementId) continue;
+      const s = sessions.get(sessionId);
+      if (s && s.kind === kind) out.push({ sessionId, cli: TRACKER_CLI_BY_APP[s.cli] ?? "claude-code" });
+    }
+    return out;
+  };
+  const listLinkedStructuredSessions = (requirementId: string): Array<{ sessionId: string; cli: string }> =>
+    listLinkedSessions(requirementId, "structured");
+  const listLinkedPtySessions = (requirementId: string): Array<{ sessionId: string }> =>
+    listLinkedSessions(requirementId, "pty").map(({ sessionId }) => ({ sessionId }));
   const memoryService = openMemoryService({
     db,
     dataRoot: join(app.getPath("userData"), "memory"),
-    listLinkedStructuredSessions: (requirementId) => {
-      const out: Array<{ sessionId: string; cli: string }> = [];
-      for (const [sessionId, reqId] of trackerEngine.tracker.sessionToReq) {
-        if (reqId !== requirementId) continue;
-        const s = sessions.get(sessionId);
-        if (s && s.kind === "structured") out.push({ sessionId, cli: TRACKER_CLI_BY_APP[s.cli] ?? "claude-code" });
-      }
-      return out;
-    },
-    listLinkedPtySessions: (requirementId) => {
-      const out: Array<{ sessionId: string }> = [];
-      for (const [sessionId, reqId] of trackerEngine.tracker.sessionToReq) {
-        if (reqId !== requirementId) continue;
-        const s = sessions.get(sessionId);
-        if (s && s.kind === "pty") out.push({ sessionId });
-      }
-      return out;
-    },
+    listLinkedStructuredSessions,
+    listLinkedPtySessions,
     getRequirementProjectId: (requirementId) => trackerEngine.tracker.req(requirementId)?.projectId ?? null,
     getRequirementTitle: (requirementId) => trackerEngine.tracker.req(requirementId)?.title ?? null,
     requirementExists: (requirementId) => trackerEngine.tracker.req(requirementId) != null,

@@ -22,14 +22,14 @@ afterAll(() => {
   for (const r of roots) rmSync(r, { recursive: true, force: true });
 });
 
-/** 建一个独立 store（:memory: 库 + 独立临时 dataRoot），注册全局清理 */
-function mkStore(): { store: MemoryStore; root: string; db: SqliteDb } {
+/** 建一个独立 store（:memory: 库 + 独立临时 dataRoot），注册全局清理；可注入时钟 */
+function mkStore(opts?: { now?: () => string }): { store: MemoryStore; root: string; db: SqliteDb } {
   const root = mkdtempSync(join(tmpdir(), "kb-memory-store-"));
   roots.push(root);
   const db = new RawDb(":memory:");
   dbs.push(db);
   ensureMemoryTables(db);
-  const store = new MemoryStore(db, root, { now: () => NOW });
+  const store = new MemoryStore(db, root, { now: opts?.now ?? (() => NOW) });
   return { store, root, db };
 }
 
@@ -129,6 +129,20 @@ describe("候选追加与 display_no（memory_candidates）", () => {
     const b = seedCandidate(store, "项目二规则", { projectId: "pb", batchId: "B2" });
     expect(a.displayNo).toBe("CAND-0001");
     expect(b.displayNo).toBe("CAND-0001");
+  });
+
+  it("appendCandidates 落库行与返回记录 createdAt 逐条一致（步进时钟下同一条只取一次时间戳）", () => {
+    // 步进时钟：每次调用返回不同时间戳，放大「一次插入内两次取时」的偏差
+    let tick = 0;
+    const { store } = mkStore({ now: () => new Date(1_700_000_000_000 + tick++ * 1000).toISOString() });
+    store.createBatch({ id: "B1", requirementId: "REQ-001", projectId: "p1" });
+    const recs = store.appendCandidates("B1", [
+      { claim: "单时间戳甲", scope: "", evidence: "", sourceSessionIds: [] },
+      { claim: "单时间戳乙", scope: "", evidence: "", sourceSessionIds: [] },
+    ]);
+    for (const r of recs) {
+      expect(must(store.getCandidate(r.id)).createdAt).toBe(r.createdAt);
+    }
   });
 
   it("appendCandidates 未知批次抛错", () => {

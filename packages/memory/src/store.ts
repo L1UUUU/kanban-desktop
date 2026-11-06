@@ -152,6 +152,8 @@ export class MemoryStore {
       for (const cand of candidates) {
         const displayNo = `CAND-${String(++seq).padStart(4, "0")}`;
         const id = crypto.randomUUID();
+        // 每条记录单时间戳：落库行与返回记录共用，避免两次取时不一致
+        const createdAt = this.now();
         const conflicts = formal
           .filter((f) => diceSimilarity(cand.claim, f.editedClaim ?? f.claim) >= CONFLICT_THRESHOLD)
           .map((f) => noteOf(f, "similar-to-accepted", cand.claim));
@@ -168,13 +170,13 @@ export class MemoryStore {
           .run(
             id, displayNo, batchId, batch.requirementId, batch.projectId,
             cand.claim, cand.scope, cand.evidence, JSON.stringify(cand.sourceSessionIds),
-            JSON.stringify(conflicts), JSON.stringify(notes), this.now(),
+            JSON.stringify(conflicts), JSON.stringify(notes), createdAt,
           );
         created.push({
           id, displayNo, batchId, requirementId: batch.requirementId, projectId: batch.projectId,
           claim: cand.claim, scope: cand.scope, evidence: cand.evidence, sourceSessionIds: cand.sourceSessionIds,
           status: "pending", editedClaim: null, editedScope: null, reviewedAt: null,
-          conflicts, notes, mdPath: null, createdAt: this.now(),
+          conflicts, notes, mdPath: null, createdAt,
         });
       }
       this.db.exec("COMMIT");
