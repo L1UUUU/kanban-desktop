@@ -20,6 +20,9 @@ importers:
       '@kanban/ipc-schema':
         specifier: workspace:*
         version: link:../../packages/ipc-schema
+      '@kanban/memory':
+        specifier: workspace:*
+        version: link:../../packages/memory
       '@kanban/tracker':
         specifier: workspace:*
         version: link:../../packages/tracker
@@ -128,6 +131,21 @@ importers:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vite:
+        specifier: ^8.3.5
+        version: 8.3.6(@types/node@24.19.2)(jiti@2.7.0)
+      vitest:
+        specifier: ^5.0.5
+        version: 5.1.0(@types/node@24.19.2)(jsdom@30.1.3(@noble/hashes@1.8.0))(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0))
+
+  packages/memory:
+    devDependencies:
+      '@types/node':
+        specifier: ^24
+        version: 24.19.2
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1833,6 +1851,7 @@ packages:
 
   rimraf@2.6.3:
     resolution: {integrity: sha512-mwqeW5XsA2qAejG46gYdENaxXjx9onRNCfn7L0duuP4hCuTIi/QO7PDK07KJfp1d+izWPrzEJDcSqBa0OZQriA==, tarball: http://127.0.0.1:4781/tarball/rimraf/2.6.3}
+    deprecated: Rimraf versions prior to v4 are no longer supported
     hasBin: true
 
   roarr@2.15.4:

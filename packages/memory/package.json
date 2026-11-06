@@ -1,0 +1,19 @@
+{
+  "name": "@kanban/memory",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Memory 核心逻辑包（演进自 poc-5 lib）：SQLite v3 三表 DDL 与迁移、候选状态机（pending→accepted/edited/ignored）、Dice 冲突/合并判重、总结 hash 防覆盖与 proposed 暂存、启动对账修复四规则、Markdown 存储布局与双写序、chunkEvents 分段纯函数",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  }
+}
