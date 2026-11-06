@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createPtyHost, type PtyHost, type TerminalEventSink } from "../../electron/main/pty-host";
 
 // 未配置 env 时整组跳过（CI/常规 pnpm test 不触发真实 ConPTY）
-const RUN_SMOKE = process.env.KANBAN_E2E === "1";
+const E2E = process.env.KANBAN_E2E === "1";
 
 /** 轮询等待条件成立（真实 PTY 输出为异步流） */
 async function waitFor(cond: () => boolean, timeoutMs: number, what: string): Promise<void> {
@@ -21,7 +21,7 @@ async function waitFor(cond: () => boolean, timeoutMs: number, what: string): Pr
   throw new Error(`等待超时（${timeoutMs}ms）：${what}`);
 }
 
-describe.skipIf(!RUN_SMOKE)("真实 ConPTY 冒烟（KANBAN_E2E=1）", () => {
+describe.skipIf(!E2E)("真实 ConPTY 冒烟（KANBAN_E2E=1）", () => {
   let tmpRoot = "";
   let output = "";
   const exits: Array<{ terminalId: string; exitCode: number; signal?: number }> = [];
