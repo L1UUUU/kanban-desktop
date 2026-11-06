@@ -1,8 +1,9 @@
-// 用途：看板控制器 hook（#18）—— transport → KanbanStore 接线：挂载经 kanban:list 再水化（restore 重放不产生推送，spec #15 C 节）+ onTrackerEvent 实时刷新（补丁成员直接归并、建卡经再水化补全）+ 手动建卡动作
+// 用途：看板控制器 hook（#18）—— transport → KanbanStore 接线：挂载经 kanban:list 再水化（restore 重放不产生推送，spec #15 C 节）+ onTrackerEvent 实时刷新（补丁成员直接归并、建卡经再水化补全）+ 手动建卡动作；#33 起组合 useRequirementMemory（详情面板需求经验区数据源，transport 未接 memory 通道时为 null）
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import type { KanbanStageInput, RequirementCardRow } from "@kanban/ipc-schema";
 import type { ChatTransport } from "../../lib/kanban-api";
 import { KanbanStore } from "./kanban-store";
+import { useRequirementMemory, type RequirementMemoryController } from "./use-requirement-memory";
 
 export interface KanbanController {
   requirements: RequirementCardRow[];
@@ -27,6 +28,8 @@ export interface KanbanController {
   link(sessionId: string, requirementId: string): Promise<string | null>;
   /** 解除关联（#20：kanban:unlink；不删历史、不回退阶段，卡片会话数经 session_unlinked 推送即时更新） */
   unlink(sessionId: string): Promise<void>;
+  /** #33：需求记忆控制器（详情面板需求经验区；transport 未接 memory 通道时为 null → 占位形态） */
+  memory: RequirementMemoryController | null;
 }
 
 /**
@@ -37,6 +40,8 @@ export function useKanban(transport: ChatTransport | null): KanbanController {
   // useState 初始化器保证每 hook 实例一个 store（渲染期可安全读取）
   const [store] = useState(() => new KanbanStore());
   const snap = useSyncExternalStore(store.subscribe, store.getSnapshot);
+  // #33：需求记忆控制器（跟随 activeRequirementId 一次读 + memory:event 局部刷新）
+  const memory = useRequirementMemory(snap.activeRequirementId, transport);
 
   const refresh = useCallback(async () => {
     if (!transport) return;
@@ -131,5 +136,6 @@ export function useKanban(transport: ChatTransport | null): KanbanController {
     removeRequirement,
     link,
     unlink,
+    memory,
   };
 }
