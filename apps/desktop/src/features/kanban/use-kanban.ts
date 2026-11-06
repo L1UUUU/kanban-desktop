@@ -1,6 +1,6 @@
 // 用途：看板控制器 hook（#18）—— transport → KanbanStore 接线：挂载经 kanban:list 再水化（restore 重放不产生推送，spec #15 C 节）+ onTrackerEvent 实时刷新（补丁成员直接归并、建卡经再水化补全）+ 手动建卡动作
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
-import type { RequirementCardRow } from "@kanban/ipc-schema";
+import type { KanbanStageInput, RequirementCardRow } from "@kanban/ipc-schema";
 import type { ChatTransport } from "../../lib/kanban-api";
 import { KanbanStore } from "./kanban-store";
 
@@ -17,6 +17,12 @@ export interface KanbanController {
   refresh(): Promise<void>;
   /** 未开始列「＋」手动建卡（S2-09；缺省标题「待命名需求」，归属当前项目） */
   create(projectId: string, title?: string): Promise<void>;
+  /** 标题行内编辑（#19：kanban:rename 落事件流，重启不被「待命名需求」回退） */
+  rename(requirementId: string, title: string): Promise<void>;
+  /** 阶段修正 / uncertain 确认共用（#19：kanban:setStage；"none" = 未开始） */
+  setStage(requirementId: string, stage: KanbanStageInput): Promise<void>;
+  /** 删除需求（#19：kanban:delete 墓碑；卡片经 requirement_deleted 推送实时消失） */
+  removeRequirement(requirementId: string): Promise<void>;
 }
 
 /**
@@ -57,14 +63,44 @@ export function useKanban(transport: ChatTransport | null): KanbanController {
     [transport],
   );
 
+  const rename = useCallback(
+    async (requirementId: string, title: string) => {
+      if (!transport) return;
+      const r = await transport.invoke({ channel: "kanban:rename", requirementId, title });
+      if (!r.ok) console.error("[kanban] 重命名失败", r.error);
+    },
+    [transport],
+  );
+
+  const setStage = useCallback(
+    async (requirementId: string, stage: KanbanStageInput) => {
+      if (!transport) return;
+      const r = await transport.invoke({ channel: "kanban:setStage", requirementId, stage });
+      if (!r.ok) console.error("[kanban] 阶段修正失败", r.error);
+    },
+    [transport],
+  );
+
+  const removeRequirement = useCallback(
+    async (requirementId: string) => {
+      if (!transport) return;
+      const r = await transport.invoke({ channel: "kanban:delete", requirementId });
+      if (!r.ok) console.error("[kanban] 删除需求失败", r.error);
+    },
+    [transport],
+  );
+
   return {
     requirements: snap.requirements,
     sessionToReq: snap.sessionToReq,
     activeRequirementId: snap.activeRequirementId,
     version: snap.version,
     store,
-    setActive: store.setActive,
+    setActive: (id: string | null) => store.setActive(id),
     refresh,
     create,
+    rename,
+    setStage,
+    removeRequirement,
   };
 }

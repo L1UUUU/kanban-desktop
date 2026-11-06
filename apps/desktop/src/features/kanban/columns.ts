@@ -25,17 +25,32 @@ const TRACKER_CLI_LABELS: Record<string, string> = {
   pty: "PTY",
 };
 
-/** 依据时间 → MM-DD（原型「design-feature · Claude · 11-06」形态；不可解析原样返回） */
-function formatBasisDate(iso: string): string {
+/** tracker CLI 名 → 显示名（未知名原样返回；卡片依据行与详情面板共用） */
+export function cliLabel(cli: string): string {
+  return TRACKER_CLI_LABELS[cli] ?? cli;
+}
+
+/** 依据时间 → MM-DD 或 MM-DD HH:mm（卡片行省略时间，详情面板含时间；不可解析原样返回） */
+function formatBasisDate(iso: string, withTime = false): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const md = `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  if (!withTime) return md;
+  return `${md} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
 /** 卡片阶段依据行（原型一致项 3）：skill 依据「skill · CLI · MM-DD」；manual 依据「手动修正 · MM-DD」；无依据 null（不渲染） */
 export function formatStageBasis(basis: StageBasisWire | null): string | null {
   if (!basis) return null;
   const date = formatBasisDate(basis.at);
-  if (basis.kind === "skill") return `${basis.skill} · ${TRACKER_CLI_LABELS[basis.cli] ?? basis.cli} · ${date}`;
+  if (basis.kind === "skill") return `${basis.skill} · ${cliLabel(basis.cli)} · ${date}`;
   return `手动修正 · ${date}`;
+}
+
+/** 详情面板「当前依据」行（原型一致项 4）：skill 依据「skill · CLI · 证据等级 · MM-DD HH:mm」；manual 依据「手动修正 · MM-DD HH:mm」 */
+export function formatDetailBasis(basis: StageBasisWire | null): string | null {
+  if (!basis) return null;
+  const ts = formatBasisDate(basis.at, true);
+  if (basis.kind === "skill") return `${basis.skill} · ${cliLabel(basis.cli)} · ${basis.evidenceLevel} · ${ts}`;
+  return `手动修正 · ${ts}`;
 }
