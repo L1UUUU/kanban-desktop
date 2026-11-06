@@ -1,0 +1,30 @@
+{
+  "generatedAt": "2026-11-06T13:48:16.962Z",
+  "extractionBudget": "≤3（含重试）",
+  "extractionCalls": 3,
+  "entries": [
+    {
+      "t": "2026-11-06T13:24:08Z～13:31Z（run 3 窗口）",
+      "cli": "claude",
+      "purpose": "造历史：开发会话① 真实短 turn（Read 工具读取 NOTES.md + 一句话总结）"
+    },
+    {
+      "t": "2026-11-06T13:24:08Z～13:31Z（run 3 窗口）",
+      "cli": "codex",
+      "purpose": "造历史：开发会话② 真实短 turn（shell 读取 NOTES.md + 一句话总结）"
+    },
+    {
+      "t": "2026-11-06T13:24:08Z～13:31Z（run 3 窗口）",
+      "cli": "claude",
+      "purpose": "提取批次① 段1+段2 临时 headless 会话（2 次模型调用；completed，产出 3 候选+总结）",
+      "batchId": "56be9945-17c5-49bc-9601-8e563fcd2f8b"
+    },
+    {
+      "t": "2026-11-06T13:39:22Z（run 6）",
+      "cli": "claude",
+      "purpose": "提取批次② 段1 临时 headless 会话（1 次模型调用；段完成后应用被测试框架关闭，stop() 有序收敛 cancelled——整批丢弃，无候选/无 proposed/总结未被触碰）",
+      "batchId": "70ca86e5-3f7a-4eef-93a3-a0f04ab247a1",
+      "note": "该调用因 harness 误匹配旧批次卡提前断言失败而未走完写库阶段；预算内不重发"
+    }
+  ]
+}
