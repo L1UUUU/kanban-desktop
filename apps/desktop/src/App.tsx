@@ -7,6 +7,9 @@ import { ChatWorkspace } from "./features/chat/ChatWorkspace";
 import type { ChatController } from "./features/chat/use-chat";
 import { KanbanEntryButton } from "./features/kanban/KanbanWorkspace";
 import { useKanban } from "./features/kanban/use-kanban";
+import { MemoryEntryButton, MemoryWorkspace } from "./features/memory/MemoryWorkspace";
+import { createWindowMemoryTransport, type MemoryTransport } from "./features/memory/memory-transport";
+import { useMemory } from "./features/memory/use-memory";
 import { useProjects } from "./features/projects/use-projects";
 import { createWindowTransport, type ChatTransport } from "./lib/kanban-api";
 
@@ -36,8 +39,8 @@ export function App() {
 }
 
 /**
- * 应用骨架（App 的可注入部分，#18）：项目 + 看板控制器与视图状态在此常驻 —— 视图切换只换中央区
- * （ChatWorkspace 常挂不卸载），CLI 会话/终端生命周期与视图无关（spec D/G 节）
+ * 应用骨架（App 的可注入部分，#18）：项目 + 看板/记忆控制器与视图状态在此常驻 —— 视图切换只换中央区
+ * （ChatWorkspace 常挂不卸载；#34 起 chat|kanban|memory 三态），CLI 会话/终端生命周期与视图无关（spec D/G 节）
  */
 export function AppShell({
   transport,
@@ -45,6 +48,7 @@ export function AppShell({
   shutdownNotice = null,
   sidebarFooter,
   onChatController,
+  memoryTransport = null,
 }: {
   transport: ChatTransport | null;
   demoCwd?: string | null;
@@ -54,11 +58,16 @@ export function AppShell({
   sidebarFooter?: ReactNode;
   /** 暴露 chat controller（测试驱动用；生产不传） */
   onChatController?: (controller: ChatController) => void;
+  /** memory 传输 seam（#34；缺省经 window.api 桥接，测试注入 fake） */
+  memoryTransport?: MemoryTransport | null;
 }) {
-  // 视图状态（#18 spec D 节）：chat|kanban，两视图共享侧栏
-  const [view, setView] = useState<"chat" | "kanban">("chat");
+  // 视图状态（#18 spec D 节 + #34 记忆视图）：chat|kanban|memory，三视图共享侧栏
+  const [view, setView] = useState<"chat" | "kanban" | "memory">("chat");
   const projects = useProjects(transport);
   const kanban = useKanban(transport);
+  // #34：memory transport 缺省走 preload 桥接（window.api 缺失时为 null → 视图降级）；useState 初始化器保证实例稳定
+  const [memoryTransport_] = useState(() => memoryTransport ?? createWindowMemoryTransport());
+  const memory = useMemory(memoryTransport_, projects.currentProjectId);
 
   return (
     <div className="grid h-screen grid-rows-[42px_auto_1fr] overflow-hidden bg-background text-foreground">
@@ -76,13 +85,29 @@ export function AppShell({
         view={view}
         kanban={kanban}
         onSetView={setView}
+        memory={
+          memoryTransport_ ? (
+            <MemoryWorkspace memory={memory} projectName={projects.currentProject?.name ?? null} />
+          ) : (
+            // 记忆服务不可用降级（window.api 未暴露，与聊天区降级同口径）
+            <section data-testid="memory-unavailable" className="flex items-center justify-center bg-background p-6 text-xs text-fg-faint">
+              记忆服务不可用（window.api 未暴露）
+            </section>
+          )
+        }
         sidebarFooter={
           <>
-            {/* 侧栏底部「看板」入口（原型一致项 1）：带当前项目指示，点击在聊天/看板间切换 */}
+            {/* 侧栏底部「看板」入口（原型一致项 1）：带当前项目指示，点击在看板/其余视图间切换 */}
             <KanbanEntryButton
               active={view === "kanban"}
               projectName={projects.currentProject?.name ?? null}
-              onToggle={() => setView((v) => (v === "chat" ? "kanban" : "chat"))}
+              onToggle={() => setView((v) => (v === "kanban" ? "chat" : "kanban"))}
+            />
+            {/* 侧栏底部「记忆」入口（#34 原型一致项 1）：看板入口之侧，点击在记忆/其余视图间切换 */}
+            <MemoryEntryButton
+              active={view === "memory"}
+              projectName={projects.currentProject?.name ?? null}
+              onToggle={() => setView((v) => (v === "memory" ? "chat" : "memory"))}
             />
             {sidebarFooter}
           </>
