@@ -5,6 +5,7 @@ import { join } from "node:path";
 import * as nodeSqlite from "node:sqlite";
 import { afterAll, describe, expect, it } from "vitest";
 import { ensureMemoryTables, type SqliteDb } from "./ddl";
+import { SummaryStore } from "./summary";
 import { MemoryStore, type MemoryCandidateRecord, type ReviewAction } from "./store";
 
 // 与 desktop db.ts 相同的 node:sqlite 入口回退
@@ -22,14 +23,14 @@ afterAll(() => {
 });
 
 /** 建一个独立 store（:memory: 库 + 独立临时 dataRoot），注册全局清理 */
-function mkStore(): { store: MemoryStore; root: string } {
+function mkStore(): { store: MemoryStore; root: string; db: SqliteDb } {
   const root = mkdtempSync(join(tmpdir(), "kb-memory-store-"));
   roots.push(root);
   const db = new RawDb(":memory:");
   dbs.push(db);
   ensureMemoryTables(db);
   const store = new MemoryStore(db, root, { now: () => NOW });
-  return { store, root };
+  return { store, root, db };
 }
 
 /** 快捷：建批次并追加一条候选，返回候选记录 */
@@ -411,5 +412,68 @@ describe("已接受知识再编辑 editAccepted（issue #31，US21：claim/适�
     store.reviewCandidate(acc.id, "accept");
     expect(() => store.editAccepted(acc.id, {})).toThrow(/至少一项/);
     expect(() => store.editAccepted("ghost", { claim: "x" })).toThrow(/不存在/);
+  });
+});
+
+describe("需求删除级联 deleteRequirementData（issue #35，spec #27 J 节 US22）", () => {
+  /** 预置一个「提取完成且部分审核」的完整形态：accepted/edited/pending/ignored 候选 + 总结（含 proposed）+ accepted/ md */
+  function seedDeletedShape(store: MemoryStore, summaries: SummaryStore, root: string) {
+    store.createBatch({ id: "B1", requirementId: "REQ-001", projectId: "p1", sourceSessionCount: 1 });
+    const [cAcc, cEdit, cIgn] = store.appendCandidates("B1", [
+      { claim: "已接受的结论", scope: "项目级", evidence: "e1", sourceSessionIds: ["s1"] },
+      { claim: "编辑后接受的结论", scope: "项目级", evidence: "e2", sourceSessionIds: ["s1"] },
+      { claim: "已忽略的结论", scope: "", evidence: "e3", sourceSessionIds: ["s1"] },
+    ]);
+    store.reviewCandidate(cAcc.id, "accept");
+    store.reviewCandidate(cEdit.id, "edit", { claim: "编辑后的结论（改）" });
+    store.reviewCandidate(cIgn.id, "ignore");
+    store.finishBatch("B1", { status: "completed" });
+    // 第二批次遗留 pending（跨批次待审）+ 人工编辑总结后重提取产生 proposed（US14 暂存态）
+    store.createBatch({ id: "B2", requirementId: "REQ-001", projectId: "p1" });
+    store.appendCandidates("B2", [{ claim: "遗留待审", scope: "", evidence: "e4", sourceSessionIds: ["s1"] }]);
+    store.finishBatch("B2", { status: "completed" });
+    summaries.writeSummary({ requirementId: "REQ-001", projectId: "p1", batchId: "B1", content: "# 总结\n人工版。" });
+    writeFileSync(join(root, "p1", "requirements", "REQ-001", "summary.md"), "# 总结\n人工编辑过的版本。", "utf8");
+    const proposed = summaries.writeSummary({ requirementId: "REQ-001", projectId: "p1", batchId: "B2", content: "# 总结\n新版。" });
+    return { cAcc, cEdit, proposedMdPath: proposed.proposedMdPath ?? "" };
+  }
+
+  it("清批次/pending+ignored 候选/总结行与 proposed/需求目录；accepted+edited 行与 accepted/ 文件保留", () => {
+    const { store, root, db } = mkStore();
+    const summaries = new SummaryStore(db, root, { now: () => NOW });
+    const { cAcc, cEdit, proposedMdPath } = seedDeletedShape(store, summaries, root);
+
+    store.deleteRequirementData("REQ-001", "p1");
+
+    // 批次与需求级候选清理；accepted/edited 知识行保留且 md 文件仍在（项目级资产）
+    expect(store.listBatches("REQ-001")).toEqual([]);
+    const rest = store.listRequirementCandidates("REQ-001");
+    expect(rest.map((c) => c.status).sort()).toEqual(["accepted", "edited"]);
+    const knowledge = store.listKnowledge("p1");
+    expect(knowledge.map((c) => c.id).sort()).toEqual([cAcc.id, cEdit.id].sort());
+    expect(knowledge.every((k) => k.mdPath && existsSync(k.mdPath))).toBe(true);
+    expect(readdirSync(join(root, "p1", "accepted")).sort()).toEqual(
+      knowledge.map((k) => `${k.displayNo}.md`).sort(),
+    );
+    // 总结行消失；requirements/<REQ>/ 目录整体清除（summary.md 与 proposed 一并）
+    expect(summaries.getSummary("REQ-001")).toBeNull();
+    expect(existsSync(join(root, "p1", "requirements", "REQ-001"))).toBe(false);
+    expect(existsSync(proposedMdPath)).toBe(false);
+  });
+
+  it("同项目他需求与他项目的 memory 数据不受影响；无数据需求删除为幂等空操作", () => {
+    const { store, root, db } = mkStore();
+    const summaries = new SummaryStore(db, root, { now: () => NOW });
+    store.createBatch({ id: "B1", requirementId: "REQ-002", projectId: "p1" });
+    const [other] = store.appendCandidates("B1", [
+      { claim: "他需求的知识", scope: "项目级", evidence: "e", sourceSessionIds: ["s1"] },
+    ]);
+    store.reviewCandidate(other.id, "accept");
+    summaries.writeSummary({ requirementId: "REQ-002", projectId: "p1", batchId: "B1", content: "# 他需求总结" });
+
+    expect(() => store.deleteRequirementData("REQ-404", "p1")).not.toThrow(); // 幂等空操作
+    expect(store.listKnowledge("p1")).toHaveLength(1);
+    expect(summaries.getSummary("REQ-002")).toMatchObject({ requirementId: "REQ-002" });
+    expect(existsSync(join(root, "p1", "requirements", "REQ-002", "summary.md"))).toBe(true);
   });
 });

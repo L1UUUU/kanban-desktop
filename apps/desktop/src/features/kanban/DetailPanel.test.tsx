@@ -363,11 +363,14 @@ describe("详情滑出面板（#19；原型一致项 4/5）", () => {
     await createManualCard();
     openCard("none", "待命名需求");
 
-    // 删除按钮 → 二次确认弹层（原型一致项 5 文案：仅清需求与关联 / 会话与历史保留 / 不可撤销）
+    // 删除按钮 → 二次确认弹层（原型一致项 5 文案：仅清需求与关联 / 会话与历史保留 / 不可撤销；
+    // #35 spec #27 J 节：memory 处置如实说明——项目知识保留、需求总结与待审候选一并删除）
     fireEvent.click(screen.getByTestId("delete-requirement-button"));
     const dialog = screen.getByTestId("delete-confirm-dialog");
     expect(dialog.textContent).toContain("仅删除需求卡片与全部会话关联");
     expect(dialog.textContent).toContain("会话本身、聊天历史与事件日志保留");
+    expect(dialog.textContent).toContain("已接受/已编辑的项目知识保留");
+    expect(dialog.textContent).toContain("需求总结与待审候选一并删除");
     expect(dialog.textContent).toContain("不可撤销");
 
     // 取消 → 弹层关、卡片仍在

@@ -1,4 +1,4 @@
-// 用途：memory wire 契约测试 —— memory:ipc 七请求联合 + 结果形状（业务拒绝 reason 模式）+ memory:event 推送载荷（issue #31，spec #27 H 节）
+// 用途：memory wire 契约测试 —— memory:ipc 七请求联合 + 结果形状（业务拒绝 reason 模式）+ memory:event 推送载荷（issue #31，spec #27 H 节）+ 提取段输出契约（#32，spec #27 F 节）
 import { describe, expect, it } from "vitest";
 import {
   memoryBatchRowSchema,
@@ -6,6 +6,7 @@ import {
   memoryEventSchema,
   memoryRequestSchema,
   memoryResultSchema,
+  memorySegmentOutputSchema,
   memorySummaryRowSchema,
 } from "./memory";
 
@@ -226,5 +227,29 @@ describe("memory:event 推送载荷（批次状态与段进度）", () => {
         chunkCount: 5,
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("memorySegmentOutputSchema：提取段输出契约（#32，spec #27 F 节）", () => {
+  it("合法输出解析：summary + candidates 完整形状", () => {
+    const r = memorySegmentOutputSchema.parse({
+      summary: "段小结。",
+      candidates: [{ claim: "规则甲", evidence: "依据", scope: "构建", sourceSessionIds: ["s1"] }],
+    });
+    expect(r.candidates.length).toBe(1);
+    expect(r.candidates[0]).toMatchObject({ claim: "规则甲", evidence: "依据", scope: "构建", sourceSessionIds: ["s1"] });
+  });
+
+  it("宽松缺省：candidates 可缺省为空数组、evidence/scope/sourceSessionIds 缺省补空（一段无候选是合法结果）", () => {
+    const r = memorySegmentOutputSchema.parse({ summary: "无候选段小结。" });
+    expect(r).toEqual({ summary: "无候选段小结。", candidates: [] });
+    const one = memorySegmentOutputSchema.parse({ summary: "s", candidates: [{ claim: "只有断言" }] });
+    expect(one.candidates[0]).toMatchObject({ claim: "只有断言", evidence: "", scope: "", sourceSessionIds: [] });
+  });
+
+  it("类型不符拒绝（管线据此重试一次）：summary 非字符串 / candidates 非数组 / claim 非字符串", () => {
+    expect(memorySegmentOutputSchema.safeParse({ summary: 123, candidates: [] }).success).toBe(false);
+    expect(memorySegmentOutputSchema.safeParse({ summary: "s", candidates: "oops" }).success).toBe(false);
+    expect(memorySegmentOutputSchema.safeParse({ summary: "s", candidates: [{ claim: 42 }] }).success).toBe(false);
   });
 });

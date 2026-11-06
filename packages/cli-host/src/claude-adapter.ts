@@ -3,13 +3,13 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, PermMode, SessionStatus, SkillObservation } from "@kanban/ipc-schema";
+import type { AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
 import { transformHookEvents } from "@kanban/tracker";
 import { AdapterError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
 import { resolveClaudeExe } from "./claude/exe";
 import { ClaudeStreamClient, type ClaudeStreamOptions } from "./claude/client";
 import { prepareSessionHookDir, resolveHookNodeBin, tailJsonl, writeSessionSettings, type SessionHookFiles } from "./claude/hook-inject";
-import { findTranscriptFile, parseTranscriptItems } from "./claude/transcript";
+import { findTranscriptFile, parseTranscriptEvents, parseTranscriptItems } from "./claude/transcript";
 
 /** 可注入的流客户端面（生产 ClaudeStreamClient；测试 Fake 手动驱动协议消息） */
 export interface ClaudeStreamClientLike {
@@ -205,6 +205,21 @@ export class ClaudeAdapter implements CliAdapter {
     this.tailHookEvents(s); // 断开期间迟到的 hook 行（verified 信号）先消费
     this.backfillFromTranscript(s);
     return [...s.log];
+  }
+
+  /** readTranscript（#28）：transcript 文件即权威原生历史 —— 直读解析为 user/assistant 双视角（不依赖进程状态，不与实时流去重） */
+  async readTranscript(sessionId: string): Promise<TranscriptEvent[]> {
+    const s = this.requireSession(sessionId);
+    const file = findTranscriptFile(s.nativeSessionId, s.cwd);
+    if (!file) return []; // 尚无 turn 的会话：无落盘历史，空数组为诚实行为
+    let content: string;
+    try {
+      content = readFileSync(file, "utf8");
+    } catch (e) {
+      // 读失败不冒充完整（spec #27「缺失会话明确列出」）：报错由提取管线记为缺失
+      throw new AdapterError("E_INTERNAL", `读取 Claude transcript 失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+    return parseTranscriptEvents(content);
   }
 
   async resume(sessionId: string): Promise<void> {

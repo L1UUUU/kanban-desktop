@@ -13,6 +13,8 @@ export interface ShutdownDeps {
   notifyShutdown(reason: string): void;
   /** 等待能力注入（测试用 fake timers / 立即返回） */
   sleep(ms: number): Promise<void>;
+  /** memory 提取停止（issue #32，spec #27 C 节）：running 批次 → cancelled；排在 adapter/PTY 之后、DB 关闭前 */
+  memory?: { stop(): Promise<void> };
   /** 诊断日志 */
   log?(kind: string, detail: string): void;
 }
@@ -66,6 +68,9 @@ export function createShutdownOrchestrator(deps: ShutdownDeps): ShutdownOrchestr
     await deps.adapter.dispose();
     // 6. PTY 全停（幂等）
     deps.pty.killAll();
+    // 7. memory 提取停止（issue #32，spec #27 C 节：running 批次 → cancelled；adapter/PTY 之后、DB 关闭前，
+    //    DB 在 app quit 才关闭——本序列完成即 quit，时序上保证批次终态先落库）
+    if (deps.memory) await deps.memory.stop();
     deps.log?.("shutdown", `退出序列完成：settled=${settled} sessions=${live.length} elapsed=${Date.now() - startedAt}ms`);
   }
 

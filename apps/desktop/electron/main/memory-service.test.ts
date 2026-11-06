@@ -1,5 +1,5 @@
-// 用途：MemoryService 密封测试 + handleMemoryIpc 入站校验与路由 + openMemoryService 启动对账（issue #31，spec #27 A/C/H 节；store 级动作全量、extract/cancel 业务拒绝占位、projectMemory 查询过滤）
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+// 用途：MemoryService 密封测试 + handleMemoryIpc 入站校验与路由 + openMemoryService 启动对账（issue #31，spec #27 A/C/H 节；store 级动作全量、extract/cancel 入口拒绝语义（#32 真实现，管线全量分支见 memory-pipeline.test.ts）、projectMemory 查询过滤、需求删除级联 #35）
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -61,14 +61,14 @@ function seedExtracted(ctx: ReturnType<typeof makeService>, over?: { requirement
   return { batchId: "B1", requirementId, projectId, candidates };
 }
 
-describe("extract / cancel 业务拒绝占位（提取管线 S3-05 接线）", () => {
+describe("extract / cancel 入口拒绝语义（#32 真实现；管线全量分支见 memory-pipeline.test.ts）", () => {
   it("零关联 structured 会话 → no-sessions（提取按钮禁用/拒绝的依据）", async () => {
     const { service } = makeService();
     const r = service.extract("REQ-001");
     expect(r).toMatchObject({ ok: false, reason: "no-sessions" });
   });
 
-  it("有会话但无 running 批次 → cli-unavailable 占位（无法真实启动）", async () => {
+  it("有会话但提取双桥未接线（本 harness 不注入桥，如进程内回退 adapter）→ cli-unavailable", async () => {
     const ctx = makeService();
     ctx.linkedSessions.set("REQ-001", [{ sessionId: "s1", cli: "claude-code" }]);
     const r = ctx.service.extract("REQ-001");
@@ -82,11 +82,12 @@ describe("extract / cancel 业务拒绝占位（提取管线 S3-05 接线）", (
     expect(ctx.service.extract("REQ-001")).toMatchObject({ ok: false, reason: "extraction-running" });
   });
 
-  it("cancel：无 running 批次 → no-extraction-running；有 running → 占位拒绝（取消管线随 S3-05）", () => {
+  it("cancel：无 running 批次 → no-extraction-running；库内孤儿 running（无进行中编排）→ 直接收敛 cancelled", async () => {
     const ctx = makeService();
-    expect(ctx.service.cancel("REQ-001")).toMatchObject({ ok: false, reason: "no-extraction-running" });
+    expect(await ctx.service.cancel("REQ-001")).toMatchObject({ ok: false, reason: "no-extraction-running" });
     ctx.service.store.createBatch({ id: "B-run", requirementId: "REQ-001", projectId: "p1" });
-    expect(ctx.service.cancel("REQ-001")).toMatchObject({ ok: false, reason: "extraction-running" });
+    expect(await ctx.service.cancel("REQ-001")).toMatchObject({ ok: true, cancelled: true });
+    expect(ctx.service.store.getBatch("B-run")).toMatchObject({ status: "cancelled" });
   });
 });
 
@@ -264,6 +265,50 @@ describe("editAccepted 已接受知识再编辑", () => {
     if (r.ok) expect(r.candidate?.editedClaim).toBe("修订后的知识");
 
     expect(ctx.service.editAccepted(candidates[1].id, { claim: "x" })).toMatchObject({ ok: false, reason: "candidate-not-editable" });
+  });
+});
+
+describe("deleteRequirementData 需求删除级联（issue #35，spec #27 J 节 US22）", () => {
+  it("删除后 projectMemory：已接受知识仍在且可检索、该需求总结行消失；requirements/<REQ>/ 清除、accepted/ 完整", () => {
+    const ctx = makeService();
+    const { requirementId, projectId, candidates } = seedExtracted(ctx);
+    // 审核出混合终态：accepted / edited；candidates[2] 留 pending（待审，应随需求清理）
+    ctx.service.reviewCandidate(candidates[0].id, "accept");
+    ctx.service.reviewCandidate(candidates[1].id, "edit", { claim: "总结分段按会话边界优先（编辑后）" });
+
+    const before = ctx.service.projectMemory(projectId);
+    expect(before.ok && before.knowledge.length === 2 && before.summaries.length === 1).toBe(true);
+
+    ctx.service.deleteRequirementData(requirementId, projectId);
+
+    // projectMemory（issue #35 验收第 1 条）：已接受知识仍在且可检索，总结行消失
+    const after = ctx.service.projectMemory(projectId);
+    expect(after.ok).toBe(true);
+    if (!after.ok) return;
+    expect(after.knowledge).toHaveLength(2);
+    expect(after.knowledge.every((k) => k.mdPath && existsSync(k.mdPath))).toBe(true);
+    expect(after.summaries).toEqual([]);
+    const hit = ctx.service.projectMemory(projectId, "直连");
+    expect(hit.ok && hit.knowledge.length === 1).toBe(true);
+
+    // requirementMemory：批次清空、pending 清理、总结无；accepted/edited 行保留
+    const detail = ctx.service.requirementMemory(requirementId);
+    expect(detail.batches).toEqual([]);
+    expect(detail.candidates.map((c) => c.status).sort()).toEqual(["accepted", "edited"]);
+    expect(detail.summary).toBeNull();
+
+    // 存储布局（验收第 2 条）：requirements/<REQ>/ 目录清除；accepted/ 目录与文件完整
+    expect(existsSync(join(ctx.dataRoot, projectId, "requirements", requirementId))).toBe(false);
+    expect(readdirSync(join(ctx.dataRoot, projectId, "accepted")).sort()).toEqual(
+      after.knowledge.map((k) => `${k.displayNo}.md`).sort(),
+    );
+  });
+
+  it("无 memory 数据的需求删除为幂等空操作", () => {
+    const ctx = makeService();
+    expect(() => ctx.service.deleteRequirementData("REQ-404", "p-none")).not.toThrow();
+    const pm = ctx.service.projectMemory("p-none");
+    expect(pm.ok && pm.knowledge.length === 0 && pm.summaries.length === 0).toBe(true);
   });
 });
 

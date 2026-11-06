@@ -1,7 +1,8 @@
-// 用途：MemoryStore —— memory_batches 批次生命周期 + memory_candidates 候选追加/display_no 项目内递增/审核状态机（仅 pending 可流转、edit 仅 claim 与 scope、溯源不可变）+ Dice 冲突标注 + accepted md 双写序（Markdown 先写 temp+rename → SQLite 事务后提交）（spec #27 D/F/G 节，演进自 poc-5 review/store）
+// 用途：MemoryStore —— memory_batches 批次生命周期 + memory_candidates 候选追加/display_no 项目内递增/审核状态机（仅 pending 可流转、edit 仅 claim 与 scope、溯源不可变）+ Dice 冲突标注 + accepted md 双写序（Markdown 先写 temp+rename → SQLite 事务后提交）+ 需求删除级联（终态知识排除，spec #27 D/F/G/J 节，演进自 poc-5 review/store）
+import { rmSync } from "node:fs";
 import { CONFLICT_THRESHOLD, diceSimilarity, type ExtractedCandidate } from "./similarity";
 import { ensureMemoryTables, type SqliteDb } from "./ddl";
-import { acceptedMdPath, renderAcceptedMd, writeAtomic } from "./markdown";
+import { acceptedMdPath, renderAcceptedMd, requirementDir, writeAtomic } from "./markdown";
 
 export type BatchStatus = "running" | "completed" | "failed" | "cancelled";
 export type CandidateStatus = "pending" | "accepted" | "edited" | "ignored";
@@ -291,6 +292,40 @@ export class MemoryStore {
     const c = this.getCandidate(id);
     if (!c) throw new Error(`候选不存在: ${id}`);
     return c;
+  }
+
+  // ========== 需求删除级联（issue #35，spec #27 J 节 US22） ==========
+
+  /**
+   * 需求删除级联：单事务清批次行、pending/ignored 候选行、总结行（含 proposed 指针），
+   * 再整体清除 requirements/<REQ>/ 目录（summary.md 与 proposed 文件均在其中）；
+   * accepted/edited 知识行与 accepted/ 文件保留（项目级资产）。幂等：无数据时为空操作。
+   * 目录定位 = 传入 projectId ∪ 三表行内 project_id（自动建卡 projectId 理论可空时以行内值为准）。
+   */
+  deleteRequirementData(requirementId: string, projectId?: string | null): void {
+    const projectIds = new Set<string>();
+    if (projectId) projectIds.add(projectId);
+    for (const sql of [
+      "SELECT DISTINCT project_id AS p FROM memory_batches WHERE requirement_id = ?",
+      "SELECT DISTINCT project_id AS p FROM memory_candidates WHERE requirement_id = ?",
+      "SELECT DISTINCT project_id AS p FROM memory_summaries WHERE requirement_id = ?",
+    ]) {
+      const rows = this.db.prepare(sql).all(requirementId) as unknown as Array<{ p: string }>;
+      for (const row of rows) projectIds.add(row.p);
+    }
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("DELETE FROM memory_batches WHERE requirement_id = ?").run(requirementId);
+      this.db.prepare("DELETE FROM memory_candidates WHERE requirement_id = ? AND status IN ('pending','ignored')").run(requirementId);
+      this.db.prepare("DELETE FROM memory_summaries WHERE requirement_id = ?").run(requirementId);
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+    for (const p of projectIds) {
+      rmSync(requirementDir(this.dataRoot, p, requirementId), { recursive: true, force: true });
+    }
   }
 
   /** 项目内当前最大编号（CAND-xxxx 数值），无候选时为 0 */

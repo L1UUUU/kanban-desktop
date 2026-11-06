@@ -1,5 +1,5 @@
 // 用途：Main 入站 IPC 路由单测 —— zod 强制校验（非法消息明确错误码 E_SCHEMA）+ 各通道路由到 Adapter/store + AdapterError 错误码透传（spec E/#6 验收第 4 条/#7 project/session 通道；#17 kanban 七通道 + 原子关联 + tracker 推送）
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,6 +8,7 @@ import { trackerChangeSchema } from "@kanban/ipc-schema";
 import { TrackerEngine, type TrackerChange } from "@kanban/tracker";
 import { openDatabase } from "./db";
 import { handleIpc, type IpcDeps } from "./ipc";
+import { openMemoryService } from "./memory-service";
 import type { PtyHost } from "./pty-host";
 import { ProjectStore } from "./project-store";
 import { SessionStore } from "./session-store";
@@ -684,6 +685,62 @@ describe("kanban 通道（#17 spec #15 C 节：全量经 TrackerEngine.process �
     expect(list.sessionToReq).toEqual({});
     expect(r.engine.store.snapshotTables().stageEventCount, "事件日志永不删除").toBe(eventsBefore + 1);
     expect(r.changes.some((c) => c.type === "requirement_deleted" && c.requirementId === "REQ-001")).toBe(true);
+  });
+
+  it("kanban:delete：级联清理该需求 memory 数据（issue #35 spec #27 J 节——知识保留、需求级记录与总结清理、目录清除）", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "kb-ipc-delmem-"));
+    const projA = join(tmpRoot, "proj-a");
+    mkdirSync(projA, { recursive: true });
+    const clock = new VirtualClock();
+    const db = openDatabase(":memory:");
+    const engine = new TrackerEngine(db);
+    // memory 面与 kanban 面同库装配（index.ts 生产形态：MemoryService 经 deps 注入可达）
+    const { service: memory } = openMemoryService({
+      db,
+      dataRoot: join(tmpRoot, "memory"),
+      listLinkedStructuredSessions: () => [],
+      getRequirementTitle: () => null,
+    });
+    const deps: IpcDeps = {
+      adapter: new FakeAdapter({ clock }),
+      engine,
+      projects: new ProjectStore(db),
+      sessions: new SessionStore(db),
+      memory,
+      pickDirectory: async () => projA,
+      getCurrentProjectId: () => null,
+      setCurrentProjectId: () => undefined,
+      pty: makePtyHost().host,
+    };
+    const handle = (raw: unknown) => handleIpc(deps, raw);
+
+    const reg = await handle({ channel: "project:register" });
+    const projectId = reg.ok && reg.project ? reg.project.id : "";
+    await handle({ channel: "kanban:create", projectId, title: "带记忆的需求" });
+    // 预置提取完成形态：accepted + pending 候选、总结（spec J 节清理对象的知识/需求级两分）
+    memory.store.createBatch({ id: "B1", requirementId: "REQ-001", projectId, sourceSessionCount: 1 });
+    const created = memory.store.appendCandidates("B1", [
+      { claim: "级联后保留的项目知识", scope: "删除级联", evidence: "e", sourceSessionIds: ["s1"] },
+      { claim: "级联时清理的待审候选", scope: "", evidence: "e", sourceSessionIds: ["s1"] },
+    ]);
+    const accepted = memory.store.reviewCandidate(created[0].id, "accept");
+    memory.store.finishBatch("B1", { status: "completed" });
+    memory.summaries.writeSummary({ requirementId: "REQ-001", projectId, batchId: "B1", content: "# 需求总结" });
+
+    const del = await handle({ channel: "kanban:delete", requirementId: "REQ-001" });
+    expect(del.ok).toBe(true);
+
+    // 墓碑照旧 + memory 级联生效：知识保留（md 在）、总结行消失、批次/待审清理、需求目录清除
+    const list = await handle({ channel: "kanban:list", projectId });
+    if (!list.ok) throw new Error("kanban:list 失败");
+    expect(list.requirements).toEqual([]);
+    const pm = memory.projectMemory(projectId);
+    expect(pm.ok && pm.knowledge.length === 1 && pm.summaries.length === 0).toBe(true);
+    const detail = memory.requirementMemory("REQ-001");
+    expect(detail.batches).toEqual([]);
+    expect(detail.candidates.map((c) => c.status)).toEqual(["accepted"]);
+    expect(existsSync(join(tmpRoot, "memory", projectId, "requirements", "REQ-001"))).toBe(false);
+    expect(existsSync(accepted.mdPath ?? "")).toBe(true);
   });
 
   it("session:create+requirementId：同项目原子落 link（create+link 两事件一次完成）；跨项目/无项目/未知需求返回拒绝原因且不落 link", async () => {

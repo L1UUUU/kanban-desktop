@@ -36,6 +36,8 @@ export interface IpcDeps {
   isShuttingDown?(): boolean;
   /** #21（spec #15 E 节）：用户级 Claude 基准目录解析（CLAUDE_CONFIG_DIR 优先，否则 ~/.claude）；仅 session:create cli=claude 的同名 skill 检测用。缺省读 process.env + os.homedir，测试注入固定目录 */
   resolveUserClaudeDir?(): string;
+  /** #35（spec #27 J 节）：memory 面（kanban:delete 需求删除级联清理）；index.ts 经 openMemoryService 装配注入，缺省无 memory 数据可清理（旧测试/降级装配） */
+  memory?: MemoryService;
 }
 
 // CLI 显示名（新建会话默认标题「新会话 · {名}」，原型 §3.6）
@@ -294,7 +296,11 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
       return { ok: true };
     }
     case "kanban:delete": {
-      if (!deps.engine.tracker.req(req.requirementId)) return requirementNotFound(req.requirementId);
+      const r = deps.engine.tracker.req(req.requirementId);
+      if (!r) return requirementNotFound(req.requirementId);
+      // #35（spec #27 J 节 US22）：需求删除级联清理 memory 数据（批次/待审与已忽略候选/总结与 proposed/需求目录），
+      // accepted/edited 知识保留；置于墓碑事件前——清理抛错时需求仍在、用户可重试删除，不产生永不可达的孤儿 memory 数据
+      deps.memory?.deleteRequirementData(req.requirementId, r.projectId);
       processAndEmit(deps, guiEvent(`delete:${req.requirementId}`, {
         kind: "delete",
         source: "gui-delete",
@@ -457,7 +463,8 @@ export async function handleMemoryIpc(deps: MemoryIpcDeps, raw: unknown): Promis
       return r.ok ? { ok: true, started: true, batchId: r.batchId } : r;
     }
     case "memory:cancel": {
-      const r = deps.memory.cancel(req.requirementId);
+      // #32：取消管线已接线（异步等待整批落定）
+      const r = await deps.memory.cancel(req.requirementId);
       return r.ok ? { ok: true, cancelled: true } : r;
     }
     case "memory:reviewCandidate": {

@@ -176,3 +176,20 @@ export const memoryEventSchema = z.discriminatedUnion("type", [
   }),
 ]);
 export type MemoryEventWire = z.infer<typeof memoryEventSchema>;
+
+// 提取段输出契约（issue #32，spec #27 F 节）—— Claude headless stdout 的结构化输出 wire（外部 CLI 进程 → 提取管线的进程边界契约）：
+// prompt 约束只输出单个 JSON 对象；类型宽松 + 缺省值（candidates 允许缺省为空——一段无候选是合法结果），
+// 来源归属不在此校验（管线按段内会话强制 clamp）；校验失败由管线重试一次。
+export const memorySegmentCandidateSchema = z.object({
+  claim: z.string(),
+  evidence: z.string().default(""),
+  scope: z.string().default(""),
+  sourceSessionIds: z.array(z.string()).default([]),
+});
+export type MemorySegmentCandidate = z.infer<typeof memorySegmentCandidateSchema>;
+
+export const memorySegmentOutputSchema = z.object({
+  summary: z.string(),
+  candidates: z.array(memorySegmentCandidateSchema).default([]),
+});
+export type MemorySegmentOutput = z.infer<typeof memorySegmentOutputSchema>;
