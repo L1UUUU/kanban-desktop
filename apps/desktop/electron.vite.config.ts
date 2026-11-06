@@ -5,7 +5,8 @@ import tailwindcss from "@tailwindcss/vite";
 import { resolve } from "node:path";
 
 // workspace 内部包不外置：以 TS 源码直接编译进产物（外部依赖如 electron 才走 require 外置）
-const workspacePackages = ["@kanban/ipc-schema", "@kanban/cli-host", "@kanban/tracker"];
+// #36 补 @kanban/memory：#30 起 db.ts 引用其 DDL，外置会在运行期以 ESM 加载 TS 源（extensionless 解析失败，应用启动即崩）
+const workspacePackages = ["@kanban/ipc-schema", "@kanban/cli-host", "@kanban/tracker", "@kanban/memory"];
 
 // 生产 CSP：脚本仅自身源（禁远程/内联脚本）、样式放宽 unsafe-inline（Tailwind/Vite 打包注入）、数据字体/图片放行
 // dev 不注入（HMR websocket 与 React Fast Refresh 内联脚本需要；electron-vite 模板同款做法）
