@@ -3,10 +3,10 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { CodexAdapter } from "./codex-adapter";
-import { defineAdapterContractTests, createCollector } from "./adapter.contract";
-import { resolveCodexExe, readCodexVersion } from "./codex/exe";
-import { probeProtocol } from "./codex/protocol-probe";
+import { CodexAdapter } from "../../src/codex-adapter";
+import { defineAdapterContractTests, createCollector } from "../../src/adapter.contract";
+import { resolveCodexExe, readCodexVersion } from "../../src/codex/exe";
+import { probeProtocol } from "../../src/codex/protocol-probe";
 import type { AdapterEvent, ChatEvent, PermMode } from "@kanban/ipc-schema";
 
 const E2E = process.env.KANBAN_E2E === "1";

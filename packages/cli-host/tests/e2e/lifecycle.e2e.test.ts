@@ -5,8 +5,8 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AdapterEvent, ChatEvent } from "@kanban/ipc-schema";
-import { ClaudeAdapter } from "./claude-adapter";
-import { CodexAdapter } from "./codex-adapter";
+import { ClaudeAdapter } from "../../src/claude-adapter";
+import { CodexAdapter } from "../../src/codex-adapter";
 
 const E2E = process.env.KANBAN_E2E === "1";
 

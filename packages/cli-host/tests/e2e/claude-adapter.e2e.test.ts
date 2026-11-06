@@ -3,8 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { ClaudeAdapter } from "./claude-adapter";
-import { createCollector, defineAdapterContractTests } from "./adapter.contract";
+import { ClaudeAdapter } from "../../src/claude-adapter";
+import { createCollector, defineAdapterContractTests } from "../../src/adapter.contract";
 import type { AdapterEvent, ChatEvent, SkillObservation } from "@kanban/ipc-schema";
 
 const E2E = process.env.KANBAN_E2E === "1";

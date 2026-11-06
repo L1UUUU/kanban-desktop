@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import net from "node:net";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { OpenCodeAdapter } from "./opencode-adapter";
-import { OpenCodeServerHost } from "./opencode/server-host";
-import { createCollector, defineAdapterContractTests } from "./adapter.contract";
-import type { CliAdapter } from "./adapter";
+import { OpenCodeAdapter } from "../../src/opencode-adapter";
+import { OpenCodeServerHost } from "../../src/opencode/server-host";
+import { createCollector, defineAdapterContractTests } from "../../src/adapter.contract";
+import type { CliAdapter } from "../../src/adapter";
 import type { AdapterEvent, ChatEvent, SkillObservation } from "@kanban/ipc-schema";
 
 const E2E = process.env.KANBAN_E2E === "1";
