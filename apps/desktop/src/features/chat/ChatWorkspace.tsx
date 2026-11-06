@@ -1,11 +1,14 @@
-// 用途：聊天工作区 —— useChatController + useTerminals + useProjects 接线侧栏与中央区（transport 可注入：生产 window.api，测试 FakeAdapter 直连；活跃会话为 PTY 时中央渲染终端面板；主仓库并行冲突判据驱动提示条）
+// 用途：聊天工作区 —— useChatController + useTerminals + useProjects 接线侧栏与中央区（transport 可注入：生产 window.api，测试 FakeAdapter 直连；活跃会话为 PTY 时中央渲染终端面板；主仓库并行冲突判据驱动提示条；#18 起中央区在聊天/看板视图间切换，本组件常挂 → 会话与 CLI 生命周期与视图切换无关）
 import type { ReactNode } from "react";
+import type { RequirementCardRow } from "@kanban/ipc-schema";
 import { Sidebar } from "../../components/Sidebar";
 import type { ProjectsController } from "../projects/use-projects";
 import type { ChatTransport } from "../../lib/kanban-api";
 import { ChatPane } from "./ChatPane";
 import { detectMainRepoConflict } from "./conflict";
 import { resolveSessionCwd, useChatController, type ChatController } from "./use-chat";
+import { KanbanWorkspace } from "../kanban/KanbanWorkspace";
+import type { KanbanController } from "../kanban/use-kanban";
 import { TerminalWorkspace } from "../terminal/TerminalWorkspace";
 import { useTerminals } from "../terminal/use-terminals";
 
@@ -15,6 +18,9 @@ export function ChatWorkspace({
   demoCwd,
   onController,
   sidebarFooter,
+  view = "chat",
+  kanban,
+  onOpenRequirement,
 }: {
   transport: ChatTransport | null;
   /** 项目控制器（App 层创建，TopBar 与侧栏共享状态） */
@@ -24,6 +30,12 @@ export function ChatWorkspace({
   /** 暴露 controller（测试驱动用；生产不传） */
   onController?: (controller: ChatController) => void;
   sidebarFooter?: ReactNode;
+  /** 当前视图（#18：chat=聊天区，kanban=看板；组件常挂，切换不卸载会话/终端控制器） */
+  view?: "chat" | "kanban";
+  /** 看板控制器（App 层创建常驻；view=kanban 时中央渲染看板） */
+  kanban?: KanbanController | null;
+  /** 卡片点击挂点（#19 详情滑出面板；本票不接） */
+  onOpenRequirement?: (card: RequirementCardRow) => void;
 }) {
   const controller = useChatController(transport, demoCwd ?? null);
   const terminals = useTerminals(transport, controller);
@@ -69,7 +81,9 @@ export function ChatWorkspace({
           </>
         }
       />
-      {active && active.cli === "pty" ? (
+      {view === "kanban" ? (
+        <KanbanWorkspace kanban={kanban ?? null} projects={projects} onOpenRequirement={onOpenRequirement} />
+      ) : active && active.cli === "pty" ? (
         <TerminalWorkspace session={active} manager={terminals.manager} onKill={terminals.kill} />
       ) : (
         <ChatPane

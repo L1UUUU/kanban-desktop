@@ -64,4 +64,22 @@ describe("FakeAdapter SkillObservation（#9 tracker 接线的数据源）", () =
     expect(skillObservationSchema.parse(skills[0])).toMatchObject({ skill: "design-feature", cli: "claude-code", evidenceLevel: "verified" });
     await adapter.dispose();
   });
+
+  it("「/skill 名 verified」→ 以 claude-code 口径发 verified 信号（#18 看板自动建卡的 e2e/演示入口，无需脚本注入）", async () => {
+    const clock = new VirtualClock();
+    const adapter = new FakeAdapter({ clock });
+    const skills = collectSkills(adapter);
+    const { sessionId } = await adapter.createSession({ cwd: "C:\\demo" });
+    await adapter.sendTurn({ sessionId, text: "/design-feature verified 设计阶段2看板" });
+    clock.runToIdle();
+    expect(skills).toHaveLength(1);
+    expect(skillObservationSchema.parse(skills[0])).toMatchObject({
+      kind: "skill",
+      skill: "design-feature",
+      cli: "claude-code",
+      evidenceLevel: "verified",
+      source: "fake-script",
+    });
+    await adapter.dispose();
+  });
 });

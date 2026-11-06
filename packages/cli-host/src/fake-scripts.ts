@@ -93,19 +93,24 @@ export const ERROR_SCRIPT: ScriptStep[] = [
 // C2 有效阶段 skill 集合（token 精确匹配用；硬编码于 fake 层，真实识别归各 Adapter）
 const STAGE_SKILLS = new Set(["design-feature", "implement-spec", "pr", "retro"]);
 
-/** skill 分支：发送文本首个空白分隔 token 精确等于 /skill名 且命中已知 skill（镜像 Codex 生成规则，spec B）；Fake 无 hook → self_reported */
-export function skillTurnScript(skill: string): ScriptStep[] {
+/** skill 分支：发送文本首个空白分隔 token 精确等于 /skill名 且命中已知 skill（镜像 Codex 生成规则，spec B）；
+ *  Fake 无 hook → 缺省 self_reported；第二个 token 为 "verified" 时以 Claude hook 口径发 verified 信号
+ *  （#18 看板自动建卡链路的 e2e/演示入口：verified design-feature 才触发 tracker 自动建卡） */
+export function skillTurnScript(skill: string, verified = false): ScriptStep[] {
+  const cli = verified ? "claude-code" : "codex";
+  const evidenceLevel = verified ? "verified" : "self_reported";
   return [
-    { t: "skill", skill, cli: "codex", evidenceLevel: "self_reported" },
-    { t: "assistant", text: `已收到 /${skill}，开始按该 skill 的流程推进（观察信号 self_reported 已发出）。` },
+    { t: "skill", skill, cli, evidenceLevel },
+    { t: "assistant", text: `已收到 /${skill}，开始按该 skill 的流程推进（观察信号 ${evidenceLevel} 已发出）。` },
     { t: "turnEnd" },
   ];
 }
 
 /** 按发送文本选择脚本：命中关键词走对应演示分支（E2E/手动演示的确定性入口）；/skill 名精确命中走 skill 分支，未命中按普通 prompt 发送 */
 export function pickScript(text: string): ScriptStep[] {
-  const token = text.split(/\s+/)[0] ?? "";
-  if (token.startsWith("/") && STAGE_SKILLS.has(token.slice(1))) return cloneScript(skillTurnScript(token.slice(1)));
+  const tokens = text.split(/\s+/);
+  const token = tokens[0] ?? "";
+  if (token.startsWith("/") && STAGE_SKILLS.has(token.slice(1))) return cloneScript(skillTurnScript(token.slice(1), tokens[1] === "verified"));
   if (text.includes("审批")) return cloneScript(APPROVAL_SCRIPT);
   if (text.includes("过期")) return cloneScript(EXPIRY_SCRIPT);
   if (text.includes("错误") || text.includes("异常")) return cloneScript(ERROR_SCRIPT);

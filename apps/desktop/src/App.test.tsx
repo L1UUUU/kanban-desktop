@@ -20,6 +20,13 @@ describe("App 三区布局骨架（原型一致项 1）", () => {
     expect(screen.getByRole("button", { name: "＋ 注册本地目录…" })).toBeTruthy();
   });
 
+  it("侧栏底部「看板」入口可见（#18 原型一致项 1；无项目时指示回落「当前项目」）", () => {
+    render(<App />);
+    const entry = screen.getByTestId("kanban-entry");
+    expect(entry.textContent).toContain("看板");
+    expect(entry.textContent).toContain("当前项目");
+  });
+
   it("聊天区：占位说明与 composer 占位可见，IPC 不可用时降级", () => {
     render(<App />);
     expect(screen.getByText(/聊天区占位/)).toBeTruthy();

@@ -30,9 +30,9 @@ async function launchApp(): Promise<{ app: ElectronApplication; win: Page; clean
     },
   });
   const win = await app.firstWindow();
-  // 空态引导 → 注册 → 项目行；再经「＋」菜单建首个会话（原型一致项 2）
+  // 空态引导 → 注册 → 项目行；再经「＋」菜单建首个会话（原型一致项 2；exact=项目行文本精确匹配，侧栏「看板」入口的项目指示不含项目名整串）
   await win.getByRole("button", { name: "＋ 注册", exact: true }).click();
-  await expect(win.locator("aside").getByText(PROJECT_NAME)).toBeVisible({ timeout: 15_000 });
+  await expect(win.locator("aside").getByText(PROJECT_NAME, { exact: true })).toBeVisible({ timeout: 15_000 });
   await createSession(win);
   return {
     app,
@@ -61,7 +61,7 @@ async function send(win: Page, text: string): Promise<void> {
 
 /** 经项目行「＋」新建 Claude 会话（原型一致项 2：悬浮显示 ＋ → 点击弹菜单；FakeAdapter 承载演示） */
 async function createSession(win: Page): Promise<void> {
-  await win.locator("aside").getByText(PROJECT_NAME).hover(); // 悬浮项目行显示「＋」
+  await win.locator("aside").getByText(PROJECT_NAME, { exact: true }).hover(); // 悬浮项目行显示「＋」
   await win.getByRole("button", { name: "＋", exact: true }).click();
   await win.getByRole("button", { name: "Claude", exact: true }).click();
   await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });

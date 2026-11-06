@@ -26,6 +26,7 @@ function makeTransport(overrides: Record<string, unknown> = {}) {
     },
     onEvent: () => () => undefined,
     onTerminalEvent: () => () => undefined,
+    onTrackerEvent: () => () => undefined,
   };
   return { transport, calls };
 }

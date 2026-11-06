@@ -137,8 +137,12 @@ function makeTransport(
     onEvent: (h: (e: AdapterEvent) => void) => adapter.subscribe(h),
     onTerminalEvent: (h: (e: TerminalEvent) => void) => {
       terminalListeners.add(h);
-      return () => terminalListeners.delete(h);
+      return () => {
+        terminalListeners.delete(h);
+      };
     },
+    // 本套不驱动看板：tracker 订阅空实现（形状补齐，kanban 套见 KanbanWorkspace.test.tsx）
+    onTrackerEvent: () => () => undefined,
   };
 }
 
@@ -441,6 +445,7 @@ describe("聊天区（原型一致项 5/6/7）", () => {
       },
       onEvent: () => () => undefined,
       onTerminalEvent: () => () => undefined,
+      onTrackerEvent: () => () => undefined,
     };
     const t = mount(stub);
     await t.flush();
