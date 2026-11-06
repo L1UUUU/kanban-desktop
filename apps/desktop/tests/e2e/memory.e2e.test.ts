@@ -1,5 +1,5 @@
-// 用途：memory B 类 e2e（issue #31 验收）—— 经真实 handleIpc（kanban:ipc：建项目/需求/会话关联）与 handleMemoryIpc（memory:ipc）完成「审核 → 检索 → 重启保持」+ 伪造 running 批次重启对账；fake/预置数据驱动、无真实 CLI 依赖，故不设 KANBAN_E2E 门控（全部断言默认跑；真实 Claude 提取属 S3-05 验收票）
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+// 用途：memory B 类 e2e（issue #31 验收 + #35 需求删除级联）—— 经真实 handleIpc（kanban:ipc：建项目/需求/会话关联/删除）与 handleMemoryIpc（memory:ipc）完成「审核 → 检索 → 重启保持」+ 伪造 running 批次重启对账 + kanban:delete 级联清理；fake/预置数据驱动、无真实 CLI 依赖，故不设 KANBAN_E2E 门控（全部断言默认跑；真实 Claude 提取属 S3-05 验收票）
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -77,6 +77,8 @@ function assemble(dbPath: string, dataRoot: string, projectDir: string) {
     engine,
     projects,
     sessions,
+    // #35：与 index.ts 生产装配一致注入 memory（kanban:delete 需求删除级联）
+    memory: service,
     pty: makeFakePtyHost(),
     pickDirectory: async () => projectDir,
     getCurrentProjectId: () => null,
@@ -248,6 +250,64 @@ describe("memory:ipc B 类 e2e：审核 → 检索 → 重启保持（预置数�
     // 不锁死需求：无 running 残留 → extract 落到占位拒绝（而非 extraction-running）
     const extract = await relaunched.handleMemory({ channel: "memory:extract", requirementId });
     expect(extract).toMatchObject({ ok: false, reason: "cli-unavailable" });
+    relaunched.db.close();
+  });
+
+  it("kanban:delete 级联（issue #35 spec #27 J 节 US22）：知识保留且可检索、总结与需求级记录清理、目录清除、重启不复活", async () => {
+    const app = makeApp();
+    const { projectId, requirementId, candidates } = await seedRequirement(app);
+    // 审核出混合终态：accepted / edited / ignored；B2 的遗留 pending 保持待审（需求级清理对象）
+    await app.handleMemory({ channel: "memory:reviewCandidate", candidateId: candidates[0].id, action: "accept" });
+    await app.handleMemory({
+      channel: "memory:reviewCandidate",
+      candidateId: candidates[1].id,
+      action: "edit",
+      edit: { claim: "e2e 验证的结论乙（编辑后）" },
+    });
+    await app.handleMemory({ channel: "memory:reviewCandidate", candidateId: candidates[2].id, action: "ignore" });
+    // 人工编辑总结后重提取 → proposed 暂存（US14；暂存文件随 requirements/<REQ>/ 目录一并清理）
+    app.service.store.createBatch({ id: "B3", requirementId, projectId });
+    app.service.store.finishBatch("B3", { status: "completed" });
+    const summaryMd = app.service.summaries.getSummary(requirementId)?.mdPath ?? "";
+    writeFileSync(summaryMd, "# 需求开发总结（e2e）\n人工编辑过的版本。", "utf8");
+    app.service.summaries.writeSummary({ requirementId, projectId, batchId: "B3", content: "# 需求开发总结（e2e）\n重提取的新版。" });
+
+    // 真实 kanban:delete 通道（级联经 Main 的 deps.memory 接线触发）
+    const del = await app.handleKanban({ channel: "kanban:delete", requirementId });
+    expect(del.ok).toBe(true);
+
+    // 删除后检索（验收第 1 条）：已接受知识仍在且可检索，该需求总结行消失
+    const searched = await app.handleMemory({ channel: "memory:projectMemory", projectId, query: "e2e 验证" });
+    expect(searched.ok).toBe(true);
+    if (!searched.ok) return;
+    expect(searched.knowledge?.length).toBe(2);
+    expect(searched.knowledge?.every((k) => k.mdPath && existsSync(k.mdPath))).toBe(true);
+    expect(searched.summaries).toEqual([]);
+    const all = await app.handleMemory({ channel: "memory:projectMemory", projectId });
+    if (all.ok) expect(all.summaries).toEqual([]);
+
+    // 详情一次读：批次清空、pending/ignored 候选清理（accepted/edited 行保留）、总结无
+    const detail = await app.handleMemory({ channel: "memory:requirementMemory", requirementId });
+    expect(detail.ok).toBe(true);
+    if (!detail.ok) return;
+    expect(detail.batches).toEqual([]);
+    expect(detail.candidates?.map((c) => c.status).sort()).toEqual(["accepted", "edited"]);
+    expect(detail.summary).toBeNull();
+
+    // 存储布局（验收第 2 条）：requirements/<REQ>/ 目录清除（summary.md 与 proposed 一并）；accepted/ 目录与文件完整
+    expect(existsSync(join(app.dataRoot, projectId, "requirements", requirementId))).toBe(false);
+    expect(existsSync(join(app.dataRoot, projectId, "accepted"))).toBe(true);
+
+    // 重启保持：清理是持久性的——重开后知识仍在、被清理的总结与批次不复活
+    app.db.close();
+    const relaunched = assemble(app.dbPath, app.dataRoot, join(tmpRoot, "proj"));
+    const kept = await relaunched.handleMemory({ channel: "memory:projectMemory", projectId });
+    expect(kept.ok).toBe(true);
+    if (!kept.ok) return;
+    expect(kept.knowledge?.length).toBe(2);
+    expect(kept.summaries).toEqual([]);
+    const keptDetail = await relaunched.handleMemory({ channel: "memory:requirementMemory", requirementId });
+    if (keptDetail.ok) expect(keptDetail.batches).toEqual([]);
     relaunched.db.close();
   });
 });

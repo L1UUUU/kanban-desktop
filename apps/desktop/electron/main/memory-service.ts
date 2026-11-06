@@ -164,6 +164,11 @@ export class MemoryService {
     return { ok: true, candidate: this.store.editAccepted(candidateId, edit) };
   }
 
+  /** 需求删除级联入口（issue #35，spec #27 J 节 US22）：kanban:delete 时由 Main 调用；accepted/edited 知识保留（项目级资产） */
+  deleteRequirementData(requirementId: string, projectId: string | null): void {
+    this.store.deleteRequirementData(requirementId, projectId);
+  }
+
   /** 该需求是否存在 running 批次（extract 防重复触发 / cancel 对象判定共用） */
   private hasRunningBatch(requirementId: string): boolean {
     return this.store.listBatches(requirementId).some((b) => b.status === "running");

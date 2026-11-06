@@ -224,6 +224,8 @@ app.whenReady().then(async () => {
     sessions,
     // #17：kanban:* 通道经 TrackerEngine 落事件流；变更推送与事件泵共用 sendTrackerChange（tracker:event）
     engine: trackerEngine,
+    // #35（spec #27 J 节）：kanban:delete 需求删除级联清理该需求 memory 数据（知识保留、需求级记录清理）
+    memory: memoryService,
     emitTrackerChange: sendTrackerChange,
     pickDirectory,
     getCurrentProjectId: () => appConfig.currentProjectId,

@@ -85,7 +85,8 @@ export function DetailPanel({
           >
             <h3 className="mb-2 text-sm font-semibold">删除需求「{card.title}」？</h3>
             <p className="mb-3.5 text-xs leading-relaxed text-muted-foreground">
-              仅删除需求卡片与全部会话关联；会话本身、聊天历史与事件日志保留，不受影响。此操作不可撤销。
+              仅删除需求卡片与全部会话关联；会话本身、聊天历史与事件日志保留，不受影响。
+              已接受/已编辑的项目知识保留；需求总结与待审候选一并删除。此操作不可撤销。
             </p>
             <div className="flex justify-end gap-2">
               <button
