@@ -30,7 +30,7 @@ export default defineConfig({
         test: {
           name: "node",
           environment: "node",
-          include: ["electron/**/*.test.ts"],
+          include: ["electron/**/*.test.ts", "tests/**/*.test.ts"],
           globals: true,
         },
       },

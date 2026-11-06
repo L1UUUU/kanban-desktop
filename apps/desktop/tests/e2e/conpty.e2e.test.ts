@@ -6,10 +6,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as nodePty from "node-pty";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createPtyHost, type PtyHost, type TerminalEventSink } from "./pty-host";
+import { createPtyHost, type PtyHost, type TerminalEventSink } from "../../electron/main/pty-host";
 
 // 未配置 env 时整组跳过（CI/常规 pnpm test 不触发真实 ConPTY）
-const RUN_SMOKE = !!process.env.KANBAN_E2E;
+const RUN_SMOKE = process.env.KANBAN_E2E === "1";
 
 /** 轮询等待条件成立（真实 PTY 输出为异步流） */
 async function waitFor(cond: () => boolean, timeoutMs: number, what: string): Promise<void> {
