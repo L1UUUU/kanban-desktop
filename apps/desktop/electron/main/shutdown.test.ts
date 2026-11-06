@@ -134,6 +134,32 @@ describe("统一退出序列（spec H §6.1）", () => {
     expect(calls).toContain("dispose-all");
   });
 
+  it("memory 提取停止排在 adapter 全量 dispose 与 PTY 全停之后（issue #32，spec #27 C 节：DB 关闭前）", async () => {
+    const sessions = makeSessions([]);
+    const base = makeFakeAdapter();
+    const seq: string[] = [];
+    const adapter: CliAdapter = {
+      ...base.adapter,
+      dispose: async (input) => {
+        if (!input?.sessionId) seq.push("dispose-all");
+        return base.adapter.dispose(input);
+      },
+    };
+    const { pty } = makePty();
+    const orch = createShutdownOrchestrator({
+      adapter,
+      pty: { ...pty, killAll: () => seq.push("pty") },
+      sessions,
+      graceMs: 100,
+      notifyShutdown: () => {},
+      sleep: async () => {},
+      memory: { stop: async () => { seq.push("memory-stop"); } },
+    });
+    await orch.begin("app-quit");
+    // 同一序列内严格顺序：全量 dispose → PTY 全停 → memory 停止（DB 关闭发生在 quit，晚于本序列）
+    expect(seq).toEqual(["dispose-all", "pty", "memory-stop"]);
+  });
+
   it("幂等：并发/重复 begin 只跑一次序列；interrupt 失败不阻断（best-effort）", async () => {
     const sessions = makeSessions([{ id: "s-run", status: "running" }]);
     const { adapter, calls } = makeFakeAdapter({ failInterrupt: true });

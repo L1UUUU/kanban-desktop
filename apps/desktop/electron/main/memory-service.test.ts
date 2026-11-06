@@ -1,4 +1,4 @@
-// 用途：MemoryService 密封测试 + handleMemoryIpc 入站校验与路由 + openMemoryService 启动对账（issue #31，spec #27 A/C/H 节；store 级动作全量、extract/cancel 业务拒绝占位、projectMemory 查询过滤、需求删除级联 #35）
+// 用途：MemoryService 密封测试 + handleMemoryIpc 入站校验与路由 + openMemoryService 启动对账（issue #31，spec #27 A/C/H 节；store 级动作全量、extract/cancel 入口拒绝语义（#32 真实现，管线全量分支见 memory-pipeline.test.ts）、projectMemory 查询过滤、需求删除级联 #35）
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -61,14 +61,14 @@ function seedExtracted(ctx: ReturnType<typeof makeService>, over?: { requirement
   return { batchId: "B1", requirementId, projectId, candidates };
 }
 
-describe("extract / cancel 业务拒绝占位（提取管线 S3-05 接线）", () => {
+describe("extract / cancel 入口拒绝语义（#32 真实现；管线全量分支见 memory-pipeline.test.ts）", () => {
   it("零关联 structured 会话 → no-sessions（提取按钮禁用/拒绝的依据）", async () => {
     const { service } = makeService();
     const r = service.extract("REQ-001");
     expect(r).toMatchObject({ ok: false, reason: "no-sessions" });
   });
 
-  it("有会话但无 running 批次 → cli-unavailable 占位（无法真实启动）", async () => {
+  it("有会话但提取双桥未接线（本 harness 不注入桥，如进程内回退 adapter）→ cli-unavailable", async () => {
     const ctx = makeService();
     ctx.linkedSessions.set("REQ-001", [{ sessionId: "s1", cli: "claude-code" }]);
     const r = ctx.service.extract("REQ-001");
@@ -82,11 +82,12 @@ describe("extract / cancel 业务拒绝占位（提取管线 S3-05 接线）", (
     expect(ctx.service.extract("REQ-001")).toMatchObject({ ok: false, reason: "extraction-running" });
   });
 
-  it("cancel：无 running 批次 → no-extraction-running；有 running → 占位拒绝（取消管线随 S3-05）", () => {
+  it("cancel：无 running 批次 → no-extraction-running；库内孤儿 running（无进行中编排）→ 直接收敛 cancelled", async () => {
     const ctx = makeService();
-    expect(ctx.service.cancel("REQ-001")).toMatchObject({ ok: false, reason: "no-extraction-running" });
+    expect(await ctx.service.cancel("REQ-001")).toMatchObject({ ok: false, reason: "no-extraction-running" });
     ctx.service.store.createBatch({ id: "B-run", requirementId: "REQ-001", projectId: "p1" });
-    expect(ctx.service.cancel("REQ-001")).toMatchObject({ ok: false, reason: "extraction-running" });
+    expect(await ctx.service.cancel("REQ-001")).toMatchObject({ ok: true, cancelled: true });
+    expect(ctx.service.store.getBatch("B-run")).toMatchObject({ status: "cancelled" });
   });
 });
 

@@ -1,6 +1,7 @@
-// 用途：MemoryService（issue #31，spec #27 A 节）—— Main 进程内的 memory 深模块骨架：store 级动作全量（审核三动作/终态拒绝/resolveSummary/需求一次读/项目一次读含查询过滤/知识再编辑）+ extract/cancel 业务拒绝占位 + openMemoryService 启动对账装配；db 句柄与数据根目录经注入，需求关联会话/标题由 Main 查询后传入（memory 不依赖 tracker）
+// 用途：MemoryService（spec #27 A 节）—— Main 进程内的 memory 深模块：store 级动作全量（审核三动作/终态拒绝/resolveSummary/需求一次读/项目一次读含查询过滤/知识再编辑/#35 删除级联入口）+ #32 提取管线编排（extract 启动真批次 / cancel 终止临时执行整批丢弃 / stop 退出序列停止）+ openMemoryService 启动对账装配；db 句柄、数据根目录与双桥（readTranscript/runOnce）经注入，需求关联会话/标题由 Main 查询后传入（memory 不依赖 tracker）
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import type { MemoryEventWire, MemorySummaryRow } from "@kanban/ipc-schema";
+import type { MemoryEventWire, MemorySummaryRow, TranscriptEvent } from "@kanban/ipc-schema";
 import {
   MemoryStore,
   SummaryStore,
@@ -12,6 +13,7 @@ import {
   type ReviewAction,
   type SqliteDb,
 } from "@kanban/memory";
+import { finishBatchIfRunning, runExtractionPipeline, type ExtractionBridges, type ExtractionControl, type RunOnceCall, type RunOnceOutcome } from "./memory-pipeline";
 
 /** 业务拒绝形状（wire memoryRejectionSchema 同构；reason 为自由字符串，不新增全局错误码） */
 export interface MemoryRejectionResult {
@@ -26,23 +28,47 @@ export interface CandidateResult {
   candidate: MemoryCandidateRecord;
 }
 
-/** MemoryService 依赖注入 seam（可测）：db 句柄 + 数据根目录 + Main 侧 tracker 查询 + memory:event 推送 */
+/** 进行中提取登记（cancel/stop 的锚点：控制柄 + 落定 Promise） */
+interface RunningExtraction {
+  batchId: string;
+  requirementId: string;
+  control: ExtractionControl;
+  done: Promise<void>;
+}
+
+/** MemoryService 依赖注入 seam（可测）：db 句柄 + 数据根目录 + Main 侧 tracker 查询 + 提取双桥 + memory:event 推送 */
 export interface MemoryServiceDeps {
   db: SqliteDb;
-  /** Markdown 数据根（<userData>/memory，spec #27 D 节布局） */
+  /** Markdown 数据根（<userData>/memory，spec #27 D 节布局；提取临时 cwd 也在此下） */
   dataRoot: string;
   /** 需求当前关联 structured 会话（Main 查 tracker 后传入；PTY 会话不入提取范围，US2） */
   listLinkedStructuredSessions(requirementId: string): Array<{ sessionId: string; cli: string }>;
+  /** 需求当前关联 PTY 会话（Main 查 tracker 后传入；US3 无结构化历史 → 列入 missingSessions 声明） */
+  listLinkedPtySessions?(requirementId: string): Array<{ sessionId: string }>;
+  /** 需求项目归属（Main 查 tracker 注入；批次行 projectId 与提取临时 cwd 定位用） */
+  getRequirementProjectId?(requirementId: string): string | null;
   /** 需求标题（Main 查 tracker 注入；记忆视图总结行标题与「标题+正文」搜索的标题字段） */
   getRequirementTitle(requirementId: string): string | null;
-  /** memory:event 推送（批次状态/段进度；提取管线 S3-05 发，缺省丢弃供不需要推送的测试） */
+  /** 需求存在性（tracker 口径；提取阶段边界守卫「提取中需求被删除」删除竞态，#35 边界；缺省恒存在） */
+  requirementExists?(requirementId: string): boolean;
+  /** readTranscript 桥（#28：Main → cli-host adapter 双视角历史；未接线 → extract 拒 cli-unavailable） */
+  readTranscriptBridge?(appSessionId: string): Promise<TranscriptEvent[]>;
+  /** runOnce 桥（#29：Main → cli-host worker 一次性执行；未接线 → extract 拒 cli-unavailable） */
+  runOnceBridge?(input: RunOnceCall): Promise<RunOnceOutcome>;
+  /** cancelRunOnce 桥（终止进行中的临时执行；真实装配必接，缺省 no-op） */
+  cancelRunOnceBridge?(runId: string): Promise<void> | void;
+  /** memory:event 推送（批次状态/段进度；缺省丢弃供不需要推送的测试） */
   emitMemoryEvent?(event: MemoryEventWire): void;
+  /** stop() 等待进行中批次落定的上限 ms（缺省 3000；超时兜底直接收敛 cancelled） */
+  stopSettleMs?: number;
 }
 
 export class MemoryService {
   readonly store: MemoryStore;
   readonly summaries: SummaryStore;
   private readonly deps: MemoryServiceDeps;
+  /** 进行中提取（requirementId → 锚点）；批次行 running 状态是串行判定的唯一事实源，本表是取消路由 */
+  private readonly running = new Map<string, RunningExtraction>();
 
   constructor(deps: MemoryServiceDeps) {
     this.deps = deps;
@@ -50,11 +76,11 @@ export class MemoryService {
     this.summaries = new SummaryStore(deps.db, deps.dataRoot);
   }
 
-  // shortcut: extract/cancel 为业务拒绝占位（提取管线 S3-05/#32 接线后实现真实启动/取消）；复查触发条件 = issue #32 落地
   /**
-   * 提取需求经验（US1 手动触发）。本票占位：真实管线 S3-05 接线，当前三种业务拒绝——
-   * no-sessions（零关联 structured 会话）/ extraction-running（该需求已有 running 批次，US11 防重复触发）/
-   * cli-unavailable（提取桥未接线，无法真实启动）。
+   * 提取需求经验（US1 手动触发，issue #32 管线）：前置业务拒绝后同步建 running 批次行并异步起管线
+   * （批次行先于返回落库——同需求二次触发在同一 tick 内即被 extraction-running 拒绝，无竞态窗口）。
+   * 拒绝语义：no-sessions（零关联 structured 会话）/ extraction-running（US11 同需求串行）/
+   * cli-unavailable（提取双桥未接线，如进程内回退 adapter 无 runOnce 能力）/ requirement-not-found（防御）。
    */
   extract(requirementId: string): MemoryRejectionResult | { ok: true; started: true; batchId: string } {
     const sessions = this.deps.listLinkedStructuredSessions(requirementId);
@@ -64,16 +90,103 @@ export class MemoryService {
     if (this.hasRunningBatch(requirementId)) {
       return { ok: false, reason: "extraction-running", detail: "该需求已有进行中的提取批次，禁止重复触发" };
     }
-    return { ok: false, reason: "cli-unavailable", detail: "提取管线尚未接入（S3-05），当前版本无法启动提取" };
+    const readTranscript = this.deps.readTranscriptBridge;
+    const runOnce = this.deps.runOnceBridge;
+    if (!readTranscript || !runOnce) {
+      return { ok: false, reason: "cli-unavailable", detail: "提取引擎桥未接线（cli-host runOnce 能力不可用），无法启动提取" };
+    }
+    const projectId = this.deps.getRequirementProjectId?.(requirementId) ?? null;
+    if (!projectId) {
+      return { ok: false, reason: "requirement-not-found", detail: `需求 ${requirementId} 不存在或无项目归属，无法创建提取批次` };
+    }
+    // 同步建批次行（running）：返回前即占据同需求串行判定；sourceSessionCount 为触发时关联 structured 会话数
+    const batchId = randomUUID();
+    this.store.createBatch({ id: batchId, requirementId, projectId, sourceSessionCount: sessions.length });
+
+    const bridges: ExtractionBridges = {
+      readTranscript,
+      runOnce,
+      cancelRunOnce: this.deps.cancelRunOnceBridge ? (runId) => this.deps.cancelRunOnceBridge?.(runId) : undefined,
+    };
+    const control: ExtractionControl = { aborted: false, currentRunId: null };
+    // 管线不抛错（内部收敛为批次终态 + 事件）；finally 摘除登记，同需求可再发起新批次
+    const done = runExtractionPipeline(
+      {
+        store: this.store,
+        summaries: this.summaries,
+        bridges,
+        control,
+        dataRoot: this.deps.dataRoot,
+        emit: (event) => this.deps.emitMemoryEvent?.(event),
+        requirementExists: this.deps.requirementExists,
+      },
+      {
+        batchId,
+        requirementId,
+        projectId,
+        requirementTitle: this.deps.getRequirementTitle(requirementId),
+        sessions,
+        ptySessions: this.deps.listLinkedPtySessions?.(requirementId) ?? [],
+      },
+    ).finally(() => {
+      if (this.running.get(requirementId)?.batchId === batchId) this.running.delete(requirementId);
+    });
+    this.running.set(requirementId, { batchId, requirementId, control, done });
+    return { ok: true, started: true, batchId };
   }
 
-  // shortcut: cancel 占位同 extract；S3-05 实现终止临时进程 + 整批丢弃（cancelled）
-  /** 取消进行中的提取（US9）。本票占位：无 running 批次 → no-extraction-running；有 → 占位拒绝（取消能力随提取管线）。 */
-  cancel(requirementId: string): MemoryRejectionResult | { ok: true; cancelled: true } {
-    if (!this.hasRunningBatch(requirementId)) {
-      return { ok: false, reason: "no-extraction-running", detail: "该需求没有进行中的提取批次" };
+  /**
+   * 取消进行中的提取（US9）：终止当前段临时执行（#29 cancelRunOnce 桥）并等待整批落定——
+   * running→cancelled、无候选落库（落库只在整批完成时发生，事务语义天然保证整批丢弃）。
+   * 无进行中批次 → no-extraction-running；库内有 running 行但无编排（孤儿）→ 直接收敛 cancelled。
+   */
+  async cancel(requirementId: string): Promise<MemoryRejectionResult | { ok: true; cancelled: true }> {
+    const entry = this.running.get(requirementId);
+    if (!entry) {
+      const orphan = this.store.listBatches(requirementId).find((b) => b.status === "running");
+      if (!orphan) return { ok: false, reason: "no-extraction-running", detail: "该需求没有进行中的提取批次" };
+      finishBatchIfRunning(this.store, orphan.id, { status: "cancelled", error: "取消（无进行中编排，直接收敛）" });
+      this.deps.emitMemoryEvent?.({ type: "batch-status", batchId: orphan.id, requirementId, status: "cancelled" });
+      return { ok: true, cancelled: true };
     }
-    return { ok: false, reason: "extraction-running", detail: "取消管线随提取实现（S3-05）接入，当前版本无法取消" };
+    entry.control.aborted = true;
+    await this.cancelCurrentRun(entry.control);
+    await entry.done;
+    return { ok: true, cancelled: true };
+  }
+
+  /**
+   * 退出序列停止（spec #27 C 节：排在 adapter/PTY 之后、DB 关闭前）：全部进行中批次置取消 →
+   * 有限等待落定（默认 3s，桥可能已随 cli-host worker 退出而拒绝）→ 兜底把仍未落定的批次行直接收敛 cancelled，
+   * 保证 DB 关闭前无 running 残留（重启对账的崩溃窗口由此消除）。
+   */
+  async stop(): Promise<void> {
+    const entries = [...this.running.values()];
+    for (const e of entries) {
+      e.control.aborted = true;
+      await this.cancelCurrentRun(e.control);
+    }
+    await Promise.race([
+      Promise.allSettled(entries.map((e) => e.done)),
+      new Promise((r) => setTimeout(r, this.deps.stopSettleMs ?? 3000)),
+    ]);
+    for (const e of entries) {
+      if (finishBatchIfRunning(this.store, e.batchId, { status: "cancelled", error: "应用退出取消" })) {
+        this.deps.emitMemoryEvent?.({ type: "batch-status", batchId: e.batchId, requirementId: e.requirementId, status: "cancelled" });
+      }
+    }
+    this.running.clear();
+  }
+
+  /** 终止控制柄锚定的当前段临时执行（best-effort：桥不可用/已退出时忽略） */
+  private async cancelCurrentRun(control: ExtractionControl): Promise<void> {
+    const runId = control.currentRunId;
+    if (!runId || !this.deps.cancelRunOnceBridge) return;
+    try {
+      await this.deps.cancelRunOnceBridge(runId);
+    } catch {
+      /* best-effort：runOnce 落定后管线按 abort/cancelled 收敛 */
+    }
   }
 
   /** 候选审核三动作（US16：仅 pending 可流转、终态拒绝；edit 仅 claim/scope、溯源只读） */

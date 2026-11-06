@@ -463,7 +463,8 @@ export async function handleMemoryIpc(deps: MemoryIpcDeps, raw: unknown): Promis
       return r.ok ? { ok: true, started: true, batchId: r.batchId } : r;
     }
     case "memory:cancel": {
-      const r = deps.memory.cancel(req.requirementId);
+      // #32：取消管线已接线（异步等待整批落定）
+      const r = await deps.memory.cancel(req.requirementId);
       return r.ok ? { ok: true, cancelled: true } : r;
     }
     case "memory:reviewCandidate": {
