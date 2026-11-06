@@ -12,6 +12,8 @@ export interface CreateSessionOptions {
   projectId?: string | null;
   title?: string;
   permMode?: PermMode;
+  /** #20：从需求卡片建会话——Main 创建成功后原子落 link 事件（会话须与需求同项目） */
+  requirementId?: string;
 }
 
 export interface ChatControllerActions {
@@ -183,8 +185,11 @@ export async function createCliSession(
     projectId: opts.projectId ?? undefined,
     title: opts.title,
     permMode: opts.permMode ?? "auto",
+    requirementId: opts.requirementId,
   });
   if (r.ok && r.sessionId) {
+    // #20：卡片建会话的自动关联由 Main 原子完成（session_linked 推送回流看板 store）；拒绝仅报告不阻断会话
+    if (r.linked === false) console.error("[kanban] 会话创建后自动关联被拒绝", r.reason);
     store.registerSession({
       sessionId: r.sessionId,
       cli: r.cli ?? cli,

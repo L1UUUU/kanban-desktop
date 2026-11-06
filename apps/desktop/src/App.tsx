@@ -75,6 +75,7 @@ export function AppShell({
         onController={onChatController}
         view={view}
         kanban={kanban}
+        onSetView={setView}
         sidebarFooter={
           <>
             {/* 侧栏底部「看板」入口（原型一致项 1）：带当前项目指示，点击在聊天/看板间切换 */}

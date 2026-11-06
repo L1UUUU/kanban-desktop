@@ -20,6 +20,8 @@ export const terminalCreatePayloadSchema = z.object({
   command: terminalCommandSchema.optional(),
   projectId: z.string().min(1).optional(),
   title: z.string().min(1).optional(),
+  /** #20（spec #15 C/D 节）：从需求卡片建 PTY 终端时创建成功后由 Main 原子落 link 事件（与 session:create+requirementId 同语义） */
+  requirementId: z.string().min(1).optional(),
 });
 export type TerminalCreatePayload = z.infer<typeof terminalCreatePayloadSchema>;
 

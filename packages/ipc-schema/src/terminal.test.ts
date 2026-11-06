@@ -4,7 +4,7 @@ import { ipcRequestSchema } from "./ipc";
 import { terminalCreatePayloadSchema, terminalEventSchema, terminalIdSchema } from "./terminal";
 
 describe("terminal 请求契约（× terminalId 多路复用，spec E）", () => {
-  it("terminal:create 载荷：cwd 必填，command/projectId/尺寸可选", () => {
+  it("terminal:create 载荷：cwd 必填，command/projectId/requirementId/尺寸可选", () => {
     const p = terminalCreatePayloadSchema.parse({ cwd: "C:\\repo", command: { exe: "claude", args: [] } });
     expect(p.cwd).toBe("C:\\repo");
     expect(p.command?.exe).toBe("claude");
@@ -13,6 +13,11 @@ describe("terminal 请求契约（× terminalId 多路复用，spec E）", () =>
     const bare = terminalCreatePayloadSchema.parse({ cwd: "C:\\repo" });
     expect(bare.command).toBeUndefined();
     expect(bare.cols).toBeUndefined();
+
+    // #20：从需求卡片建 PTY 终端——requirementId 可选透传（空串被拒）
+    const withReq = terminalCreatePayloadSchema.parse({ cwd: "C:\\repo", projectId: "p-1", requirementId: "REQ-001" });
+    expect(withReq.requirementId).toBe("REQ-001");
+    expect(terminalCreatePayloadSchema.safeParse({ cwd: "C:\\repo", requirementId: "" }).success).toBe(false);
   });
 
   it("四条 terminal 请求经 ipcRequestSchema（kanban:ipc 单通道）parse 通过", () => {

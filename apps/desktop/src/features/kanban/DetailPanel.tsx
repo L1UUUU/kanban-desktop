@@ -2,7 +2,7 @@
 import { useState } from "react";
 import type { KanbanStageInput, RequirementCardRow, StageBasisWire } from "@kanban/ipc-schema";
 import { KANBAN_COLUMNS, cliLabel, formatDetailBasis } from "./columns";
-import { RelatedSessionsArea } from "./RelatedSessionsArea";
+import { RelatedSessionsArea, type RelatedSessionsAreaProps } from "./RelatedSessionsArea";
 
 /** 面板动作面（use-kanban 控制器提供；全部经 kanban:* IPC 落事件流，变更经 tracker 推送回流） */
 export interface DetailActions {
@@ -28,7 +28,16 @@ function uncertainText(basis: StageBasisWire | null): string {
  * 详情滑出面板：透明遮罩（点击看板任意处关）+ 右侧 360px 面板 + 删除二次确认弹层（弹层遮罩覆盖整个看板区，原型场景 4）。
  * 挂载于看板容器（KanbanWorkspace 的 relative section）内，activeRequirementId 清空即卸载
  */
-export function DetailPanel({ card, actions }: { card: RequirementCardRow; actions: DetailActions }) {
+export function DetailPanel({
+  card,
+  actions,
+  related,
+}: {
+  card: RequirementCardRow;
+  actions: DetailActions;
+  /** #20：关联会话区数据与动作（会话列表/关联已有候选/跳转/建会话）；缺省时关联区保持占位形态 */
+  related?: Omit<RelatedSessionsAreaProps, "card">;
+}) {
   // 行内标题草稿：外部标题变化（rename 回流/再水化）在渲染期同步回输入框（React 调整态模式，不用 effect）
   const [title, setTitle] = useState(card.title);
   const [syncedTitle, setSyncedTitle] = useState(card.title);
@@ -175,8 +184,8 @@ export function DetailPanel({ card, actions }: { card: RequirementCardRow; actio
             </div>
             {basisText ? <p className="text-[11px] text-fg-faint">当前依据：{basisText}</p> : null}
           </section>
-          {/* 关联会话区（#20 挂点：列表/关联已有/新建会话填充 RelatedSessionsArea） */}
-          <RelatedSessionsArea card={card} />
+          {/* 关联会话区（#20：列表/关联已有/新建会话由 related 注入 RelatedSessionsArea） */}
+          <RelatedSessionsArea card={card} {...(related ?? {})} />
           {/* 需求信息 + 删除 */}
           <section className="mt-auto flex flex-col gap-2">
             <h5 className="text-[11px] tracking-wide text-muted-foreground">需求</h5>

@@ -7,8 +7,8 @@ import { DEFAULT_MODEL } from "../chat/use-chat";
 import { TerminalManager } from "./TerminalManager";
 
 export interface TerminalController {
-  /** 新建终端会话（无 command=交互 shell；command=直接跑 CLI TUI） */
-  create(opts: { projectId: string | null; cwd: string; command?: TerminalCommand }): Promise<void>;
+  /** 新建终端会话（无 command=交互 shell；command=直接跑 CLI TUI；requirementId=#20 从需求卡片建终端时自动关联） */
+  create(opts: { projectId: string | null; cwd: string; command?: TerminalCommand; requirementId?: string }): Promise<void>;
   /** 显式停止终端（PTY 进程终止唯一入口；切换/关标签不触发） */
   kill(terminalId: string): void;
   manager: TerminalManager;
@@ -49,8 +49,11 @@ export function useTerminals(transport: ChatTransport | null, chat: ChatControll
           cwd: opts.cwd,
           projectId: opts.projectId ?? undefined,
           command: opts.command,
+          requirementId: opts.requirementId,
         });
         if (r.ok && r.sessionId) {
+          // #20：卡片建终端的自动关联由 Main 原子完成（session_linked 推送回流看板 store）；拒绝仅报告不阻断终端
+          if (r.linked === false) console.error("[kanban] 终端创建后自动关联被拒绝", r.reason);
           chat.store.registerSession({
             sessionId: r.sessionId,
             cli: "pty",

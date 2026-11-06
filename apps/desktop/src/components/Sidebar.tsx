@@ -1,12 +1,12 @@
-// 用途：侧栏 —— 项目区（注册引导/项目行切换/悬浮「＋」CLI 新建菜单）+ 结构化会话与 PTY 终端两组会话行（CLI 色点/目录徽标/状态徽标/PTY 停止按钮，按当前项目过滤）+ 底部运行信息（原型一致项 1/2/3；PTY 实体 #12）
+// 用途：侧栏 —— 项目区（注册引导/项目行切换/悬浮「＋」CLI 新建菜单）+ 结构化会话与 PTY 终端两组会话行（CLI 色点/目录徽标/状态徽标/需求徽标/PTY 停止按钮，按当前项目过滤）+ 底部运行信息（原型一致项 1/2/3/6；PTY 实体 #12；REQ 徽标 #20）
 import { useState, type ReactNode } from "react";
 import type { AppInfo, CliKind, ProjectRow } from "@kanban/ipc-schema";
 import type { SessionView } from "../features/chat/chat-store";
 import { StatusBadge } from "../features/chat/components/StatusBadge";
 import { DirBadge } from "./DirBadge";
 
-// CLI 色点（原型四色；fake 演示用 accent2 蓝；pty 终端用 pty 色）
-const CLI_DOT_CLS: Record<string, string> = {
+// CLI 色点（原型四色；fake 演示用 accent2 蓝；pty 终端用 pty 色）——详情面板关联会话行共用（#20 导出）
+export const CLI_DOT_CLS: Record<string, string> = {
   fake: "bg-accent2",
   codex: "bg-codex",
   claude: "bg-claude",
@@ -21,6 +21,31 @@ const NEW_MENU_CLIS: Array<{ cli: CliKind; label: string }> = [
   { cli: "opencode", label: "OpenCode" },
 ];
 
+/** 会话行需求徽标（原型一致项 6，.req-badge）：REQ-id 文本 + 点击跳看板；span 避免 button 嵌套 */
+function ReqBadge({ requirementId, onOpen }: { requirementId: string; onOpen?: (requirementId: string) => void }) {
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      data-testid="req-badge"
+      title={`${requirementId} · 点击进入看板`}
+      className="ml-1 flex-none cursor-pointer rounded border border-accent2/45 px-1 text-[11px] text-accent2 hover:bg-primary/15"
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen?.(requirementId);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.stopPropagation();
+          onOpen?.(requirementId);
+        }
+      }}
+    >
+      {requirementId}
+    </span>
+  );
+}
+
 export interface SidebarProps {
   projects: ProjectRow[];
   currentProjectId: string | null;
@@ -34,6 +59,10 @@ export interface SidebarProps {
   onCreatePtySession(projectId: string): void;
   /** PTY 行停止按钮：显式终止终端进程（唯一停止入口） */
   onKillTerminal(terminalId: string): void;
+  /** #20：会话→需求反查映射（kanban:list；会话行需求徽标数据源） */
+  sessionToReq?: Record<string, string>;
+  /** #20：会话行 REQ 徽标点击 → 进入看板并选中该需求（原型一致项 6） */
+  onOpenRequirement?(requirementId: string): void;
   info?: ReactNode;
 }
 
@@ -48,6 +77,8 @@ export function Sidebar({
   onCreateSession,
   onCreatePtySession,
   onKillTerminal,
+  sessionToReq = {},
+  onOpenRequirement,
   info,
 }: SidebarProps) {
   // 「＋」菜单开在哪个项目行上（一次只开一个）
@@ -152,6 +183,8 @@ export function Sidebar({
           <button
             key={s.sessionId}
             type="button"
+            data-testid="session-row"
+            data-active={s.sessionId === activeId ? "true" : "false"}
             className={`flex w-full items-center gap-1 border-l-2 px-3.5 py-1.5 text-left hover:bg-muted ${
               s.sessionId === activeId ? "border-l-primary bg-muted" : "border-l-transparent"
             }`}
@@ -161,6 +194,7 @@ export function Sidebar({
             <span className="min-w-0 flex-1 truncate text-[13px]">{s.title}</span>
             <DirBadge identity={s.dirIdentity} worktreeName={s.worktreeName} cwd={s.cwd} />
             <StatusBadge status={s.status} />
+            {s.sessionId in sessionToReq ? <ReqBadge requirementId={sessionToReq[s.sessionId]} onOpen={onOpenRequirement} /> : null}
           </button>
         ))
       )}
@@ -172,6 +206,8 @@ export function Sidebar({
         ptySessions.map((s) => (
           <div
             key={s.sessionId}
+            data-testid="session-row"
+            data-active={s.sessionId === activeId ? "true" : "false"}
             className={`group flex w-full items-center gap-1 border-l-2 px-3.5 py-1.5 hover:bg-muted ${
               s.sessionId === activeId ? "border-l-primary bg-muted" : "border-l-transparent"
             }`}
@@ -181,6 +217,7 @@ export function Sidebar({
               <span className="min-w-0 flex-1 truncate text-[13px]">{s.title}</span>
               <DirBadge identity={s.dirIdentity} worktreeName={s.worktreeName} cwd={s.cwd} />
               <StatusBadge status={s.status} />
+              {s.sessionId in sessionToReq ? <ReqBadge requirementId={sessionToReq[s.sessionId]} onOpen={onOpenRequirement} /> : null}
             </button>
             {s.status !== "disconnected" ? (
               <button

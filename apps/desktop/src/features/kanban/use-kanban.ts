@@ -23,6 +23,10 @@ export interface KanbanController {
   setStage(requirementId: string, stage: KanbanStageInput): Promise<void>;
   /** 删除需求（#19：kanban:delete 墓碑；卡片经 requirement_deleted 推送实时消失） */
   removeRequirement(requirementId: string): Promise<void>;
+  /** 关联已有会话（#20：kanban:link；业务拒绝是合法结果）——返回拒绝原因（null=成功/幂等已关联），UI 直达呈现 */
+  link(sessionId: string, requirementId: string): Promise<string | null>;
+  /** 解除关联（#20：kanban:unlink；不删历史、不回退阶段，卡片会话数经 session_unlinked 推送即时更新） */
+  unlink(sessionId: string): Promise<void>;
 }
 
 /**
@@ -90,6 +94,27 @@ export function useKanban(transport: ChatTransport | null): KanbanController {
     [transport],
   );
 
+  const link = useCallback(
+    async (sessionId: string, requirementId: string) => {
+      if (!transport) return "transport 不可用";
+      const r = await transport.invoke({ channel: "kanban:link", sessionId, requirementId });
+      // 错误码结果（如 E_REQUIREMENT_NOT_FOUND）同样以原因形式呈现给用户
+      if (!r.ok) return r.error.message;
+      if (r.linked === false) return r.reason ?? "关联被拒绝";
+      return null; // 成功（含幂等已关联同一需求）
+    },
+    [transport],
+  );
+
+  const unlink = useCallback(
+    async (sessionId: string) => {
+      if (!transport) return;
+      const r = await transport.invoke({ channel: "kanban:unlink", sessionId });
+      if (!r.ok) console.error("[kanban] 解除关联失败", r.error);
+    },
+    [transport],
+  );
+
   return {
     requirements: snap.requirements,
     sessionToReq: snap.sessionToReq,
@@ -102,5 +127,7 @@ export function useKanban(transport: ChatTransport | null): KanbanController {
     rename,
     setStage,
     removeRequirement,
+    link,
+    unlink,
   };
 }

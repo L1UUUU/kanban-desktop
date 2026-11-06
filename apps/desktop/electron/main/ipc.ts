@@ -124,24 +124,9 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
       });
       // #17（spec #15 C 节）：可选 requirementId —— 创建成功后由 Main 原子落 link 事件（避免 renderer 两步编排竞态）；
       // 会话须与需求同项目，业务拒绝是合法结果不走错误码，原因直达调用方
-      let linked: boolean | undefined;
-      let reason: string | undefined;
-      if (req.requirementId) {
-        const r = deps.engine.tracker.req(req.requirementId);
-        if (!r) {
-          linked = false;
-          reason = `需求不存在：${req.requirementId}`;
-        } else if (!req.projectId) {
-          linked = false;
-          reason = "会话未归属项目，无法关联需求";
-        } else if (r.projectId !== req.projectId) {
-          linked = false;
-          reason = `跨项目关联被拒绝：会话属项目 ${req.projectId}，需求属项目 ${r.projectId}`;
-        } else {
-          processLink(deps, sessionId, req.requirementId, req.projectId, TRACKER_CLI_BY_APP[req.cli]);
-          linked = true;
-        }
-      }
+      const linkedResult = req.requirementId
+        ? linkAfterCreate(deps, sessionId, req.requirementId, req.projectId ?? null, TRACKER_CLI_BY_APP[req.cli])
+        : undefined;
       return {
         ok: true,
         sessionId,
@@ -149,8 +134,7 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
         title,
         dirIdentity: identity.kind,
         worktreeName: identity.kind === "worktree" ? identity.name : null,
-        linked,
-        reason,
+        ...linkedResult, // 无 requirementId 时为 undefined，展开为空（响应不含 linked/reason 字段，保持既有形状）
         // #21（spec #15 E 节）：仅 Claude 创建时扫描一次（不做运行时/发送时检测；Codex/OpenCode 不检测）；检测失败安全降级为空数组（纯函数内兜底）
         ...(req.cli === "claude"
           ? { skillConflicts: detectSkillConflicts(req.cwd, (deps.resolveUserClaudeDir ?? defaultUserClaudeDir)()) }
@@ -200,6 +184,10 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
         status: "idle",
         lastActiveAt: null,
       });
+      // #20（spec #15 C/D 节）：从需求卡片建 PTY 终端——创建成功后原子落 link 事件（与 session:create+requirementId 同语义）
+      const linkedResult = req.requirementId
+        ? linkAfterCreate(deps, terminalId, req.requirementId, req.projectId ?? null, "pty")
+        : undefined;
       return {
         ok: true,
         sessionId: terminalId,
@@ -207,6 +195,7 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
         title,
         dirIdentity: identity.kind,
         worktreeName: identity.kind === "worktree" ? identity.name : null,
+        ...linkedResult,
       };
     }
     case "terminal:write": {
@@ -416,7 +405,26 @@ function nextRequirementId(tracker: TrackerEngine["tracker"]): string {
   return `REQ-${String(n).padStart(3, "0")}`;
 }
 
-/** 构造 link 事件经 engine 落事件流并推送变更（kanban:link 与 session:create+requirementId 共用原子路径） */
+/** 创建会话后的原子关联（session:create / terminal:create + requirementId 共用）：需求须存在且与会话同项目；
+ *  业务拒绝是合法结果——返回 {linked:false, reason} 直达调用方，不落 link 事件 */
+function linkAfterCreate(
+  deps: IpcDeps,
+  sessionId: string,
+  requirementId: string,
+  projectId: string | null,
+  cli: Cli,
+): { linked: boolean; reason?: string } {
+  const r = deps.engine.tracker.req(requirementId);
+  if (!r) return { linked: false, reason: `需求不存在：${requirementId}` };
+  if (!projectId) return { linked: false, reason: "会话未归属项目，无法关联需求" };
+  if (r.projectId !== projectId) {
+    return { linked: false, reason: `跨项目关联被拒绝：会话属项目 ${projectId}，需求属项目 ${r.projectId}` };
+  }
+  processLink(deps, sessionId, requirementId, projectId, cli);
+  return { linked: true };
+}
+
+/** 构造 link 事件经 engine 落事件流并推送变更（kanban:link 与 session:create/terminal:create+requirementId 共用原子路径） */
 function processLink(deps: IpcDeps, sessionId: string, requirementId: string, projectId: string, cli: Cli): TrackerChange[] {
   const at = nowIso();
   return processAndEmit(deps, {

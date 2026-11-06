@@ -1,4 +1,4 @@
-// 用途：看板视图 E2E（#18/#19 验收）—— 侧栏「看板」入口 → 五列看板（Fake 全链）；verified design-feature 自动建卡实时出现；视图切换回聊天会话仍在；重启后 kanban:list 再水化看板与退出前一致（#18，对照原型一致项 1/2/3）；#19 详情面板全套操作往返（编辑/修正/确认/删除/建卡，对照原型一致项 4/5）
+// 用途：看板视图 E2E（#18/#19/#20 验收）—— 侧栏「看板」入口 → 五列看板（Fake 全链）；verified design-feature 自动建卡实时出现；视图切换回聊天会话仍在；重启后 kanban:list 再水化看板与退出前一致（#18，对照原型一致项 1/2/3）；#19 详情面板全套操作往返（编辑/修正/确认/删除/建卡，对照原型一致项 4/5）；#20 关联管理往返（关联已有/解除/卡片建会话/跳转/会话徽标，对照原型一致项 4 关联区/6）
 import { test, expect, _electron, type ElectronApplication, type Page } from "@playwright/test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -88,6 +88,77 @@ test("看板入口 → 五列看板 → verified design-feature 卡片实时出�
     // 切回聊天：会话完成回空闲（CLI 生命周期与视图切换无关）
     await win.getByTestId("kanban-entry").click();
     await expect(win.getByText("空闲").first()).toBeVisible({ timeout: 20_000 });
+
+    await app.close();
+  } finally {
+    await rmBestEffort(userData);
+    await rmBestEffort(repoRoot);
+  }
+});
+
+test("关联管理往返（#20）：卡片建会话自动关联 → 解除（会话数/徽标即时更新）→ 关联已有 → 跳转两方向（原型一致项 4 关联区/6）", async () => {
+  const { userData, repoDir, repoRoot } = makeFixture();
+  try {
+    const { app, win } = await launchApp(userData, repoDir);
+    await registerAndCreate(win);
+    await sendVerifiedDesignFeature(win);
+
+    // 看板 → Design 列卡片（verified 自动建卡，关联触发会话）→ 打开详情面板
+    await win.getByTestId("kanban-entry").click();
+    const designCol = win.getByTestId("kanban-col-Design");
+    await expect(designCol.getByText("待命名需求")).toBeVisible({ timeout: 15_000 });
+    await expect(designCol.getByText("◍ 1 会话")).toBeVisible();
+    await designCol.getByText("待命名需求").click();
+    const panel = win.getByTestId("detail-panel");
+    await expect(panel).toBeVisible();
+
+    // 关联列表：CLI 色点行 + 状态徽标 + 跳转/解除（US18：活动状态只在会话行）
+    const claudeRow = panel.locator('[data-testid="related-session"]', { hasText: "新会话 · Claude" });
+    await expect(claudeRow).toBeVisible();
+    await expect(claudeRow.getByText("空闲", { exact: true })).toBeVisible();
+    await expect(claudeRow.getByTestId("related-jump")).toBeVisible();
+
+    // ＋新建会话：四 CLI 菜单 + PTY 项标注「无 skill 信号」；OpenCode 创建即自动关联（session:create+requirementId）
+    await panel.getByTestId("new-session-menu").click();
+    for (const cli of ["codex", "claude", "opencode", "pty"]) {
+      await expect(panel.getByTestId(`new-session-item-${cli}`)).toBeVisible();
+    }
+    await expect(panel.getByTestId("new-session-item-pty")).toContainText("无 skill 信号");
+    await panel.getByTestId("new-session-item-opencode").click();
+    const openRow = panel.locator('[data-testid="related-session"]', { hasText: "新会话 · OpenCode" });
+    await expect(openRow).toBeVisible({ timeout: 15_000 });
+    await expect(designCol.getByText("◍ 2 会话")).toBeVisible({ timeout: 10_000 });
+    // 侧栏：新会话行出现 + 需求徽标（自动关联直达）
+    const sidebarOpen = win.locator("aside").locator('[data-testid="session-row"]', { hasText: "新会话 · OpenCode" });
+    await expect(sidebarOpen.getByTestId("req-badge")).toHaveText("REQ-001", { timeout: 10_000 });
+
+    // 解除 OpenCode：会话数 2→1、侧栏徽标消失；阶段保持 Design（不回退）
+    await openRow.getByTestId("related-unlink").click();
+    await expect(designCol.getByText("◍ 1 会话")).toBeVisible({ timeout: 10_000 });
+    await expect(sidebarOpen.getByTestId("req-badge")).toHaveCount(0, { timeout: 10_000 });
+    await expect(designCol.getByText("待命名需求")).toBeVisible(); // 阶段保持
+
+    // 关联已有：选择器仅列当前项目未关联会话（Claude 已关联不出列；OpenCode 可选）→ 选择即关联往返
+    const linkSel = panel.getByTestId("link-existing-select");
+    const optionTexts = await linkSel.locator("option").allTextContents();
+    expect(optionTexts.some((t) => t.includes("新会话 · Claude"))).toBe(false); // 已关联排除
+    expect(optionTexts.some((t) => t.includes("新会话 · OpenCode"))).toBe(true);
+    await linkSel.selectOption({ label: "新会话 · OpenCode" });
+    await expect(designCol.getByText("◍ 2 会话")).toBeVisible({ timeout: 10_000 });
+    await expect(sidebarOpen.getByTestId("req-badge")).toHaveText("REQ-001", { timeout: 10_000 });
+
+    // 跳转方向 A：面板会话「跳转」→ 切回聊天视图并选中该会话
+    await claudeRow.getByTestId("related-jump").click();
+    await expect(win.getByTestId("kanban-board")).toBeHidden();
+    await expect(win.getByPlaceholder("输入消息，/ 开头触发 Skill…")).toBeVisible();
+    const sidebarClaude = win.locator("aside").locator('[data-testid="session-row"]', { hasText: "新会话 · Claude" });
+    await expect(sidebarClaude).toHaveAttribute("data-active", "true");
+
+    // 跳转方向 B：侧栏 REQ 徽标点击 → 进入看板并选中该需求（详情面板打开）
+    await sidebarClaude.getByTestId("req-badge").click();
+    await expect(win.getByTestId("kanban-board")).toBeVisible();
+    await expect(win.getByTestId("detail-panel")).toBeVisible();
+    await expect(win.getByTestId("detail-title-input")).toHaveValue("待命名需求");
 
     await app.close();
   } finally {

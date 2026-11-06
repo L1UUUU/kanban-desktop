@@ -1,6 +1,6 @@
 // 用途：聊天工作区 —— useChatController + useTerminals + useProjects 接线侧栏与中央区（transport 可注入：生产 window.api，测试 FakeAdapter 直连；活跃会话为 PTY 时中央渲染终端面板；主仓库并行冲突判据驱动提示条；#18 起中央区在聊天/看板视图间切换，本组件常挂 → 会话与 CLI 生命周期与视图切换无关）
 import type { ReactNode } from "react";
-import type { RequirementCardRow } from "@kanban/ipc-schema";
+import type { CliKind, RequirementCardRow } from "@kanban/ipc-schema";
 import { Sidebar } from "../../components/Sidebar";
 import type { ProjectsController } from "../projects/use-projects";
 import type { ChatTransport } from "../../lib/kanban-api";
@@ -21,6 +21,7 @@ export function ChatWorkspace({
   view = "chat",
   kanban,
   onOpenRequirement,
+  onSetView,
 }: {
   transport: ChatTransport | null;
   /** 项目控制器（App 层创建，TopBar 与侧栏共享状态） */
@@ -36,6 +37,8 @@ export function ChatWorkspace({
   kanban?: KanbanController | null;
   /** 卡片点击挂点（#19 详情滑出面板；本票不接） */
   onOpenRequirement?: (card: RequirementCardRow) => void;
+  /** #20：跨视图跳转（面板「跳转」→ 聊天；侧栏 REQ 徽标 → 看板）；App 层 setView 注入 */
+  onSetView?(v: "chat" | "kanban"): void;
 }) {
   const controller = useChatController(transport, demoCwd ?? null);
   const terminals = useTerminals(transport, controller);
@@ -45,6 +48,25 @@ export function ChatWorkspace({
   const active = controller.activeSession;
   // 主仓库并行冲突判据（spec I-4）：当前会话同目录 ≥2 活跃结构化会话 → 聊天区顶部提示条（仅提示不阻止，随快照动态更新）
   const conflictTitles = detectMainRepoConflict(controller.sessions, controller.activeId);
+
+  // #20 卡片建会话：cwd 解析与侧栏「＋」同规则（项目查不到不回退任何路径）
+  const createSessionForCard = (cli: CliKind | "pty", card: RequirementCardRow): void => {
+    const projectId = card.projectId;
+    if (!projectId) {
+      projects.setNotice("新建失败：需求未归属项目");
+      return;
+    }
+    const cwd = resolveSessionCwd(projects.projects, projectId, cli, demoCwd ?? null);
+    if (!cwd) {
+      projects.setNotice("新建失败：项目不存在或已失效，请刷新项目列表后重试");
+      return;
+    }
+    if (cli === "pty") {
+      void terminals.create({ projectId, cwd, requirementId: card.id });
+      return;
+    }
+    void controller.createSession(cli, { projectId, cwd, requirementId: card.id });
+  };
 
   return (
     <div className="grid min-h-0 grid-cols-[240px_1fr]">
@@ -74,6 +96,12 @@ export function ChatWorkspace({
           void terminals.create({ projectId, cwd });
         }}
         onKillTerminal={terminals.kill}
+        sessionToReq={kanban?.sessionToReq ?? {}}
+        onOpenRequirement={(requirementId) => {
+          // #20 原型一致项 6：会话行 REQ 徽标点击 → 进入看板并选中该需求（详情面板打开）
+          onSetView?.("kanban");
+          kanban?.setActive(requirementId);
+        }}
         info={
           <>
             {projects.notice ? <p className="mb-1 text-warn">{projects.notice}</p> : null}
@@ -82,7 +110,25 @@ export function ChatWorkspace({
         }
       />
       {view === "kanban" ? (
-        <KanbanWorkspace kanban={kanban ?? null} projects={projects} onOpenRequirement={onOpenRequirement} />
+        <KanbanWorkspace
+          kanban={kanban ?? null}
+          projects={projects}
+          onOpenRequirement={onOpenRequirement}
+          related={{
+            sessions: controller.sessions,
+            actions: {
+              onUnlink: (sessionId) => void kanban?.unlink(sessionId),
+              onLinkExisting: (sessionId, requirementId) =>
+                kanban ? kanban.link(sessionId, requirementId) : Promise.resolve("看板不可用"),
+              onJumpToSession: (sessionId) => {
+                // #20：面板会话「跳转」→ 切回聊天视图并选中该会话
+                onSetView?.("chat");
+                controller.switchTo(sessionId);
+              },
+              onCreateSession: createSessionForCard,
+            },
+          }}
+        />
       ) : active && active.cli === "pty" ? (
         <TerminalWorkspace session={active} manager={terminals.manager} onKill={terminals.kill} />
       ) : (

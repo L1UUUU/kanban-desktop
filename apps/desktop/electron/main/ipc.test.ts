@@ -728,6 +728,33 @@ describe("kanban 通道（#17 spec #15 C 节：全量经 TrackerEngine.process �
     expect(r.engine.snapshot()[0].sessions.length).toBe(1);
   });
 
+  it("terminal:create+requirementId（#20 卡片建 PTY）：同项目原子落 link（cli=pty 合法）；跨项目返回拒绝原因且不落 link", async () => {
+    const r = makeKanbanRouter();
+    const pa = await registerProject(r, r.projA);
+    const pb = await registerProject(r, r.projB);
+    await r.handle({ channel: "kanban:create", projectId: pa });
+
+    // 同项目：PTY 终端创建成功即关联（S2-12：pty 可 link）
+    const ok = await r.handle({ channel: "terminal:create", cwd: r.projA, projectId: pa, requirementId: "REQ-001" });
+    expect(ok.ok).toBe(true);
+    if (ok.ok) {
+      expect(ok.linked).toBe(true);
+      expect(ok.cli).toBe("pty");
+      expect(ok.sessionId).toBeTruthy();
+    }
+    const list = await r.handle({ channel: "kanban:list", projectId: pa });
+    if (!list.ok) throw new Error("kanban:list 失败");
+    expect(list.requirements![0].sessions.length).toBe(1);
+    expect(list.sessionToReq).toEqual({ [list.requirements![0].sessions[0]]: "REQ-001" });
+
+    // 跨项目：终端仍创建成功，但 link 被拒并返回原因
+    const eventsBefore = r.engine.store.snapshotTables().stageEventCount;
+    const mismatch = await r.handle({ channel: "terminal:create", cwd: r.projB, projectId: pb, requirementId: "REQ-001" });
+    expect(mismatch).toMatchObject({ ok: true, linked: false });
+    if (mismatch.ok) expect(mismatch.reason).toContain("跨项目");
+    expect(r.engine.store.snapshotTables().stageEventCount).toBe(eventsBefore); // 不落 link 事件
+  });
+
   it("session:create cli=claude 响应含 skillConflicts（#21 真实检测：fixture 无 .claude → 空数组）；非 claude 不带该字段", async () => {
     const r = makeKanbanRouter();
     const claude = await r.handle({ channel: "session:create", cli: "claude", cwd: r.projA });

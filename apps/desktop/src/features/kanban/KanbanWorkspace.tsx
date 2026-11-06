@@ -1,8 +1,9 @@
-// 用途：看板工作区（#18）—— 五列看板（列头计数、按当前项目过滤、未开始列「＋」手动建卡）+ 无项目空板引导文案；#19 起点击卡片开右侧详情滑出面板（activeRequirementId 驱动，原型一致项 1/2/3/4/5）
+// 用途：看板工作区（#18）—— 五列看板（列头计数、按当前项目过滤、未开始列「＋」手动建卡）+ 无项目空板引导文案；#19 起点击卡片开右侧详情滑出面板（activeRequirementId 驱动，原型一致项 1/2/3/4/5）；#20 起详情面板关联区由 related 注入（关联列表/关联已有/跳转/建会话）
 import type { RequirementCardRow } from "@kanban/ipc-schema";
 import type { ProjectsController } from "../projects/use-projects";
 import { KANBAN_COLUMNS, stageToColumn } from "./columns";
 import { DetailPanel } from "./DetailPanel";
+import type { RelatedSessionsAreaProps } from "./RelatedSessionsArea";
 import { RequirementCard } from "./RequirementCard";
 import type { KanbanController } from "./use-kanban";
 
@@ -10,12 +11,15 @@ export function KanbanWorkspace({
   kanban,
   projects,
   onOpenRequirement,
+  related,
 }: {
   kanban: KanbanController | null;
   /** 项目控制器（App 层创建；看板按当前项目过滤，S2-08） */
   projects: ProjectsController;
   /** 卡片点击挂点（缺省 setActive 开详情面板；#20 跳转复用覆盖） */
   onOpenRequirement?: (card: RequirementCardRow) => void;
+  /** #20：详情面板关联区数据与动作（缺省时关联区保持占位）；sessionToReq 由 kanban 控制器提供故不在此列 */
+  related?: Omit<RelatedSessionsAreaProps, "card" | "sessionToReq">;
 }) {
   const currentProjectId = projects.currentProjectId;
   // 按当前项目过滤后分列（stage=null → 未开始列）
@@ -76,6 +80,7 @@ export function KanbanWorkspace({
             onDelete: (id) => void kanban.removeRequirement(id),
             onClose: () => kanban.setActive(null),
           }}
+          related={{ ...related, sessionToReq: kanban.sessionToReq }}
         />
       ) : null}
     </section>
