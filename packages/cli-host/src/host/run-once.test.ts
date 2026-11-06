@@ -66,14 +66,19 @@ describe("RunOnceRunner（C5 演进 run-once）", () => {
     expect(r.stderr).toContain("boom:M2");
   });
 
-  it("超时：timeoutMs 到点终止子进程 → status=timeout，无残留进程", { timeout: 20_000 }, async () => {
+  it("超时：timeoutMs 到点终止子进程 → status=timeout，无残留进程", { timeout: 45_000 }, async () => {
     const runner = new RunOnceRunner();
     const pidFile = path.join(cwd, "timeout.pid");
     const t0 = Date.now();
-    const r = await runner.run({ runId: "r-to", cli: "claude", args: nodeRun("hang-with-pid", pidFile), cwd, timeoutMs: 500 });
+    // 竞态根因修复（#30 实测反馈）：timeoutMs 从 spawn 起算，慢环境下子进程 500ms 内来不及写 pid 文件
+    // → kill 后 readFileSync ENOENT。改为先等 pid 文件落盘（子进程确已启动的前提）再等超时终结；
+    // timeoutMs 余量放大到 10s 覆盖最慢环境的 node 启动，超时分支（到点→kill→timeout 归类）仍被真实触发
+    const p = runner.run({ runId: "r-to", cli: "claude", args: nodeRun("hang-with-pid", pidFile), cwd, timeoutMs: 10_000 });
+    await waitForFile(pidFile, 15_000);
+    const r = await p;
     // 终结明显早于子进程自身 120s 睡眠；hang 行为无输出，stdout 为空
     expect(r.status).toBe("timeout");
-    expect(Date.now() - t0).toBeLessThan(15_000);
+    expect(Date.now() - t0).toBeLessThan(30_000);
     expect(r.stdout).toBe("");
     await waitPidGone(Number(readFileSync(pidFile, "utf8")));
   });
