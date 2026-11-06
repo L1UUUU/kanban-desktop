@@ -5,14 +5,22 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import * as nodePty from "node-pty";
-import { appInfoSchema, shutdownNoticeSchema, terminalEventSchema, trackerChangeSchema } from "@kanban/ipc-schema";
+import {
+  appInfoSchema,
+  memoryEventSchema,
+  shutdownNoticeSchema,
+  terminalEventSchema,
+  trackerChangeSchema,
+  type MemoryEventWire,
+} from "@kanban/ipc-schema";
 import { AdapterRouter, createDesktopAdapterFactory, type CliAdapter } from "@kanban/cli-host";
 import { TrackerEngine, type TrackerChange } from "@kanban/tracker";
 import { defaultConfig, loadConfig, saveConfig, type AppConfig } from "./config";
 import { createAdapterEventHandler } from "./adapter-events";
 import { CliHostClient } from "./cli-host-client";
 import { SQLITE_ENTRY, openDatabase } from "./db";
-import { handleIpc, type IpcDeps } from "./ipc";
+import { handleIpc, handleMemoryIpc, TRACKER_CLI_BY_APP, type IpcDeps } from "./ipc";
+import { openMemoryService } from "./memory-service";
 import { createPtyHost } from "./pty-host";
 import { ProjectStore } from "./project-store";
 import { SessionStore } from "./session-store";
@@ -97,6 +105,29 @@ app.whenReady().then(async () => {
   trackerEngine.restore();
   // 启动探测：全部项目目录存在性落库（missing 标记，工单 #7 验收第 1 条）
   projects.refreshStatuses();
+  // #31 memory 面装配（spec #27 A/C 节）：打开库即对账（running 批次→failed 等四规则，崩溃窗口收敛不锁死需求）；
+  // dataRoot=<userData>/memory（D 节布局根）；需求关联会话/标题由 Main 查 tracker 后传入（memory 不依赖 tracker）
+  const sendMemoryEvent = (event: MemoryEventWire): void => {
+    memoryEventSchema.parse(event);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("memory:event", event);
+    }
+  };
+  const memoryService = openMemoryService({
+    db,
+    dataRoot: join(app.getPath("userData"), "memory"),
+    listLinkedStructuredSessions: (requirementId) => {
+      const out: Array<{ sessionId: string; cli: string }> = [];
+      for (const [sessionId, reqId] of trackerEngine.tracker.sessionToReq) {
+        if (reqId !== requirementId) continue;
+        const s = sessions.get(sessionId);
+        if (s && s.kind === "structured") out.push({ sessionId, cli: TRACKER_CLI_BY_APP[s.cli] ?? "claude-code" });
+      }
+      return out;
+    },
+    getRequirementTitle: (requirementId) => trackerEngine.tracker.req(requirementId)?.title ?? null,
+    emitMemoryEvent: sendMemoryEvent,
+  }).service;
   // CliHost 托管 adapter（utilityProcess 优先；config 手动覆盖 exe + env 开关在工厂内生效）
   adapter = createHostedAdapter(appConfig);
 
@@ -217,6 +248,10 @@ app.whenReady().then(async () => {
     }),
   );
   ipcMain.handle("kanban:ipc", (_event, raw: unknown) => handleIpc(deps, raw));
+  // #31：memory:ipc 单通道（入站 zod 强制校验 + 业务拒绝 ok:false+reason，spec #27 H 节）
+  ipcMain.handle("memory:ipc", (_event, raw: unknown) =>
+    handleMemoryIpc({ memory: memoryService, isShuttingDown: () => shutdown.isShuttingDown() }, raw),
+  );
 
   createWindow();
 });

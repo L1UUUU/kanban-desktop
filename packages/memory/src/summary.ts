@@ -115,6 +115,14 @@ export class SummaryStore {
       updatedAt: row.updated_at,
     };
   }
+
+  /** 项目全部总结行（最近更新优先）—— 记忆视图 projectMemory 一次读（issue #31） */
+  listSummaries(projectId: string): MemorySummaryRecord[] {
+    const rows = this.db
+      .prepare("SELECT * FROM memory_summaries WHERE project_id = ? ORDER BY updated_at DESC, rowid DESC")
+      .all(projectId) as unknown as SummaryRow[];
+    return rows.map(rowToSummary);
+  }
 }
 
 interface SummaryRow {
@@ -125,4 +133,17 @@ interface SummaryRow {
   proposed_batch_id: string | null;
   proposed_md_path: string | null;
   updated_at: string;
+}
+
+// 行投影（getSummary/listSummaries 共用同一映射）
+function rowToSummary(r: SummaryRow): MemorySummaryRecord {
+  return {
+    requirementId: r.requirement_id,
+    projectId: r.project_id,
+    contentHash: r.content_hash,
+    mdPath: r.md_path,
+    proposedBatchId: r.proposed_batch_id,
+    proposedMdPath: r.proposed_md_path,
+    updatedAt: r.updated_at,
+  };
 }

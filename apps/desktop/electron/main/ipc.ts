@@ -3,13 +3,16 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import {
   ipcRequestSchema,
+  memoryRequestSchema,
   type IpcRequest,
   type IpcResult,
+  type MemoryResult,
   type SessionRow,
 } from "@kanban/ipc-schema";
 import { AdapterError, detectSkillConflicts, resolveUserClaudeDir, type CliAdapter } from "@kanban/cli-host";
 import { TrackerEngine, formatRequirementId, type Cli, type NormalizedEvent, type TrackerChange } from "@kanban/tracker";
 import { detectDirIdentity } from "./git-identity";
+import { type MemoryService } from "./memory-service";
 import type { PtyHost } from "./pty-host";
 import type { ProjectStore } from "./project-store";
 import type { SessionStore } from "./session-store";
@@ -329,8 +332,9 @@ function nowIso(): string {
 }
 
 /** 应用侧 cli 名（sessions 表：fake/codex/claude/opencode/pty）→ tracker CLIS（claude-code/codex/opencode/pty）；
- *  fake 演示链路的观察信号由 FakeAdapter 以 claude-code 口径上报，故同映射到 claude-code */
-const TRACKER_CLI_BY_APP: Record<string, Cli> = {
+ *  fake 演示链路的观察信号由 FakeAdapter 以 claude-code 口径上报，故同映射到 claude-code；
+ *  #31 起 memory 装配（index.ts）复用本映射把关联会话 cli 归一为 tracker 口径 */
+export const TRACKER_CLI_BY_APP: Record<string, Cli> = {
   fake: "claude-code",
   codex: "codex",
   claude: "claude-code",
@@ -426,4 +430,52 @@ function summarizeIssues(issues: readonly { path: PropertyKey[]; message: string
 /** #21：用户级 Claude 基准目录缺省解析（生产路径：CLAUDE_CONFIG_DIR 优先，否则 ~/.claude；测试经 deps.resolveUserClaudeDir 注入） */
 function defaultUserClaudeDir(): string {
   return resolveUserClaudeDir(process.env, homedir());
+}
+
+// ============ #31 memory:ipc 通道（spec #27 H 节，对齐 kanban:ipc 模式：单通道 + Main 入站 zod 强制校验 + 业务拒绝 ok:false+reason） ============
+
+/** memory:ipc 路由依赖（MemoryService 由 index.ts 经 openMemoryService 装配注入） */
+export interface MemoryIpcDeps {
+  memory: MemoryService;
+  /** 退出序列门闸（true=正在退出，拒绝新请求；缺省恒 false 供测试） */
+  isShuttingDown?(): boolean;
+}
+
+/** 处理一条 memory:ipc 入站请求：zod 强制校验 → 退出门闸 → 七通道路由（业务拒绝直达调用方，不新增全局错误码） */
+export async function handleMemoryIpc(deps: MemoryIpcDeps, raw: unknown): Promise<MemoryResult> {
+  const parsed = memoryRequestSchema.safeParse(raw);
+  if (!parsed.success) {
+    return { ok: false, reason: "invalid-request", detail: summarizeIssues(parsed.error.issues) };
+  }
+  if (deps.isShuttingDown?.()) {
+    return { ok: false, reason: "shutting-down", detail: "应用正在退出，已停止接收新请求" };
+  }
+  const req = parsed.data;
+  switch (req.channel) {
+    case "memory:extract": {
+      const r = deps.memory.extract(req.requirementId);
+      return r.ok ? { ok: true, started: true, batchId: r.batchId } : r;
+    }
+    case "memory:cancel": {
+      const r = deps.memory.cancel(req.requirementId);
+      return r.ok ? { ok: true, cancelled: true } : r;
+    }
+    case "memory:reviewCandidate": {
+      const r = deps.memory.reviewCandidate(req.candidateId, req.action, req.edit);
+      return r.ok ? { ok: true, candidate: r.candidate } : r;
+    }
+    case "memory:resolveSummary": {
+      return deps.memory.resolveSummary(req.requirementId, req.choice);
+    }
+    case "memory:requirementMemory": {
+      return deps.memory.requirementMemory(req.requirementId);
+    }
+    case "memory:projectMemory": {
+      return deps.memory.projectMemory(req.projectId, req.query);
+    }
+    case "memory:editAccepted": {
+      const r = deps.memory.editAccepted(req.candidateId, { claim: req.claim, scope: req.scope });
+      return r.ok ? { ok: true, candidate: r.candidate } : r;
+    }
+  }
 }

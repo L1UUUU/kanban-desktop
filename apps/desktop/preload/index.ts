@@ -1,12 +1,25 @@
-// 用途：contextBridge 薄层 —— 向 renderer 暴露最小 IPC 面（app:getInfo + kanban:ipc 单通道 invoke + chat:event/terminal:event/tracker:event/app:shutdown 订阅）；全部通道形状由 @kanban/ipc-schema 契约化，preload 不做校验（两端校验，spec E）
+// 用途：contextBridge 薄层 —— 向 renderer 暴露最小 IPC 面（app:getInfo + kanban:ipc/memory:ipc 单通道 invoke + chat:event/terminal:event/tracker:event/memory:event/app:shutdown 订阅）；全部通道形状由 @kanban/ipc-schema 契约化，preload 不做校验（两端校验，spec E）
 import { contextBridge, ipcRenderer } from "electron";
-import type { AdapterEvent, AppInfo, IpcRequest, IpcResult, ShutdownNotice, TerminalEvent, TrackerChangeWire } from "@kanban/ipc-schema";
+import type {
+  AdapterEvent,
+  AppInfo,
+  IpcRequest,
+  IpcResult,
+  MemoryEventWire,
+  MemoryRequest,
+  MemoryResult,
+  ShutdownNotice,
+  TerminalEvent,
+  TrackerChangeWire,
+} from "@kanban/ipc-schema";
 
 const api = {
   /** 拉取应用运行信息（名称/版本/平台/SQLite 入口），用于骨架冒烟展示 */
   getAppInfo: (): Promise<AppInfo> => ipcRenderer.invoke("app:getInfo") as Promise<AppInfo>,
   /** 发送一条 IPC 请求（请求/结果形状见 ipcRequestSchema/ipcResultSchema；terminal:* 同经此通道） */
   invoke: (req: IpcRequest) => ipcRenderer.invoke("kanban:ipc", req) as Promise<IpcResult>,
+  /** #31：发送一条 memory:ipc 请求（提取/取消/审核/总结处置/需求一次读/项目检索/知识再编辑，schema 见 memoryRequestSchema） */
+  invokeMemory: (req: MemoryRequest) => ipcRenderer.invoke("memory:ipc", req) as Promise<MemoryResult>,
   /** 订阅 Adapter 事件流（ChatEvent ∪ SkillObservation），返回注销函数 */
   onChatEvent: (handler: (event: AdapterEvent) => void): (() => void) => {
     const listener = (_e: unknown, event: AdapterEvent): void => handler(event);
@@ -24,6 +37,12 @@ const api = {
     const listener = (_e: unknown, change: TrackerChangeWire): void => handler(change);
     ipcRenderer.on("tracker:event", listener);
     return () => ipcRenderer.off("tracker:event", listener);
+  },
+  /** #31：订阅 memory 事件流（batch-status 批次状态 / chunk-progress 段进度，schema 见 memoryEventSchema），返回注销函数 */
+  onMemoryEvent: (handler: (event: MemoryEventWire) => void): (() => void) => {
+    const listener = (_e: unknown, event: MemoryEventWire): void => handler(event);
+    ipcRenderer.on("memory:event", listener);
+    return () => ipcRenderer.off("memory:event", listener);
   },
   /** 订阅退出通知（统一退出序列第 1 步「停止接收新请求」的 UI 提示，#13/spec H），返回注销函数 */
   onShutdownNotice: (handler: (notice: ShutdownNotice) => void): (() => void) => {

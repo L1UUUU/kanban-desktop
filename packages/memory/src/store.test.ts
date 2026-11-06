@@ -345,3 +345,71 @@ describe("Dice 判重标注（append 时对既有知识跑冲突检测，仅标�
     expect(pend.status).toBe("pending");
   });
 });
+
+describe("需求候选一次读（issue #31 requirementMemory 的 store 支撑）", () => {
+  it("listRequirementCandidates：跨批次全部候选按创建序返回（pending 累计 + 已处置均在），只含本需求", () => {
+    const { store } = mkStore();
+    store.createBatch({ id: "B1", requirementId: "REQ-001", projectId: "p1" });
+    store.createBatch({ id: "B2", requirementId: "REQ-001", projectId: "p1" });
+    store.createBatch({ id: "B9", requirementId: "REQ-002", projectId: "p1" });
+    store.appendCandidates("B1", [{ claim: "第一批", scope: "", evidence: "", sourceSessionIds: [] }]);
+    store.appendCandidates("B2", [
+      { claim: "第二批 a", scope: "", evidence: "", sourceSessionIds: [] },
+      { claim: "第二批 b", scope: "", evidence: "", sourceSessionIds: [] },
+    ]);
+    store.appendCandidates("B9", [{ claim: "别的需求", scope: "", evidence: "", sourceSessionIds: [] }]);
+    const rows = store.listRequirementCandidates("REQ-001");
+    expect(rows.map((r) => r.claim)).toEqual(["第一批", "第二批 a", "第二批 b"]);
+    expect(rows.every((r) => r.requirementId === "REQ-001")).toBe(true);
+  });
+});
+
+describe("已接受知识再编辑 editAccepted（issue #31，US21：claim/适用范围可再编辑、溯源不可变）", () => {
+  it("更新 edited 值并重写 md 正文；未提供的字段保持既有 edited 值；溯源与状态不变", () => {
+    const { store } = mkStore();
+    const rec = seedCandidate(store, "原 claim");
+    store.reviewCandidate(rec.id, "accept");
+    const accepted = must(store.getCandidate(rec.id));
+    const updated = store.editAccepted(rec.id, { claim: "修订 claim", scope: "修订范围" });
+    expect(updated).toMatchObject({
+      status: "accepted",
+      editedClaim: "修订 claim",
+      editedScope: "修订范围",
+      batchId: rec.batchId,
+      evidence: rec.evidence,
+      sourceSessionIds: rec.sourceSessionIds,
+      reviewedAt: accepted.reviewedAt, // 再编辑不是审核，保留原审核时间
+    });
+    expect(readFileSync(must(updated.mdPath), "utf8")).toContain("修订 claim");
+    expect(readFileSync(must(updated.mdPath), "utf8")).toContain("修订范围");
+
+    // 再次单项编辑：claim 的 edited 值保持，仅 scope 覆盖
+    const again = store.editAccepted(rec.id, { scope: "再修订范围" });
+    expect(again.editedClaim).toBe("修订 claim");
+    expect(again.editedScope).toBe("再修订范围");
+    expect(readFileSync(must(again.mdPath), "utf8")).toContain("再修订范围");
+  });
+
+  it("edited 终态知识同样可再编辑（US21 编辑后接受的知识是项目资产）", () => {
+    const { store } = mkStore();
+    const rec = seedCandidate(store, "待编辑");
+    store.reviewCandidate(rec.id, "edit", { claim: "首次编辑" });
+    const updated = store.editAccepted(rec.id, { claim: "二次编辑" });
+    expect(updated.status).toBe("edited");
+    expect(updated.editedClaim).toBe("二次编辑");
+    expect(readFileSync(must(updated.mdPath), "utf8")).toContain("二次编辑");
+  });
+
+  it("仅 accepted/edited 可编辑：pending/ignored 拒绝；候选不存在与空编辑抛错", () => {
+    const { store } = mkStore();
+    const p = seedCandidate(store, "待审");
+    expect(() => store.editAccepted(p.id, { claim: "x" })).toThrow(/pending/);
+    store.reviewCandidate(p.id, "ignore");
+    expect(() => store.editAccepted(p.id, { claim: "x" })).toThrow(/ignored/);
+
+    const acc = seedCandidate(store, "已接受", { batchId: "B2" });
+    store.reviewCandidate(acc.id, "accept");
+    expect(() => store.editAccepted(acc.id, {})).toThrow(/至少一项/);
+    expect(() => store.editAccepted("ghost", { claim: "x" })).toThrow(/不存在/);
+  });
+});
