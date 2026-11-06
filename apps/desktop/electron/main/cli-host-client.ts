@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { AdapterEvent, ChatEvent } from "@kanban/ipc-schema";
+import type { AdapterEvent, ChatEvent, TranscriptEvent } from "@kanban/ipc-schema";
 import { utilityProcess, type UtilityProcess } from "electron";
 import { AdapterError, JOB_GUARD_PS, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type RunOnceResult, type SendTurnInput } from "@kanban/cli-host";
 
@@ -84,6 +84,12 @@ export class CliHostClient implements CliAdapter {
   async readHistory(sessionId: string): Promise<ChatEvent[]> {
     const r = (await this.command({ kind: "readHistory", sessionId })) as { events: ChatEvent[] };
     return r.events ?? [];
+  }
+
+  async readTranscript(sessionId: string): Promise<TranscriptEvent[]> {
+    // #28：双视角历史经 worker 命令往返（Main → cli-host adapter，记忆提取管线的读取入口）
+    const r = (await this.command({ kind: "readTranscript", sessionId })) as { transcript: TranscriptEvent[] };
+    return r.transcript ?? [];
   }
 
   async resume(sessionId: string): Promise<void> {

@@ -1,8 +1,8 @@
-// 用途：OpenCodeAdapter —— C1 契约的真实 OpenCode 实现：HTTP+SSE 直连（poc-3 client 演进）、server-per-project（经 OpenCodeServerHost）、审批轮询 GET /permission + SSE replied 兜底、/command 路由 self_reported SkillObservation、abort 归类已取消、按 native session id 跨重启恢复
+// 用途：OpenCodeAdapter —— C1 契约的真实 OpenCode 实现：HTTP+SSE 直连（poc-3 client 演进）、server-per-project（经 OpenCodeServerHost）、审批轮询 GET /permission + SSE replied 兜底、/command 路由 self_reported SkillObservation、abort 归类已取消、按 native session id 跨重启恢复 + readTranscript message API 双视角（#28）
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { AdapterEvent, ApprovalDecision, ApprovalSuggestion, ChatEvent, ChatEventSeed, PermMode, SessionStatus, SkillObservation } from "@kanban/ipc-schema";
+import type { AdapterEvent, ApprovalDecision, ApprovalSuggestion, ChatEvent, ChatEventSeed, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
 import { AdapterError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
 import type { OpenCodeSseEvent, OpenCodeServerClientLike } from "./opencode/client";
 import { OpenCodeServerHost, type OpenCodeServerHostLike, type OpenCodeServerHostOptions } from "./opencode/server-host";
@@ -219,6 +219,52 @@ export class OpenCodeAdapter implements CliAdapter {
     }
     if (s.client && !s.client.dead) await this.backfillFromNative(s);
     return [...s.log];
+  }
+
+  /** readTranscript（#28）：GET /session/{id}/message → user/assistant 双视角（断开会话按需拉起 server；原生 message API 为权威源，与本地事件日志无关） */
+  async readTranscript(sessionId: string): Promise<TranscriptEvent[]> {
+    const s = this.requireSession(sessionId);
+    // 断开态：按需拉起 server（同 readHistory 恢复入口语义）
+    if ((s.dead || !s.client || s.client.dead) && !s.turnActive) {
+      const client = await this.acquireServer(s, s.sessionId);
+      this.attachServer(s, client);
+      s.dead = false;
+    }
+    let items: Array<{ info?: Record<string, unknown>; parts?: unknown[] }>;
+    try {
+      const r = await s.client!.api("GET", `/session/${s.nativeId}/message?limit=500`);
+      if (!r.ok) throw new Error(`HTTP ${r.status} ${r.text.slice(0, 160)}`);
+      const json = r.json as { items?: Array<{ info?: Record<string, unknown>; parts?: unknown[] }> } | null;
+      items = json?.items ?? (Array.isArray(r.json) ? (r.json as Array<{ info?: Record<string, unknown>; parts?: unknown[] }>) : []);
+    } catch (e) {
+      // 读失败不冒充完整（spec #27「缺失会话明确列出」）：报错由提取管线记为缺失
+      throw new AdapterError("E_INTERNAL", `读取 OpenCode 原生历史失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+    const out: TranscriptEvent[] = [];
+    for (const it of items) {
+      const info = it.info ?? {};
+      const parts = Array.isArray(it.parts) ? (it.parts as Array<Record<string, unknown>>) : [];
+      if (info.role === "user") {
+        // 用户消息：text part 拼接（prompt_async 落盘的原文）
+        const text = parts
+          .filter((p) => p.type === "text" && typeof p.text === "string")
+          .map((p) => p.text as string)
+          .join("");
+        if (text.length > 0) out.push({ role: "user", text });
+        continue;
+      }
+      if (info.role !== "assistant") continue;
+      for (const p of parts) {
+        if (p.type === "text" && typeof p.text === "string" && p.text.length > 0) {
+          out.push({ role: "assistant", text: p.text });
+        } else if (p.type === "tool") {
+          // 工具 part：name/summary 与实时流 describeToolArgs 同源
+          const state = (p.state ?? {}) as Record<string, unknown>;
+          out.push({ role: "assistant", text: "", tool: { name: String(p.tool ?? "tool"), summary: describeToolArgs(state.input) } });
+        }
+      }
+    }
+    return out;
   }
 
   async resume(sessionId: string): Promise<void> {

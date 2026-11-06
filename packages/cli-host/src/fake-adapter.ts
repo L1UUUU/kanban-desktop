@@ -1,5 +1,5 @@
-// 用途：FakeAdapter —— C1 契约的脚本化 mock 实现：事件溯源日志（readHistory=重放，天然满足不变量 4）、可注入时钟、演示脚本驱动（原型行为规格）
-import type { AdapterEvent, ChatEvent, ChatEventSeed, PermMode, SessionStatus, SkillObservation } from "@kanban/ipc-schema";
+// 用途：FakeAdapter —— C1 契约的脚本化 mock 实现：事件溯源日志（readHistory=重放，天然满足不变量 4）、可注入时钟、演示脚本驱动（原型行为规格）+ readTranscript 双视角剧本（#28，独立于 ChatEvent 日志维护）
+import type { AdapterEvent, ChatEvent, ChatEventSeed, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
 import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
 import { SystemClock, type FakeClock } from "./clock";
 import { pickScript, type ScriptStep } from "./fake-scripts";
@@ -25,6 +25,8 @@ interface SessionState {
   permMode?: PermMode;
   seq: number;
   log: ChatEvent[];
+  /** readTranscript 双视角剧本（#28）：与 ChatEvent 日志分轨维护（GUI 聊天流无 user 条目，提取管线需要 user 视角） */
+  transcript: TranscriptEvent[];
   status: SessionStatus;
   /** 当前 turn 待执行脚本（null=无活动 turn） */
   script: ScriptStep[] | null;
@@ -81,6 +83,7 @@ export class FakeAdapter implements CliAdapter {
       permMode: init.permMode,
       seq: 0,
       log: [],
+      transcript: [],
       status: "idle",
       script: null,
       ix: 0,
@@ -120,6 +123,7 @@ export class FakeAdapter implements CliAdapter {
       const st = s.stream;
       this.emit(s, { type: "message_delta", itemId: st.itemId, partId: st.partId, delta: " …" });
       this.emit(s, { type: "message_completed", itemId: st.itemId, partId: st.partId });
+      s.transcript.push({ role: "assistant", text: `${st.target.slice(0, st.pos)} …` }); // #28：被打断文本按已流出部分收场
       s.stream = null;
     }
     if (s.runningToolItemId) {
@@ -168,6 +172,12 @@ export class FakeAdapter implements CliAdapter {
     return [...s.log];
   }
 
+  async readTranscript(sessionId: string): Promise<TranscriptEvent[]> {
+    const s = this.requireSession(sessionId);
+    // #28：双视角剧本快照（user 输入 + 助手文本 + 工具标注，随语义节点增量维护）
+    return [...s.transcript];
+  }
+
   async resume(sessionId: string): Promise<void> {
     const s = this.requireSession(sessionId);
     // Fake 复位实现：丢弃残余活动并经事件流通知空闲
@@ -188,6 +198,7 @@ export class FakeAdapter implements CliAdapter {
       permMode: input.permMode,
       seq: 0,
       log: [],
+      transcript: [],
       status: "disconnected",
       script: null,
       ix: 0,
@@ -224,6 +235,7 @@ export class FakeAdapter implements CliAdapter {
     s.script = this.pickTurnScript(text);
     s.ix = 0;
     s.runningToolItemId = null;
+    s.transcript.push({ role: "user", text }); // #28：用户输入入剧本（原生 CLI 落盘口径）
     this.emit(s, { type: "session_status", status: "running" });
     this.emit(s, { type: "turn_started", turnId: randomId("t") });
     this.scheduleTick(s, 0);
@@ -235,6 +247,7 @@ export class FakeAdapter implements CliAdapter {
       const st = s.stream;
       this.emit(s, { type: "message_delta", itemId: st.itemId, partId: st.partId, delta: st.target.slice(st.pos) });
       this.emit(s, { type: "message_completed", itemId: st.itemId, partId: st.partId });
+      s.transcript.push({ role: "assistant", text: st.target }); // turnEnd 收尾：终文全部已流出
       s.stream = null;
     }
     if (s.runningToolItemId) {
@@ -293,6 +306,7 @@ export class FakeAdapter implements CliAdapter {
         s.lastToolItemId = itemId;
         s.runningToolItemId = itemId;
         this.emit(s, { type: "tool_started", itemId, tool: step.tool, argsSummary: step.args });
+        s.transcript.push({ role: "assistant", text: "", tool: { name: step.tool, summary: step.args } }); // #28：工具调用入剧本
         this.scheduleTick(s, STEP_DELAY_MS);
         return;
       }
@@ -402,6 +416,7 @@ export class FakeAdapter implements CliAdapter {
     st.pos = nextPos;
     if (nextPos >= st.target.length) {
       this.emit(s, { type: "message_completed", itemId: st.itemId, partId: st.partId });
+      s.transcript.push({ role: "assistant", text: st.target }); // #28：完整流出的助手文本入剧本
       s.stream = null;
     }
   }

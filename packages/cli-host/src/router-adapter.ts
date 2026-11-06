@@ -1,6 +1,6 @@
 // 用途：AdapterRouter —— 多 CLI 分发门面：createSession 按 init.cli 分发到对应 Adapter 并登记路由，其余 C1 方法按 sessionId 路由（ipc 单 adapter 注入位不变）
 import { randomUUID } from "node:crypto";
-import type { AdapterEvent, ChatEvent } from "@kanban/ipc-schema";
+import type { AdapterEvent, ChatEvent, TranscriptEvent } from "@kanban/ipc-schema";
 import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
 
 /** Router 构造工厂：cli → adapter（不支持该 CLI 时抛 AdapterError） */
@@ -72,6 +72,10 @@ export class AdapterRouter implements CliAdapter {
 
   async readHistory(sessionId: string): Promise<ChatEvent[]> {
     return this.route(sessionId).readHistory(sessionId);
+  }
+
+  async readTranscript(sessionId: string): Promise<TranscriptEvent[]> {
+    return this.route(sessionId).readTranscript(sessionId);
   }
 
   async resume(sessionId: string): Promise<void> {
