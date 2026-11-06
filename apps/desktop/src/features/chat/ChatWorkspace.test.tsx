@@ -79,7 +79,7 @@ class EchoPty implements PtyLike {
 /** FakeAdapter 直连 transport：复用 Main 路由（handleIpc）做请求侧，adapter.subscribe 做 chat 事件侧，真实 createPtyHost + 回显 mock PTY 做 terminal 事件侧 —— 组件测试即全栈（除 Electron IPC/dialog） */
 function makeTransport(
   adapter: FakeAdapter,
-  opts?: { dbPath?: string; statePath?: string; pick?: () => Promise<string | null> },
+  opts?: { dbPath?: string; statePath?: string; pick?: () => Promise<string | null>; userClaudeDir?: string },
 ): ChatTransport {
   const db = opts?.dbPath ? openDatabase(opts.dbPath) : openDatabase(":memory:");
   openDbs.push(db);
@@ -131,6 +131,8 @@ function makeTransport(
       state.currentProjectId = id;
       if (opts?.statePath) writeFileSync(opts?.statePath, JSON.stringify(state), "utf-8");
     },
+    // #21：注入用户级 Claude 基准目录（同名 skill 检测；缺省走 process.env/主目录的路径组件测试不覆盖）
+    ...(opts?.userClaudeDir ? { resolveUserClaudeDir: () => opts.userClaudeDir! } : {}),
   };
   return {
     invoke: (req: IpcRequest) => handleIpc(deps, req),
@@ -709,6 +711,107 @@ describe("主仓库并行冲突提示条（spec I-4/#13）", () => {
     });
     await t.flush();
     expect(screen.queryByTestId("conflict-banner")).toBeNull();
+  });
+});
+
+describe("Claude 同名 skill 提示条（#21 / 原型一致项 7：warn 样式、列冲突名、项目级优先生效说明、可关闭）", () => {
+  let tmpRoot = "";
+
+  afterEach(() => {
+    cleanup();
+    for (const db of openDbs.splice(0)) db.close();
+    if (tmpRoot) {
+      rmSync(tmpRoot, { recursive: true, force: true });
+      tmpRoot = "";
+    }
+  });
+
+  /** 项目含 .claude/skills/design-feature（主仓库 fixture）；userSkills 决定用户级与项目的交集（空=无冲突） */
+  function makeSkillConflictFixture(userSkills: string[]) {
+    tmpRoot = mkdtempSync(join(tmpdir(), "kb-ws-skillconf-"));
+    const projDir = join(tmpRoot, "demo-repo");
+    mkdirSync(join(projDir, ".git"), { recursive: true });
+    mkdirSync(join(projDir, ".claude", "skills", "design-feature"), { recursive: true });
+    const userDir = join(tmpRoot, "user-claude");
+    for (const n of userSkills) mkdirSync(join(userDir, "skills", n), { recursive: true });
+    const clock = new VirtualClock();
+    const adapter = new FakeAdapter({ clock });
+    const transport = makeTransport(adapter, {
+      dbPath: join(tmpRoot, "state.db"),
+      pick: async () => projDir,
+      userClaudeDir: userDir,
+    });
+    return { clock, transport };
+  }
+
+  /** 注册项目并挂载（返回驱动句柄） */
+  async function boot(transport: ChatTransport) {
+    const t = mount(transport);
+    await t.flush();
+    fireEvent.click(screen.getByRole("button", { name: "＋ 注册本地目录…" }));
+    await t.flush();
+    await screen.findByText("demo-repo");
+    return t;
+  }
+
+  it("有冲突：Claude 会话顶部出现提示条（列冲突名 + 项目级优先生效 + 行为不稳定说明）；出现前（Fake 会话）不出现", async () => {
+    const { transport } = makeSkillConflictFixture(["Design-Feature", "user-only"]);
+    const t = await boot(transport);
+    expect(screen.queryByTestId("skill-conflict-banner")).toBeNull(); // 当前活跃为 boot 的 Fake 会话：不提示
+
+    fireEvent.click(screen.getByRole("button", { name: "＋" }));
+    fireEvent.click(screen.getByText("Claude"));
+    await t.flush();
+    expect(await screen.findByText("新会话 · Claude")).toBeTruthy();
+    const banner = await screen.findByTestId("skill-conflict-banner");
+    expect(banner.textContent).toContain("检测到同名 skill");
+    expect(banner.textContent).toContain("design-feature"); // 冲突名（项目侧命名）
+    expect(banner.textContent).toContain("项目级将优先生效");
+    expect(banner.textContent).toContain("同名可能使模型行为不稳定");
+  });
+
+  it("可关闭：点「知道了」提示条消失；关闭后会话正常使用（发消息照常回显与回复）", async () => {
+    const { clock, transport } = makeSkillConflictFixture(["design-feature"]);
+    const t = await boot(transport);
+    fireEvent.click(screen.getByRole("button", { name: "＋" }));
+    fireEvent.click(screen.getByText("Claude"));
+    await t.flush();
+    expect(await screen.findByTestId("skill-conflict-banner")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "知道了" }));
+    await t.flush();
+    expect(screen.queryByTestId("skill-conflict-banner")).toBeNull(); // 关闭仅隐藏
+
+    // 会话正常：发消息本地回显 + Fake 全 turn 回复（非阻塞：关闭不影响会话）
+    await act(async () => {
+      send("继续工作");
+    });
+    act(() => {
+      clock.runToIdle();
+    });
+    expect(screen.getByText("继续工作")).toBeTruthy();
+    expect(screen.getByText("好的，我先跑一遍现有测试确认基线，然后开始拆分。")).toBeTruthy();
+    expect(screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…")).toHaveProperty("disabled", false);
+  });
+
+  it("无冲突（用户级无同名）：Claude 会话不出现提示条", async () => {
+    const { transport } = makeSkillConflictFixture(["user-only"]);
+    const t = await boot(transport);
+    fireEvent.click(screen.getByRole("button", { name: "＋" }));
+    fireEvent.click(screen.getByText("Claude"));
+    await t.flush();
+    expect(await screen.findByText("新会话 · Claude")).toBeTruthy();
+    expect(screen.queryByTestId("skill-conflict-banner")).toBeNull();
+  });
+
+  it("非 claude 会话不提示：同目录 Codex 会话无提示条（§7-4 决策：仅 Claude 检测）", async () => {
+    const { transport } = makeSkillConflictFixture(["design-feature"]);
+    const t = await boot(transport);
+    fireEvent.click(screen.getByRole("button", { name: "＋" }));
+    fireEvent.click(screen.getByText("Codex"));
+    await t.flush();
+    expect(await screen.findByText("新会话 · Codex")).toBeTruthy();
+    expect(screen.queryByTestId("skill-conflict-banner")).toBeNull();
   });
 });
 

@@ -728,7 +728,7 @@ describe("kanban 通道（#17 spec #15 C 节：全量经 TrackerEngine.process �
     expect(r.engine.snapshot()[0].sessions.length).toBe(1);
   });
 
-  it("session:create cli=claude 响应含 skillConflicts 空数组（#17 占位，真实检测 #21）；非 claude 不带该字段", async () => {
+  it("session:create cli=claude 响应含 skillConflicts（#21 真实检测：fixture 无 .claude → 空数组）；非 claude 不带该字段", async () => {
     const r = makeKanbanRouter();
     const claude = await r.handle({ channel: "session:create", cli: "claude", cwd: r.projA });
     expect(claude.ok).toBe(true);
@@ -736,6 +736,43 @@ describe("kanban 通道（#17 spec #15 C 节：全量经 TrackerEngine.process �
     const codex = await r.handle({ channel: "session:create", cli: "codex", cwd: r.projA });
     expect(codex.ok).toBe(true);
     if (codex.ok) expect(codex.skillConflicts).toBeUndefined();
+  });
+
+  it("session:create 仅 cli=claude 触发同名检测（#21）：项目/用户级交集入响应；codex/opencode 同目录不检测不带字段", async () => {
+    const r = makeKanbanRouter();
+    // 项目级 .claude/skills 与用户级 skills 各放同名 skill + 各自独有目录（deps 注入基准目录，等价 Main 默认解析结果）
+    mkdirSync(join(r.projA, ".claude", "skills", "design-feature"), { recursive: true });
+    mkdirSync(join(r.projA, ".claude", "skills", "proj-only"), { recursive: true });
+    const userDir = join(tmpRoot, "user-claude");
+    mkdirSync(join(userDir, "skills", "Design-Feature"), { recursive: true }); // 大小写变体也检出（Windows 语义）
+    mkdirSync(join(userDir, "skills", "user-only"), { recursive: true });
+    r.deps.resolveUserClaudeDir = () => userDir;
+
+    const claude = await r.handle({ channel: "session:create", cli: "claude", cwd: r.projA });
+    expect(claude.ok).toBe(true);
+    if (claude.ok) expect(claude.skillConflicts).toEqual(["design-feature"]);
+
+    // 同一目录建 codex/opencode 会话：不检测（不带字段）
+    for (const cli of ["codex", "opencode"] as const) {
+      const res = await r.handle({ channel: "session:create", cli, cwd: r.projA });
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.skillConflicts).toBeUndefined();
+    }
+  });
+
+  it("session:create 默认基准解析：CLAUDE_CONFIG_DIR 环境变量优先生效（不注入 deps 也读到，#21）", async () => {
+    const r = makeKanbanRouter();
+    mkdirSync(join(r.projA, ".claude", "skills", "design-feature"), { recursive: true });
+    const cfgDir = join(tmpRoot, "cfg-claude");
+    mkdirSync(join(cfgDir, "skills", "design-feature"), { recursive: true });
+    process.env.CLAUDE_CONFIG_DIR = cfgDir;
+    try {
+      const res = await r.handle({ channel: "session:create", cli: "claude", cwd: r.projA });
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.skillConflicts).toEqual(["design-feature"]);
+    } finally {
+      delete process.env.CLAUDE_CONFIG_DIR;
+    }
   });
 
   it("restore() 重放不产生推送；renderer 启动靠 kanban:list 再水化（spec #15 C/G 节）", async () => {
