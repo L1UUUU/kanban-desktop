@@ -97,6 +97,7 @@ export function ChatWorkspace({
             onModelChange: controller.setModel,
             onResolveApproval: controller.resolveApproval,
             onResume: (sessionId) => void controller.resumeSession(sessionId),
+            onDismissSkillConflict: controller.dismissSkillConflict,
           }}
         />
       )}

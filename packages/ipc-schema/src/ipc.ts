@@ -146,7 +146,7 @@ export const ipcOkSchema = z.object({
   reason: z.string().optional(),
   /** #17 kanban:create 附带：新建需求的确定性 id（详情面板即开即用） */
   requirementId: z.string().optional(),
-  /** #17 session:create（cli=claude）附带：项目级/用户级同名 skill 冲突名（本票固定空数组，真实检测 #21 接入） */
+  /** session:create（cli=claude）附带：项目级/用户级同名 skill 冲突名（#21 真实检测：项目 .claude/skills ∩ 用户级 skills；Codex/OpenCode 不带该字段） */
   skillConflicts: z.array(z.string()).optional(),
 });
 export type IpcOk = z.infer<typeof ipcOkSchema>;

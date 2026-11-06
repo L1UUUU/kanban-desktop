@@ -3,6 +3,7 @@ export * from "./adapter";
 export { FakeAdapter, type FakeAdapterOptions } from "./fake-adapter";
 export type { ScriptStep } from "./fake-scripts";
 export { pickScript, DEFAULT_TURN_SCRIPT, APPROVAL_SCRIPT, EXPIRY_SCRIPT, ERROR_SCRIPT } from "./fake-scripts";
+export { detectSkillConflicts, resolveUserClaudeDir } from "./skill-conflicts";
 export { VirtualClock, SystemClock, type FakeClock } from "./clock";
 export { CodexAdapter, type CodexAdapterOptions, type CodexRpcClientLike } from "./codex-adapter";
 export { resolveCodexExe, readCodexVersion } from "./codex/exe";

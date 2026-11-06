@@ -10,6 +10,8 @@ export interface ChatPaneActions extends ComposerActions {
   onResolveApproval(decision: ApprovalDecision): void;
   /** 断开会话「读取原生历史并恢复」（#9） */
   onResume(sessionId: string): void;
+  /** #21：关闭同名 skill 冲突提示条（仅隐藏不影响会话） */
+  onDismissSkillConflict(sessionId: string): void;
 }
 
 export function ChatPane({
@@ -61,6 +63,25 @@ export function ChatPane({
         // 冲突提示条（原型一致项 4）：列出会话名，仅提示不阻止；会话数变化时随 store 快照动态增减
         <div data-testid="conflict-banner" className="flex-none border-b border-warn/40 bg-warn/10 px-6 py-2 text-xs text-warn">
           ⚠ 主仓库并行会话（{conflictTitles.length} 个）：{conflictTitles.join("、")} 正在同一目录运行，注意文件冲突
+        </div>
+      ) : null}
+      {session.skillConflicts.length > 0 && !session.skillConflictDismissed ? (
+        // Claude 同名 skill 提示条（#21 / 原型一致项 7）：warn 样式、列冲突名 +「项目级将优先生效」说明、可关闭；非阻塞——关闭仅隐藏，不影响会话
+        <div
+          data-testid="skill-conflict-banner"
+          className="flex flex-none items-center gap-2 border-b border-warn/40 bg-warn/10 px-6 py-2 text-xs text-warn"
+        >
+          <span>
+            ⚠ 检测到同名 skill：<b>{session.skillConflicts.join("、")}</b>
+            （项目级与用户级同名，项目级将优先生效；同名可能使模型行为不稳定）
+          </span>
+          <button
+            type="button"
+            onClick={() => actions.onDismissSkillConflict(session.sessionId)}
+            className="ml-auto shrink-0 opacity-70 hover:opacity-100"
+          >
+            知道了
+          </button>
         </div>
       ) : null}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-6 py-4">

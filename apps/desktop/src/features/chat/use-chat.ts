@@ -24,6 +24,8 @@ export interface ChatControllerActions {
   setModel(model: string): void;
   /** 断开会话「读取原生历史并恢复」：readHistory 快照重建消息流 → resume 重连（状态经实时事件流回 idle） */
   resumeSession(sessionId: string): Promise<void>;
+  /** #21：关闭同名 skill 冲突提示条（仅隐藏不影响会话） */
+  dismissSkillConflict(sessionId: string): void;
 }
 
 export interface ChatController extends ChatControllerActions {
@@ -121,6 +123,7 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
         await createCliSession(transport, store, cli, resolved);
       },
       switchTo: (sessionId) => store.setActive(sessionId),
+      dismissSkillConflict: (sessionId) => store.dismissSkillConflict(sessionId),
       setPerm: (mode) => {
         const id = activeId();
         if (id) store.updateSession(id, { permMode: mode });
@@ -192,6 +195,8 @@ export async function createCliSession(
       cwd: opts.cwd,
       dirIdentity: r.dirIdentity ?? "none",
       worktreeName: r.worktreeName ?? null,
+      // #21：Main 仅对 claude 会话附同名 skill 冲突名（其余 CLI 缺省无冲突）
+      skillConflicts: r.skillConflicts ?? [],
     });
   } else if (!r.ok) {
     // 创建失败也要可见（如 Main 校验拒绝）：挂到错误展示需有会话，此处直接 console 报告

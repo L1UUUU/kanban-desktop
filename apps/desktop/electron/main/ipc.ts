@@ -1,12 +1,13 @@
 // 用途：Main 入站 IPC 路由 —— 单通道 kanban:ipc 强制 zod 校验 + 分发到 CliAdapter 与 projects/sessions store + PTY 宿主（纯函数无 Electron 依赖：dialog 与 config 经 deps 注入）
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import {
   ipcRequestSchema,
   type IpcRequest,
   type IpcResult,
   type SessionRow,
 } from "@kanban/ipc-schema";
-import { AdapterError, type CliAdapter } from "@kanban/cli-host";
+import { AdapterError, detectSkillConflicts, resolveUserClaudeDir, type CliAdapter } from "@kanban/cli-host";
 import { TrackerEngine, type Cli, type NormalizedEvent, type TrackerChange } from "@kanban/tracker";
 import { detectDirIdentity } from "./git-identity";
 import type { PtyHost } from "./pty-host";
@@ -30,6 +31,8 @@ export interface IpcDeps {
   setCurrentProjectId(id: string): void;
   /** 退出序列门闸（true=正在退出，拒绝新请求，spec H 第 1 步；缺省恒 false 供旧测试） */
   isShuttingDown?(): boolean;
+  /** #21（spec #15 E 节）：用户级 Claude 基准目录解析（CLAUDE_CONFIG_DIR 优先，否则 ~/.claude）；仅 session:create cli=claude 的同名 skill 检测用。缺省读 process.env + os.homedir，测试注入固定目录 */
+  resolveUserClaudeDir?(): string;
 }
 
 // CLI 显示名（新建会话默认标题「新会话 · {名}」，原型 §3.6）
@@ -148,8 +151,10 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
         worktreeName: identity.kind === "worktree" ? identity.name : null,
         linked,
         reason,
-        // #17：Claude 会话创建附同名 skill 冲突名（本票固定空数组占位，真实检测 #21 接入；Codex/OpenCode 不检测）
-        ...(req.cli === "claude" ? { skillConflicts: [] as string[] } : {}),
+        // #21（spec #15 E 节）：仅 Claude 创建时扫描一次（不做运行时/发送时检测；Codex/OpenCode 不检测）；检测失败安全降级为空数组（纯函数内兜底）
+        ...(req.cli === "claude"
+          ? { skillConflicts: detectSkillConflicts(req.cwd, (deps.resolveUserClaudeDir ?? defaultUserClaudeDir)()) }
+          : {}),
       };
     }
     case "session:send":
@@ -445,4 +450,9 @@ function summarizeIssues(issues: readonly { path: PropertyKey[]; message: string
     .slice(0, 3)
     .map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`)
     .join("; ");
+}
+
+/** #21：用户级 Claude 基准目录缺省解析（生产路径：CLAUDE_CONFIG_DIR 优先，否则 ~/.claude；测试经 deps.resolveUserClaudeDir 注入） */
+function defaultUserClaudeDir(): string {
+  return resolveUserClaudeDir(process.env, homedir());
 }

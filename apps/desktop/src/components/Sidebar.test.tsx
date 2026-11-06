@@ -24,6 +24,8 @@ function makeSession(partial: Partial<SessionView> = {}): SessionView {
     pendingApproval: null,
     lastTurnInterrupted: false,
     lastError: null,
+    skillConflicts: [],
+    skillConflictDismissed: false,
     ...partial,
   };
 }

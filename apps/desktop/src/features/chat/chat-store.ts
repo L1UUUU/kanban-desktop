@@ -55,6 +55,10 @@ export interface SessionView {
   /** 「本轮已取消」提示（turnnote）标记 */
   lastTurnInterrupted: boolean;
   lastError: { code: string; message: string } | null;
+  /** #21：Claude 同名 skill 冲突名（session:create 响应附回；仅创建时检测一次，空数组=无冲突，非 claude 会话恒空） */
+  skillConflicts: string[];
+  /** #21：冲突提示条已关闭（关闭仅隐藏，不影响会话；再次创建会话重新出现） */
+  skillConflictDismissed: boolean;
 }
 
 export interface SessionMeta {
@@ -67,6 +71,8 @@ export interface SessionMeta {
   cwd?: string | null;
   dirIdentity?: SessionRow["dirIdentity"];
   worktreeName?: string | null;
+  /** #21：session:create 响应附回的同名 skill 冲突名（缺省无冲突） */
+  skillConflicts?: string[];
 }
 
 export interface ChatSnapshot {
@@ -119,6 +125,8 @@ export class ChatStore {
       pendingApproval: null,
       lastTurnInterrupted: false,
       lastError: null,
+      skillConflicts: meta.skillConflicts ?? [],
+      skillConflictDismissed: false,
     });
     this.activeId = meta.sessionId;
     this.changed();
@@ -141,6 +149,9 @@ export class ChatStore {
       pendingApproval: null,
       lastTurnInterrupted: false,
       lastError: null,
+      // #21：检测仅在创建时一次（spec E 节），重启恢复的历史会话不再检测
+      skillConflicts: [],
+      skillConflictDismissed: false,
     });
     this.changed();
   }
@@ -208,6 +219,14 @@ export class ChatStore {
       s.pendingApproval = null;
       this.changed();
     }
+  }
+
+  /** #21：关闭同名 skill 冲突提示条（仅隐藏不影响会话；冲突名保留，再次创建会话重新出现） */
+  dismissSkillConflict(id: string): void {
+    const s = this.sessions.get(id);
+    if (!s || s.skillConflictDismissed) return;
+    s.skillConflictDismissed = true;
+    this.changed();
   }
 
   /** 核心归并：一条 ChatEvent 并入会话视图（未知会话自动建占位） */
@@ -336,6 +355,8 @@ export class ChatStore {
         pendingApproval: null,
         lastTurnInterrupted: false,
         lastError: null,
+        skillConflicts: [],
+        skillConflictDismissed: false,
       };
       this.sessions.set(sessionId, s);
     }
