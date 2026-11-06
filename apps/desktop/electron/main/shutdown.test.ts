@@ -24,6 +24,7 @@ function makeFakeAdapter(hooks: { onInterrupt?: (id: string) => void; failInterr
     },
     resolveApproval: async () => {},
     readHistory: async () => [] as ChatEvent[],
+    readTranscript: async () => [],
     resume: async () => {},
     adoptSession: async (input) => {
       adopted.push(input);
@@ -184,6 +185,7 @@ describe("重开恢复编排（#13）", () => {
       interruptTurn: async () => {},
       resolveApproval: async () => {},
       readHistory: async () => [],
+      readTranscript: async () => [],
       resume: async () => {},
       dispose: async () => {},
       subscribe: (_h: (event: AdapterEvent) => void) => () => {},

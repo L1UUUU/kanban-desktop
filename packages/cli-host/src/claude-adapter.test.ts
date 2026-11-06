@@ -566,3 +566,70 @@ describe("ClaudeAdapter：readHistory transcript 直读回填", () => {
     expect(history.some((e) => e.type === "turn_completed")).toBe(true);
   });
 });
+
+describe("ClaudeAdapter：readTranscript 双视角（#28）", () => {
+  const configRoot = mkdtempSync(path.join(tmpdir(), "kb-claude-tr-"));
+  const realCwd = mkdtempSync(path.join(tmpdir(), "kb-claude-trcwd-"));
+  const munged = realCwd.replace(/[:\\ /]/g, "-");
+
+  beforeEach(() => {
+    process.env.CLAUDE_CONFIG_DIR = configRoot;
+  });
+  afterEach(() => {
+    delete process.env.CLAUDE_CONFIG_DIR;
+  });
+
+  /** 写 native transcript（真实布局 projects/<munged>/<id>.jsonl） */
+  function writeTranscript(nativeId: string, lines: unknown[]): string {
+    const dir = path.join(configRoot, "projects", munged);
+    mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `${nativeId}.jsonl`);
+    writeFileSync(file, lines.map((l) => JSON.stringify(l)).join("\n") + "\n", "utf8");
+    return file;
+  }
+
+  function makeTrAdapter() {
+    const hookDir = mkdtempSync(path.join(tmpdir(), "kb-claude-trhook-"));
+    hookRoots.push(hookDir);
+    const adapter = new ClaudeAdapter({ hookDir, clientFactory: (options) => new FakeStream(options) });
+    return { adapter, hookDir };
+  }
+
+  it("user 行不再是轮边界丢弃物：产出 user/assistant 双视角 + 工具标注（string 与数组两种用户行形态）", async () => {
+    const { adapter } = makeTrAdapter();
+    const { sessionId, nativeSessionId } = await adapter.createSession({ cwd: realCwd });
+    writeTranscript(nativeSessionId!, [
+      // string 形态用户行（旧落盘形态）
+      { type: "user", timestamp: "2026-11-05T01:00:00.000Z", message: { role: "user", content: "第一轮：请跑测试" } },
+      { type: "assistant", timestamp: "2026-11-05T01:00:05.000Z", message: { id: "msg-t1", role: "assistant", content: [{ type: "text", text: "好的，开始跑测试。" }] } },
+      // 数组形态用户行（2.1.317+ 落盘形态）
+      { type: "user", timestamp: "2026-11-05T02:00:00.000Z", message: { role: "user", content: [{ type: "text", text: "第二轮：请修复失败用例" }] } },
+      { type: "assistant", timestamp: "2026-11-05T02:00:05.000Z", message: { id: "msg-t2", role: "assistant", content: [{ type: "tool_use", id: "call-t1", name: "Bash", input: { command: "pnpm vitest run" } }] } },
+      // 工具结果用户行（非用户发言）：不产生 user 事件
+      { type: "user", timestamp: "2026-11-05T02:00:06.000Z", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "call-t1", content: "2 passed" }] } },
+      { type: "assistant", timestamp: "2026-11-05T02:00:09.000Z", message: { id: "msg-t3", role: "assistant", content: [{ type: "text", text: "已修复。" }] } },
+      // sidechain 行：跳过
+      { type: "assistant", timestamp: "2026-11-05T03:00:00.000Z", isSidechain: true, message: { id: "msg-sc", role: "assistant", content: [{ type: "text", text: "sidechain 不算" }] } },
+    ]);
+    const transcript = await adapter.readTranscript(sessionId);
+    expect(transcript).toEqual([
+      { role: "user", text: "第一轮：请跑测试" },
+      { role: "assistant", text: "好的，开始跑测试。" },
+      { role: "user", text: "第二轮：请修复失败用例" },
+      { role: "assistant", text: "", tool: { name: "Bash", summary: JSON.stringify({ command: "pnpm vitest run" }) } },
+      { role: "assistant", text: "已修复。" },
+    ]);
+  });
+
+  it("无 transcript 文件（尚无 turn 的会话）→ 空数组（诚实空历史，不冒充）", async () => {
+    const { adapter } = makeTrAdapter();
+    const { sessionId } = await adapter.createSession({ cwd: realCwd });
+    const transcript = await adapter.readTranscript(sessionId);
+    expect(transcript).toEqual([]);
+  });
+
+  it("未知会话 → E_SESSION_NOT_FOUND", async () => {
+    const { adapter } = makeTrAdapter();
+    await expect(adapter.readTranscript("nope")).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
+  });
+});

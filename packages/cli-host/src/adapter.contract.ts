@@ -1,6 +1,6 @@
 // 用途：Adapter 契约测试套（spec Testing seam 1）—— 同一组行为断言对 FakeAdapter 与后续三真实 Adapter 复用；调用方提供 adapter 与「推进到空闲」驱动器
 import { expect, it } from "vitest";
-import type { AdapterEvent, ChatEvent } from "@kanban/ipc-schema";
+import { transcriptEventSchema, type AdapterEvent, type ChatEvent } from "@kanban/ipc-schema";
 import type { CliAdapter } from "./adapter";
 
 /** 契约套件上下文：adapter 被测实例；driveIdle 推进到无待处理活动（Fake=虚拟时钟 runToIdle，真实 CLI=轮询等待） */
@@ -307,6 +307,41 @@ export function defineAdapterContractTests(
     col.off();
   });
 
+  it("readTranscript（#28）：user/assistant 双视角在场，全部事件过 transcriptEventSchema，user 先于 assistant", async () => {
+    const { adapter, driveIdle } = await make();
+    const { sessionId } = await adapter.createSession({ cwd: contractCwd });
+    await adapter.sendTurn({ sessionId, text: turnText });
+    await driveIdle();
+    const transcript = await adapter.readTranscript(sessionId);
+    expect(transcript.length).toBeGreaterThan(0);
+    // 形状合法性：每个事件都满足 C1 演进契约（role/text/tool）
+    for (const ev of transcript) expect(() => transcriptEventSchema.parse(ev)).not.toThrow();
+    // user 视角在场：原生历史记录了用户发送的原文
+    const user = transcript.filter((e) => e.role === "user");
+    expect(user.length).toBeGreaterThanOrEqual(1);
+    expect(user.some((e) => e.text.includes(turnText))).toBe(true);
+    // assistant 视角在场：非空文本存在（提取总结的素材来源）
+    const assistantText = transcript.filter((e) => e.role === "assistant" && e.text.length > 0);
+    expect(assistantText.length).toBeGreaterThanOrEqual(1);
+    // 时序：首个 user 事件先于首个 assistant 文本事件
+    const firstUser = transcript.findIndex((e) => e.role === "user");
+    const firstAssistantText = transcript.findIndex((e) => e.role === "assistant" && e.text.length > 0);
+    expect(firstUser).toBeGreaterThanOrEqual(0);
+    expect(firstUser).toBeLessThan(firstAssistantText);
+  });
+
+  it("readTranscript（#28）：与 readHistory 互不影响 —— readHistory 仍为 ChatEvent 日志（无 user 成员）", async () => {
+    const { adapter, driveIdle } = await make();
+    const { sessionId } = await adapter.createSession({ cwd: contractCwd });
+    await adapter.sendTurn({ sessionId, text: turnText });
+    await driveIdle();
+    await adapter.readTranscript(sessionId);
+    const history = await adapter.readHistory(sessionId);
+    // GUI 聊天流零改动：历史快照不含任何 user 视角条目，事件仍全部为 ChatEvent 13 成员
+    expect(history.every((e) => chatTypes.has(e.type))).toBe(true);
+    expect(history.some((e) => e.type === "message_delta")).toBe(true);
+  });
+
   it("非法时序：对已决/过期审批响应 → E_APPROVAL_EXPIRED；未知会话 → E_SESSION_NOT_FOUND", async () => {
     const { adapter, driveIdle } = await make();
     const col = createCollector(adapter);
@@ -326,6 +361,7 @@ export function defineAdapterContractTests(
     await expect(adapter.sendTurn({ sessionId: "nope", text: "hi" })).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
     await expect(adapter.interruptTurn("nope")).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
     await expect(adapter.readHistory("nope")).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
+    await expect(adapter.readTranscript("nope")).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
     col.off();
   });
 }

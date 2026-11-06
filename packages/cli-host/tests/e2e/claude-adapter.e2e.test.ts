@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { ClaudeAdapter } from "../../src/claude-adapter";
 import { createCollector, defineAdapterContractTests } from "../../src/adapter.contract";
 import type { AdapterEvent, ChatEvent, SkillObservation } from "@kanban/ipc-schema";
+import { transcriptEventSchema } from "@kanban/ipc-schema";
 
 const E2E = process.env.KANBAN_E2E === "1";
 
@@ -170,6 +171,26 @@ describe.skipIf(!E2E)("ClaudeAdapter 真实集成（env-gated）", () => {
     const live = events.slice(before).filter((e): e is ChatEvent => "type" in e && e.sessionId === sessionId);
     for (const e of live) expect(e.seq).toBeGreaterThan(maxSeq); // 快照+增量无缝拼接（不变量 4）
     void nativeSessionId;
+  });
+
+  /* ---------------- readTranscript：transcript 直读双视角（#28 验收：user 提问 + 工具调用历史） ---------------- */
+  it("readTranscript：读取含 user 提问与工具调用的原生历史，断言 role/text/tool 形状", async () => {
+    const { sessionId } = await adapter.createSession({ cwd: workdir, permMode: "full" });
+    const file = path.join(workdir, "tr-probe.txt");
+    await adapter.sendTurn({ sessionId, text: `请运行这条命令并报告结果：echo TR-PROBE-CLAUDE > "${file}"` });
+    await driveIdle();
+    expect(existsSync(file)).toBe(true); // 工具真执行
+    const transcript = await adapter.readTranscript(sessionId);
+    for (const ev of transcript) expect(() => transcriptEventSchema.parse(ev)).not.toThrow(); // 形状全过 schema
+    // user 视角：提问原文在场（spec B：总结「目标/要求」来源）
+    expect(transcript.some((e) => e.role === "user" && e.text.includes("TR-PROBE-CLAUDE"))).toBe(true);
+    // 工具调用在场：name/summary 非空
+    const tool = transcript.find((e) => e.tool);
+    expect(tool).toBeDefined();
+    expect(tool!.tool!.name.length).toBeGreaterThan(0);
+    expect(tool!.tool!.summary.length).toBeGreaterThan(0);
+    // assistant 视角：回复文本在场
+    expect(transcript.some((e) => e.role === "assistant" && e.text.length > 0)).toBe(true);
   });
 
   /* ---------------- hook verified 双信号 + T5 反例（PoC 7 T5/T6） ---------------- */

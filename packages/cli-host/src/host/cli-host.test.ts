@@ -49,6 +49,20 @@ describe("CliHost seam（C5）", () => {
     expect(h2.events!.every((e) => e.type === "session_status")).toBe(true);
   });
 
+  it("readTranscript 命令（#28）：按 sessionId 路由，返回双视角剧本（user 提问 + 助手文本 + 工具标注）；未知会话报错", async () => {
+    const { host } = makeHost();
+    const s1 = await host.command({ kind: "createSession", init: { cwd: "C:\\demo", cli: "fake" } });
+    await host.command({ kind: "sendTurn", sessionId: s1.sessionId!, text: "拆类型" });
+    await new Promise((r) => setTimeout(r, 4000)); // 等 DEFAULT 脚本完整走完（SystemClock 实时推进）
+    const r = await host.command({ kind: "readTranscript", sessionId: s1.sessionId! });
+    expect(r.transcript).toBeDefined();
+    const transcript = r.transcript!;
+    expect(transcript.some((e) => e.role === "user" && e.text === "拆类型")).toBe(true);
+    expect(transcript.some((e) => e.role === "assistant" && e.text.length > 0)).toBe(true);
+    expect(transcript.some((e) => e.tool?.name === "Bash")).toBe(true);
+    await expect(host.command({ kind: "readTranscript", sessionId: "nope" })).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
+  });
+
   it("未知会话命令报 E_SESSION_NOT_FOUND", async () => {
     const { host } = makeHost();
     await expect(host.command({ kind: "sendTurn", sessionId: "nope", text: "x" })).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });

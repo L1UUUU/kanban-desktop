@@ -161,6 +161,51 @@ describe("FakeAdapter 专属场景", () => {
     col.off();
   });
 
+  it("readTranscript（#28）：DEFAULT 脚本确定性剧本 —— user→assistant→工具→assistant 顺序与形状（与 readHistory 互不影响）", async () => {
+    const clock = new VirtualClock();
+    const adapter = new FakeAdapter({ clock });
+    const { sessionId } = await adapter.createSession({ cwd: "C:\\demo" });
+    await adapter.sendTurn({ sessionId, text: "拆类型" });
+    clock.runToIdle();
+    const transcript = await adapter.readTranscript(sessionId);
+    // 期望来源：DEFAULT_TURN_SCRIPT 数据剧本（user 输入 + 两段助手文本 + 一个 Bash 工具）
+    expect(transcript).toEqual([
+      { role: "user", text: "拆类型" },
+      { role: "assistant", text: "好的，我先跑一遍现有测试确认基线，然后开始拆分。" },
+      { role: "assistant", text: "", tool: { name: "Bash", summary: "pnpm vitest run --filter ipc-schema" } },
+      { role: "assistant", text: "基线全绿。现在把 chat 与 session 两个命名空间拆成独立文件，并在 index 里保持原导出面不变。" },
+    ]);
+    // readHistory 不受影响：仍为 ChatEvent 日志（无 user 条目）
+    const history = await adapter.readHistory(sessionId);
+    expect(history.some((e) => e.type === "turn_completed")).toBe(true);
+    // 未知会话 → 明确错误码
+    await expect(adapter.readTranscript("nope")).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
+  });
+
+  it("readTranscript（#28）：中断流式的 turn —— 已完成事件在场，未完成文本按已流出部分收场", async () => {
+    const clock = new VirtualClock();
+    const adapter = new FakeAdapter({ clock });
+    const { sessionId } = await adapter.createSession({ cwd: "C:\\demo" });
+    await adapter.sendTurn({ sessionId, text: "默认演示" });
+    clock.advance(3000); // 推进到首段助手文本流式中（部分字符已流出）
+    await adapter.interruptTurn(sessionId);
+    clock.runToIdle();
+    const transcript = await adapter.readTranscript(sessionId);
+    expect(transcript[0]).toEqual({ role: "user", text: "默认演示" });
+    const assistant = transcript.filter((e) => e.role === "assistant" && e.text.length > 0);
+    expect(assistant.length).toBeGreaterThanOrEqual(1); // 首段已完整流出在场
+    // 被打断的是流式中的段落：最后一条 assistant 文本以已流出部分 + 「 …」收场（对照 readHistory 中断收尾）
+    expect(assistant.at(-1)!.text.endsWith(" …")).toBe(true);
+  });
+
+  it("readTranscript（#28）：adoptSession 收养会话 —— Fake 无原生历史落盘，空剧本为诚实行为", async () => {
+    const clock = new VirtualClock();
+    const adapter = new FakeAdapter({ clock });
+    await adapter.adoptSession({ sessionId: "s-restored", nativeSessionId: "", cwd: "C:\\demo", permMode: "auto" });
+    const transcript = await adapter.readTranscript("s-restored");
+    expect(transcript).toEqual([]);
+  });
+
   it("订阅退订：unsubscribe 后不再收到事件", async () => {
     const clock = new VirtualClock();
     const adapter = new FakeAdapter({ clock });

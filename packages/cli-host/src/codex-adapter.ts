@@ -1,9 +1,11 @@
-// 用途：CodexAdapter —— C1 契约的真实 Codex 实现：spawn 直连 vendored codex.exe app-server（JSON-RPC/stdio，单进程多 thread），通知流映射 ChatEvent（poc-1/t0-01 实证 wire 行为）
+// 用途：CodexAdapter —— C1 契约的真实 Codex 实现：spawn 直连 vendored codex.exe app-server（JSON-RPC/stdio，单进程多 thread），通知流映射 ChatEvent（poc-1/t0-01 实证 wire 行为）+ readTranscript rollout 落盘双视角（#28）
 import { randomUUID } from "node:crypto";
-import type { AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, PermMode, SessionStatus } from "@kanban/ipc-schema";
+import { readFileSync } from "node:fs";
+import type { AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, PermMode, SessionStatus, TranscriptEvent } from "@kanban/ipc-schema";
 import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
 import { resolveCodexExe } from "./codex/exe";
 import { CodexRpcClient } from "./codex/rpc";
+import { parseRolloutTranscript } from "./codex/rollout";
 import { createDefaultModelResolver, type ModelResolver } from "./codex/model-probe";
 
 /** 可注入的 rpc 客户端面（生产 CodexRpcClient；测试 Fake 手动驱动协议消息） */
@@ -243,6 +245,58 @@ export class CodexAdapter implements CliAdapter {
     // 跨进程恢复（#13）：收养会话无本地日志 → 拉起 app-server 读原生 thread 历史（poc-1 g1：thread/read 无需 resume）
     if (s.adopted && !s.backfilled) await this.backfillFromNative(s);
     return [...s.log];
+  }
+
+  /**
+   * readTranscript（#28）：只读拉取（不 resume、不发 turn）。
+   * 主路径：thread/read 拿 thread.path → rollout 落盘文件解析（0.144.1 实测 thread/read 归档剥离 commandExecution 工具条目，
+   * rollout 含全部事件；与本地事件日志无关，原生历史为权威源）。
+   * 回退：path 缺失/读失败 → thread/read turns 的 userMessage/agentMessage/归档工具条目映射。
+   */
+  async readTranscript(sessionId: string): Promise<TranscriptEvent[]> {
+    const s = this.requireKnownSession(sessionId);
+    this.ensureStarted(); // 断开/收养会话按需拉起 app-server（仅进程，不动 thread 状态）
+    let thread: { path?: string | null; turns?: unknown };
+    try {
+      thread = await this.readNativeThread(s, true);
+    } catch {
+      // 无 turn 会话未 materialized（t0-01 发现 5）：无 includeTurns 的 read 兜底；仍失败则明确报错（不冒充完整）
+      thread = await this.readNativeThread(s, false).catch((e) => {
+        throw new AdapterError("E_INTERNAL", `读取 Codex 原生历史失败：${e instanceof Error ? e.message : String(e)}`);
+      });
+    }
+    const rolloutPath = typeof thread.path === "string" && thread.path.length > 0 ? thread.path : null;
+    if (rolloutPath) {
+      try {
+        return parseRolloutTranscript(readFileSync(rolloutPath, "utf8"));
+      } catch (e) {
+        this.log("readTranscript", `rollout 读取失败，回退 thread/read turns：${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    // 回退映射：归档 turns（工具条目有无取决于 CLI 版本归档行为）
+    const turns = Array.isArray(thread.turns) ? (thread.turns as Array<Record<string, unknown>>) : [];
+    const out: TranscriptEvent[] = [];
+    for (const turn of turns) {
+      const items = Array.isArray(turn.items) ? (turn.items as Array<Record<string, unknown>>) : [];
+      for (const item of items) {
+        if (item.type === "userMessage") {
+          const text = nativeItemText(item.content ?? item.text);
+          if (text.length > 0) out.push({ role: "user", text });
+          continue;
+        }
+        if (item.type === "agentMessage") {
+          const text = typeof item.text === "string" ? item.text : "";
+          if (text.length > 0) out.push({ role: "assistant", text });
+          continue;
+        }
+        // 工具条目复用实时流映射（name/summary 与 readHistory 同源）
+        const started = this.mapToolStarted(item);
+        if (started?.type === "tool_started") {
+          out.push({ role: "assistant", text: "", tool: { name: started.tool, summary: started.argsSummary } });
+        }
+      }
+    }
+    return out;
   }
 
   async resume(sessionId: string): Promise<void> {
@@ -548,13 +602,19 @@ export class CodexAdapter implements CliAdapter {
     s.backfilled = true;
   }
 
-  /** thread/read（includeTurns 开关）；失败抛原始错误由调用方分流 */
-  private async readNativeTurns(s: SessionState, includeTurns: boolean): Promise<Array<Record<string, unknown>>> {
+  /** thread/read（includeTurns 开关）→ thread 对象（path/turns）；失败抛原始错误由调用方分流 */
+  private async readNativeThread(s: SessionState, includeTurns: boolean): Promise<{ path?: string | null; turns?: unknown }> {
     const params: Record<string, unknown> = { threadId: s.threadId };
     if (includeTurns) params.includeTurns = true;
-    const r = (await this.client!.request("thread/read", params)) as { thread?: { turns?: unknown } };
+    const r = (await this.client!.request("thread/read", params)) as { thread?: { path?: string | null; turns?: unknown } };
     if (!r?.thread) throw new AdapterError("E_INTERNAL", "thread/read 未返回 thread（协议异常）");
-    return Array.isArray(r.thread.turns) ? (r.thread.turns as Array<Record<string, unknown>>) : [];
+    return r.thread;
+  }
+
+  /** thread/read（includeTurns 开关）→ turns 数组；失败抛原始错误由调用方分流 */
+  private async readNativeTurns(s: SessionState, includeTurns: boolean): Promise<Array<Record<string, unknown>>> {
+    const thread = await this.readNativeThread(s, includeTurns);
+    return Array.isArray(thread.turns) ? (thread.turns as Array<Record<string, unknown>>) : [];
   }
 
   /** item/started → tool_started（commandExecution/fileChange/mcpToolCall） */
@@ -670,6 +730,18 @@ function approvalSuggestions(p: Record<string, unknown>): ApprovalSuggestion[] {
     out.push({ kind: "grant-root", label: p.grantRoot, detail: "允许在此目录写入（本会话）" });
   }
   return out;
+}
+
+/** 原生条目文本：string 直出 / content 数组拼 text 块（userMessage 两种 wire 形态兼容） */
+function nativeItemText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return (content as Record<string, unknown>[])
+      .filter((b) => b.type === "text" && typeof b.text === "string")
+      .map((b) => b.text as string)
+      .join("");
+  }
+  return "";
 }
 
 function safeJson(v: unknown): string {

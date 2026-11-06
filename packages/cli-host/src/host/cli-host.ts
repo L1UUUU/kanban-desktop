@@ -1,5 +1,5 @@
 // 用途：CliHost seam（spec C5 冻结：command/subscribe/shutdown，纯 Node 无 Electron 依赖）—— utilityProcess worker 的核心；多 Adapter 经 AdapterRouter 分发
-import type { AdapterEvent, ChatEvent } from "@kanban/ipc-schema";
+import type { AdapterEvent, ChatEvent, TranscriptEvent } from "@kanban/ipc-schema";
 import { AdapterError } from "../adapter";
 import { AdapterRouter, type AdapterFactory } from "../router-adapter";
 
@@ -10,15 +10,17 @@ export type HostCommand =
   | { kind: "interruptTurn"; sessionId: string }
   | { kind: "resolveApproval"; sessionId: string; requestId: string; decision: string }
   | { kind: "readHistory"; sessionId: string }
+  | { kind: "readTranscript"; sessionId: string }
   | { kind: "resume"; sessionId: string }
   | { kind: "adoptSession"; sessionId: string; nativeSessionId: string; cwd: string; cli: string; permMode?: string; model?: string }
   | { kind: "dispose"; sessionId?: string };
 
-/** 命令结果载荷（createSession 附 sessionId/nativeSessionId；readHistory 附事件数组；其余 void） */
+/** 命令结果载荷（createSession 附 sessionId/nativeSessionId；readHistory 附事件数组；readTranscript 附双视角剧本；其余 void） */
 export interface HostCommandResult {
   sessionId?: string;
   nativeSessionId?: string | null;
   events?: ChatEvent[];
+  transcript?: TranscriptEvent[];
 }
 
 /** 有序停机原因（spec H：停止新请求→有序取消→有限等待→受控终止） */
@@ -72,6 +74,8 @@ export class CliHost {
         return {};
       case "readHistory":
         return { events: await this.router.readHistory(cmd.sessionId) };
+      case "readTranscript":
+        return { transcript: await this.router.readTranscript(cmd.sessionId) };
       case "resume":
         await this.router.resume(cmd.sessionId);
         return {};

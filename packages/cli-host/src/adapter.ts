@@ -6,6 +6,7 @@ import type {
   ChatEvent,
   ErrorCode,
   PermMode,
+  TranscriptEvent,
 } from "@kanban/ipc-schema";
 
 /** 能力声明：未实证能力 UI 不暴露控件（spec B capabilities） */
@@ -83,6 +84,12 @@ export interface CliAdapter {
   interruptTurn(sessionId: string): Promise<void>;
   resolveApproval(input: ResolveApprovalInput): Promise<void>;
   readHistory(sessionId: string): Promise<ChatEvent[]>;
+  /**
+   * C1 演进（#28 / spec #27 B 节）：读取会话原生历史的 user/assistant 双视角事件。
+   * 与 readHistory（GUI 聊天流，ChatEvent 13 成员无 user 消息）互补而非替代；
+   * capabilities 门控同 readHistory（无单独开关）；各实现从原生历史源只读拉取。
+   */
+  readTranscript(sessionId: string): Promise<TranscriptEvent[]>;
   resume(sessionId: string): Promise<void>;
   dispose(input?: DisposeInput): Promise<void>;
   /** 应用重启后的会话收养（可选能力，#13）：登记断开会话供 readHistory/resume 恢复；未实现时恢复编排落库为断开并报错引导 */
@@ -91,4 +98,4 @@ export interface CliAdapter {
   subscribe(handler: (event: AdapterEvent) => void): () => void;
 }
 
-export type { ApprovalDecision, ApprovalSuggestion, AdapterEvent, ChatEvent, PermMode };
+export type { ApprovalDecision, ApprovalSuggestion, AdapterEvent, ChatEvent, PermMode, TranscriptEvent };

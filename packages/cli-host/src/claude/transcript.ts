@@ -1,8 +1,8 @@
-// 用途：Claude 原生 transcript（会话 jsonl）定位与解析 —— 断开会话「读取原生历史」的直读数据源（poc-7 T4 场景：--resume 不换 id，transcript 跨进程延续）
+// 用途：Claude 原生 transcript（会话 jsonl）定位与解析 —— 断开会话「读取原生历史」的直读数据源（poc-7 T4 场景：--resume 不换 id，transcript 跨进程延续）+ readTranscript 双视角解析（#28）
 import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
-import type { ChatEventSeed } from "@kanban/ipc-schema";
+import type { ChatEventSeed, TranscriptEvent } from "@kanban/ipc-schema";
 
 /** cwd → projects 子目录名（claude 的路径 munge：盘符冒号/分隔符/空格 → "-"；失配时由目录扫描兜底） */
 function mungeCwd(cwd: string): string {
@@ -132,6 +132,54 @@ function flattenContent(content: unknown): string {
       .join("");
   }
   return "";
+}
+
+/**
+ * transcript 行 → readTranscript 双视角事件（#28 / spec #27 B 节）。
+ * 与 parseTranscriptItems（readHistory 回填）的关键差异：user 文本行不再仅作轮边界丢弃，
+ * 而是产出 { role:"user" } 事件（提取管线「目标/要求」的来源）；tool_use 产出带工具标注的 assistant 事件。
+ * 跳过 sidechain、tool_result-only 用户行（非用户发言）与空文本。
+ */
+export function parseTranscriptEvents(content: string): TranscriptEvent[] {
+  const events: TranscriptEvent[] = [];
+  const lines = content.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  for (const line of lines) {
+    let rec: Record<string, unknown>;
+    try {
+      rec = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (rec.isSidechain === true) continue;
+    const message = rec.message as { role?: string; content?: unknown } | undefined;
+    if (!message) continue;
+    // 用户行：string 直出；数组取 text 块拼接（仅 tool_result 的行不是用户发言，跳过）
+    if (rec.type === "user") {
+      let text = "";
+      if (typeof message.content === "string") text = message.content;
+      else if (Array.isArray(message.content)) {
+        text = (message.content as Record<string, unknown>[])
+          .filter((b) => b.type === "text" && typeof b.text === "string")
+          .map((b) => b.text as string)
+          .join("");
+      }
+      if (text.length > 0) events.push({ role: "user", text });
+      continue;
+    }
+    if (rec.type !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const block of message.content as Record<string, unknown>[]) {
+      if (block.type === "text" && typeof block.text === "string" && block.text.length > 0) {
+        events.push({ role: "assistant", text: block.text });
+      } else if (block.type === "tool_use" && typeof block.id === "string") {
+        events.push({
+          role: "assistant",
+          text: "",
+          tool: { name: String(block.name ?? "tool"), summary: safeJson(block.input) },
+        });
+      }
+    }
+  }
+  return events;
 }
 
 function safeJson(v: unknown): string {
