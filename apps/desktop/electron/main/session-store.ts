@@ -51,6 +51,12 @@ export class SessionStore {
     return rows.map(rowToRecord);
   }
 
+  /** 单行查询（#16：事件泵按 sessionId 注入会话项目用；不存在返回 null） */
+  get(id: string): SessionRecord | null {
+    const row = this.db.prepare(`SELECT ${COLS} FROM sessions WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
+    return row ? rowToRecord(row) : null;
+  }
+
   /** 状态落库（session_status 事件到达时） */
   updateStatus(id: string, status: SessionStatus): void {
     this.db.prepare("UPDATE sessions SET status = ? WHERE id = ?").run(status, id);

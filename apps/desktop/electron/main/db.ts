@@ -1,4 +1,4 @@
-// 用途：SQLite 访问层（D2 定版 node:sqlite）—— 打开数据库并按冻结契约 C3 建五表；纯 Node 模块，供 Electron 主进程与 vitest 共用
+// 用途：SQLite 访问层（D2 定版 node:sqlite；#16 起 v2：打开即建/迁 requirements.project_id，spec #15 F 节单事务迁移）—— 纯 Node 模块，供 Electron 主进程与 vitest 共用
 import * as nodeSqlite from "node:sqlite";
 
 type SqliteDatabase = import("node:sqlite").DatabaseSync;
@@ -16,10 +16,10 @@ const DatabaseCtor = (typeof exportsRecord.Database === "function"
 export const SQLITE_ENTRY: "Database" | "DatabaseSync" =
   typeof exportsRecord.Database === "function" ? "Database" : "DatabaseSync";
 
-/** 当前 C3 基线版本号 */
-export const SCHEMA_VERSION = 1;
+/** 当前 C3 基线版本号（#16 起 v2：requirements 加 project_id，spec #15 F 节） */
+export const SCHEMA_VERSION = 2;
 
-/** C3 冻结表结构（v1）：projects/sessions 按 C3 列清单；requirements/stage_events 沿用 poc-4 冻结 DDL 不变 */
+/** C3 表结构：projects/sessions 按 C3 列清单；requirements/stage_events 沿用 poc-4 冻结 DDL（#16 v2 起 requirements 加 project_id，新库直建 v2 形态；老库由 migrateToV2 在单事务内 ALTER） */
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY,
@@ -54,7 +54,8 @@ CREATE TABLE IF NOT EXISTS requirements (
   stage_basis_at INTEGER,
   stage_basis_json TEXT,
   uncertain INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  project_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS stage_events (
@@ -81,19 +82,97 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 
 INSERT OR IGNORE INTO schema_migrations (version, name, applied_at)
-  VALUES (${SCHEMA_VERSION}, 'v1-c3-base', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+  VALUES (1, 'v1-c3-base', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
 `;
 
-/** 打开数据库（文件路径或 ":memory:"）并确保 C3 表结构就位 */
+/** 打开数据库（文件路径或 ":memory:"）并确保 C3 表结构就位（新库直建 v2 形态，老库单事务迁移 v2） */
 export function openDatabase(dbPath: string): SqliteDatabase {
   const db = new DatabaseCtor(dbPath);
-  ensureSchema(db);
-  return db;
+  try {
+    ensureSchema(db);
+    migrateToV2(db);
+    return db;
+  } catch (err) {
+    db.close(); // 迁移失败连接不外泄（Windows 文件锁）
+    throw err;
+  }
 }
 
 /** 幂等建表（重复执行不报错、不重复插入迁移记录） */
 export function ensureSchema(db: SqliteDatabase): void {
   db.exec(SCHEMA_SQL);
+}
+
+/**
+ * 迁移 v2（#16，spec #15 F 节）：requirements 加 project_id + 按最早关联会话回填 + 补写旧事件 payload 的 projectId，
+ * DDL/回填/迁移记录在单事务内完成（中断重入幂等；无关联会话的存量需求失败回滚——宁可不迁移不分叉）。
+ * 注意：补写 stage_events.payload_json 是事件日志不可变原则的有意破例（schema 演进迁移），依据 spec #15 F 节。
+ */
+function migrateToV2(db: SqliteDatabase): void {
+  const recorded = (db.prepare("SELECT count(*) AS n FROM schema_migrations WHERE version = 2").get() as { n: number }).n;
+  if (recorded > 0) return; // 已迁移（或迁移后建的新库二次打开）
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const cols = (db.prepare("PRAGMA table_info(requirements)").all() as unknown as Array<{ name: string }>).map((r) => r.name);
+    if (!cols.includes("project_id")) db.exec("ALTER TABLE requirements ADD COLUMN project_id TEXT");
+    backfillProjectId(db);
+    db
+      .prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (2, 'v2-requirements-project', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))")
+      .run();
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+/** 回填规则（spec #15 F 节）：每张存量需求按其最早关联会话（v1 事件日志中建卡 skill/link 事件，按落库顺序）→ sessions.project_id 推导 project_id */
+function backfillProjectId(db: SqliteDatabase): void {
+  // 轻量重放 v1 关联规则，推导每张需求的最早关联会话（建卡事件或最早 link，取先者）
+  type EvRow = { kind: string; session_id: string | null; requirement_id: string | null; skill: string | null; evidence_level: string };
+  const events = db
+    .prepare("SELECT kind, session_id, requirement_id, skill, evidence_level FROM stage_events ORDER BY processed_at, rowid")
+    .all() as unknown as EvRow[];
+  const sessionToReq = new Map<string, string>();
+  const firstSession = new Map<string, string>(); // requirementId -> 最早关联会话
+  let next = 1;
+  for (const ev of events) {
+    if (ev.kind === "skill" && ev.skill === "design-feature" && ev.evidence_level === "verified" && ev.session_id && !sessionToReq.has(ev.session_id)) {
+      const id = `REQ-${String(next++).padStart(3, "0")}`; // v1 只有自动建卡，编号按建卡顺序
+      sessionToReq.set(ev.session_id, id);
+      if (!firstSession.has(id)) firstSession.set(id, ev.session_id);
+    } else if (ev.kind === "link" && ev.session_id && ev.requirement_id) {
+      sessionToReq.set(ev.session_id, ev.requirement_id);
+      if (!firstSession.has(ev.requirement_id)) firstSession.set(ev.requirement_id, ev.session_id);
+    } else if (ev.kind === "unlink" && ev.session_id) {
+      sessionToReq.delete(ev.session_id);
+    }
+  }
+  const reqRows = db.prepare("SELECT id FROM requirements").all() as unknown as Array<{ id: string }>;
+  const updateReq = db.prepare("UPDATE requirements SET project_id = ? WHERE id = ?");
+  const pickSession = db.prepare("SELECT project_id FROM sessions WHERE id = ?");
+  const pickEvents = db.prepare("SELECT event_id, payload_json FROM stage_events WHERE session_id = ?");
+  const updatePayload = db.prepare("UPDATE stage_events SET payload_json = ? WHERE event_id = ?");
+  for (const { id } of reqRows) {
+    const sessionId = firstSession.get(id);
+    if (!sessionId) {
+      throw new Error(`requirements v2 迁移：存量需求 ${id} 无关联会话，无法推导 project_id（宁可不迁移不分叉，spec #15 F）`);
+    }
+    const session = pickSession.get(sessionId) as { project_id: string | null } | undefined;
+    if (!session || session.project_id == null) {
+      throw new Error(`requirements v2 迁移：需求 ${id} 的关联会话 ${sessionId} 无项目归属，无法推导 project_id（spec #15 F）`);
+    }
+    const projectId = session.project_id;
+    updateReq.run(projectId, id);
+    // 同步补写该会话旧事件 payload 的 projectId（保证重放态=迁移前在线态；事件日志不可变的有意破例）
+    const evRows = pickEvents.all(sessionId) as unknown as Array<{ event_id: string; payload_json: string }>;
+    for (const row of evRows) {
+      const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
+      if (payload.projectId === projectId) continue; // 已补写（重复会话幂等）
+      payload.projectId = projectId;
+      updatePayload.run(JSON.stringify(payload), row.event_id);
+    }
+  }
 }
 
 /** 列出全部用户表（测试/诊断用，按字母序） */

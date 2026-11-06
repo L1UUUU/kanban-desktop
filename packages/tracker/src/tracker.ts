@@ -1,4 +1,4 @@
-// 用途：多 CLI Requirement Tracker 状态机（演进自 poc-4 tracker.mjs，规则基线 poc-2）—— 自动建卡/关联/阶段排序/乱序延迟抵抗/证据分级；纯内存，持久化由 engine 负责
+// 用途：多 CLI Requirement Tracker 状态机（演进自 poc-4 tracker.mjs，规则基线 poc-2；#16 起 spec #15 B 节演进：create/rename/delete、需求归属 projectId、sessionProject 记忆、跨项目 link 拒绝、墓碑）—— 纯内存，持久化由 engine 负责
 import { EVIDENCE_EFFECT, SKILL_STAGE, type Cli, type EvidenceLevel, type NormalizedEvent, type Stage } from "./schema";
 
 /** 阶段依据：skill 事件（实际发生时间）或用户手动修正 */
@@ -14,14 +14,18 @@ export interface RequirementState {
   stageBasis: StageBasis | null;
   uncertain: boolean;
   sessions: Set<string>;
+  /** 需求归属项目（#16 spec #15 B 节）：自动建卡取触发会话项目，手动建卡取事件携带 projectId */
+  projectId: string | null;
 }
 
 /** 状态机引发的变更（空数组 = 无变化；供 UI/审计消费） */
 export type TrackerChange =
-  | { type: "requirement_created"; requirementId: string; stage: Stage; sessionId: string }
-  | { type: "stage_changed"; requirementId: string; stage: Stage; basis: StageBasis; uncertain: boolean }
+  | { type: "requirement_created"; requirementId: string; stage: Stage | null; sessionId: string | null }
+  | { type: "stage_changed"; requirementId: string; stage: Stage | null; basis: StageBasis; uncertain: boolean }
   | { type: "session_linked"; requirementId: string; sessionId: string }
-  | { type: "session_unlinked"; requirementId: string; sessionId: string; stageKept: Stage | null };
+  | { type: "session_unlinked"; requirementId: string; sessionId: string; stageKept: Stage | null }
+  | { type: "requirement_renamed"; requirementId: string; title: string }
+  | { type: "requirement_deleted"; requirementId: string };
 
 /** 看板快照行（sessions 数组化，可 JSON 化） */
 export interface RequirementSnapshot {
@@ -31,6 +35,7 @@ export interface RequirementSnapshot {
   stageBasis: StageBasis | null;
   uncertain: boolean;
   sessions: string[];
+  projectId: string | null;
 }
 
 /** 决策日志行（建卡/阶段变化/拒绝原因，测试与审计用） */
@@ -49,6 +54,8 @@ export class RequirementTracker {
   readonly requirements = new Map<string, RequirementState>();
   readonly sessionToReq = new Map<string, string>();
   readonly sessionCli = new Map<string, Cli>();
+  /** sessionId -> 项目归属记忆（#16：与 sessionCli 同模式，从首个带 projectId 的 skill/link 事件习得，不覆盖） */
+  readonly sessionProject = new Map<string, string>();
   /** sessionId -> 已见 skill 事件（含未驱动阶段时记录的，供 link 后按实际时间同步） */
   readonly sessionEvents = new Map<string, NormalizedEvent[]>();
   /** eventId 幂等集合 */
@@ -64,15 +71,20 @@ export class RequirementTracker {
     if (sessionId && cli && !this.sessionCli.has(sessionId)) this.sessionCli.set(sessionId, cli);
   }
 
-  createRequirement({ title = "待命名需求", sessionId }: { title?: string; sessionId?: string }): string {
+  /** 会话项目归属：事件携带值优先（Main 注入的最新权威值），回落到记忆（首个带 projectId 事件习得） */
+  sessionProjectOf(ev: NormalizedEvent): string | null {
+    return ev.projectId ?? (ev.sessionId ? (this.sessionProject.get(ev.sessionId) ?? null) : null);
+  }
+
+  createRequirement({ title = "待命名需求", sessionId, projectId = null }: { title?: string; sessionId?: string; projectId?: string | null }): string {
     const id = `REQ-${String(this.nextId++).padStart(3, "0")}`;
-    const r: RequirementState = { id, title, stage: null, stageBasisAt: null, stageBasis: null, uncertain: false, sessions: new Set() };
+    const r: RequirementState = { id, title, stage: null, stageBasisAt: null, stageBasis: null, uncertain: false, sessions: new Set(), projectId };
     this.requirements.set(id, r);
     if (sessionId) {
       r.sessions.add(sessionId);
       this.sessionToReq.set(sessionId, id);
     }
-    this.log.push({ decision: "create_requirement", requirementId: id, sessionId: sessionId ?? null });
+    this.log.push({ decision: "create_requirement", requirementId: id, sessionId: sessionId ?? null, projectId });
     return id;
   }
 
@@ -84,10 +96,17 @@ export class RequirementTracker {
     }
     this.processed.add(ev.eventId);
     this.ensureSession(ev.sessionId, ev.cli);
+    // #16：从首个带 projectId 的 skill/link 事件习得会话项目记忆（不覆盖，与 sessionCli 同模式）
+    if ((ev.kind === "skill" || ev.kind === "link") && ev.sessionId && ev.projectId && !this.sessionProject.has(ev.sessionId)) {
+      this.sessionProject.set(ev.sessionId, ev.projectId);
+    }
 
     if (ev.kind === "skill") return this.onSkill(ev);
     if (ev.kind === "manual") return this.onManual(ev);
     if (ev.kind === "link") return this.onLink(ev);
+    if (ev.kind === "create") return this.onCreate(ev);
+    if (ev.kind === "rename") return this.onRename(ev);
+    if (ev.kind === "delete") return this.onDelete(ev);
     return this.onUnlink(ev);
   }
 
@@ -111,13 +130,19 @@ export class RequirementTracker {
     // 规则 §3：未关联 session 只有首次有效（verified）design-feature 建卡；其他 skill / 其他证据等级不建卡
     if (!reqId) {
       if (ev.skill === "design-feature" && effect.autoCreate) {
-        const newId = this.createRequirement({ sessionId: ev.sessionId });
+        // #16（S2-18）：会话无项目 → 不建卡（仅记日志）；有项目（事件携带或记忆）→ 建卡并归属
+        const projectId = this.sessionProjectOf(ev);
+        if (projectId === null) {
+          this.log.push({ decision: "unprojected_no_card", sessionId: ev.sessionId, cli: ev.cli, skill: ev.skill });
+          return changes;
+        }
+        const newId = this.createRequirement({ sessionId: ev.sessionId, projectId });
         const r = this.req(newId)!;
         r.stage = "Design";
         r.stageBasisAt = parseTs(ev.occurredAt);
         r.stageBasis = { kind: "skill", skill: ev.skill, cli: ev.cli!, evidenceLevel: ev.evidenceLevel, eventId: ev.eventId, at: ev.occurredAt };
         changes.push({ type: "requirement_created", requirementId: newId, stage: "Design", sessionId: ev.sessionId });
-        this.log.push({ decision: "auto_create", requirementId: newId, sessionId: ev.sessionId, cli: ev.cli, skill: ev.skill });
+        this.log.push({ decision: "auto_create", requirementId: newId, sessionId: ev.sessionId, cli: ev.cli, skill: ev.skill, projectId });
         return changes;
       }
       // 未关联 + 非（design-feature×verified）：只记录 session 活动，不建卡不改阶段
@@ -196,6 +221,16 @@ export class RequirementTracker {
       this.log.push({ decision: "link_conflict_rejected", sessionId: ev.sessionId, currentRequirement: existing, requested: ev.requirementId });
       return changes;
     }
+    // #16（S2-08）：项目归属校验——会话无项目拒绝；跨项目拒绝（原因进决策日志供 IPC 透出）
+    const sessionProject = this.sessionProjectOf(ev);
+    if (sessionProject === null) {
+      this.log.push({ decision: "link_unprojected_rejected", sessionId: ev.sessionId, requirementId: ev.requirementId });
+      return changes;
+    }
+    if (sessionProject !== r.projectId) {
+      this.log.push({ decision: "link_project_mismatch", sessionId: ev.sessionId, requirementId: ev.requirementId, sessionProject, requirementProject: r.projectId });
+      return changes;
+    }
     r.sessions.add(ev.sessionId!);
     this.sessionToReq.set(ev.sessionId!, r.id);
     changes.push({ type: "session_linked", requirementId: r.id, sessionId: ev.sessionId! });
@@ -228,11 +263,66 @@ export class RequirementTracker {
     return changes;
   }
 
+  /** #16（spec #15 B 节）：手动建卡——直接采用事件确定性 requirementId 并推进 nextId 计数；已存在 id 幂等忽略 */
+  private onCreate(ev: NormalizedEvent): TrackerChange[] {
+    const changes: TrackerChange[] = [];
+    if (this.requirements.has(ev.requirementId!)) {
+      this.log.push({ decision: "duplicate_id_ignored", requirementId: ev.requirementId, eventId: ev.eventId });
+      return changes;
+    }
+    const r: RequirementState = {
+      id: ev.requirementId!,
+      title: ev.title ?? "待命名需求",
+      stage: null,
+      stageBasisAt: null,
+      stageBasis: null,
+      uncertain: false,
+      sessions: new Set(),
+      projectId: ev.projectId,
+    };
+    this.requirements.set(r.id, r);
+    // 确定性编号推进：REQ-005 手动建卡后 nextId 至少 6，后续自动建卡不冲突
+    const parsed = /^REQ-(\d+)$/.exec(r.id);
+    if (parsed) this.nextId = Math.max(this.nextId, Number(parsed[1]) + 1);
+    changes.push({ type: "requirement_created", requirementId: r.id, stage: null, sessionId: null });
+    this.log.push({ decision: "create_requirement", requirementId: r.id, sessionId: null, projectId: r.projectId, title: r.title });
+    return changes;
+  }
+
+  /** #16：标题编辑经事件流（内存+投影同步；否则全量投影与重放会回退人工标题，防 P2） */
+  private onRename(ev: NormalizedEvent): TrackerChange[] {
+    const changes: TrackerChange[] = [];
+    const r = this.req(ev.requirementId!);
+    if (!r) {
+      this.log.push({ decision: "rename_no_requirement", requirementId: ev.requirementId });
+      return changes;
+    }
+    r.title = ev.title!;
+    changes.push({ type: "requirement_renamed", requirementId: r.id, title: r.title });
+    this.log.push({ decision: "rename_requirement", requirementId: r.id, title: r.title });
+    return changes;
+  }
+
+  /** #16：delete 墓碑——移除内存态、解除全部关联、投影删行（engine 侧）；processed 幂等集保留（同 eventId 重放不复活）；事件日志永不删除 */
+  private onDelete(ev: NormalizedEvent): TrackerChange[] {
+    const changes: TrackerChange[] = [];
+    const r = this.req(ev.requirementId!);
+    if (!r) {
+      this.log.push({ decision: "delete_no_requirement", requirementId: ev.requirementId });
+      return changes;
+    }
+    for (const sessionId of r.sessions) this.sessionToReq.delete(sessionId);
+    this.requirements.delete(r.id);
+    changes.push({ type: "requirement_deleted", requirementId: r.id });
+    this.log.push({ decision: "delete_requirement", requirementId: r.id, sessions: [...r.sessions] });
+    return changes;
+  }
+
   /** 看板快照（终态视图） */
   snapshot(): RequirementSnapshot[] {
     const out: RequirementSnapshot[] = [];
     for (const r of this.requirements.values()) {
-      out.push({ id: r.id, title: r.title, stage: r.stage, stageBasis: r.stageBasis, uncertain: r.uncertain, sessions: [...r.sessions] });
+      out.push({ id: r.id, title: r.title, stage: r.stage, stageBasis: r.stageBasis, uncertain: r.uncertain, sessions: [...r.sessions], projectId: r.projectId });
     }
     return out;
   }
@@ -263,6 +353,8 @@ export function transformHookEvents(lines: string[]): NormalizedEvent[] {
       skill,
       stage: null,
       requirementId: null,
+      title: null,
+      projectId: null, // hook 行不含项目信息；projectId 由 Main 在进 Engine 前按 sessions 表注入（spec #15 A 节）
       occurredAt: capturedAt,
       receivedAt: capturedAt,
       seq: null,

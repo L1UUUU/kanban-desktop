@@ -4,7 +4,7 @@ import { SKILL_STAGE, validateEvent, type NormalizedEvent } from "./schema";
 import { RequirementTracker, transformHookEvents } from "./tracker";
 import { mkLink, mkManual, mkUnlink } from "./event-fixtures";
 
-// poc-2 时间轴（分钟粒度）与 skill 工厂（演进：补 receivedAt/source 等归一化必填字段）
+// poc-2 时间轴（分钟粒度）与 skill 工厂（演进：补 receivedAt/source 等归一化必填字段；#16 起补 Main 注入的 projectId 缺省值）
 const T = (n: number): string => `2026-11-05T10:${String(n).padStart(2, "0")}:00.000Z`;
 let seq = 0;
 const skill = (over: Partial<NormalizedEvent> = {}): NormalizedEvent =>
@@ -16,6 +16,7 @@ const skill = (over: Partial<NormalizedEvent> = {}): NormalizedEvent =>
     skill: "design-feature",
     stage: null,
     requirementId: null,
+    projectId: "p-test",
     occurredAt: T(1),
     receivedAt: T(1),
     seq: null,

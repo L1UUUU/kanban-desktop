@@ -22,12 +22,12 @@ describe("openDatabase（node:sqlite）", () => {
     }
   });
 
-  it("schema_migrations 记录当前版本且不重复插入", () => {
+  it("schema_migrations 记录版本链（v1 基线 + v2 需求归属）且不重复插入", () => {
     const db = openDatabase(":memory:");
     try {
       ensureSchema(db);
       const rows = db.prepare("SELECT version FROM schema_migrations").all() as unknown as Array<{ version: number }>;
-      expect(rows.map((r) => r.version)).toEqual([SCHEMA_VERSION]);
+      expect(rows.map((r) => r.version)).toEqual([1, SCHEMA_VERSION]);
     } finally {
       db.close();
     }

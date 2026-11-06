@@ -46,20 +46,40 @@ function verifiedDesignFeature(sessionId: string, at: string, eventId: string): 
   };
 }
 
+/** 插入挂项目的 sessions 行（#16 起事件泵按 sessions 表注入会话项目；project_id 有外键，先落 projects 行） */
+function insertSession(db: SqliteDb, id: string, projectId: string | null): void {
+  if (projectId) {
+    db.prepare("INSERT OR IGNORE INTO projects (id, name, canonical_path, status, created_at) VALUES (?, 'p', 'C:\\p', 'ok', '2026-11-05T00:00:00Z')").run(projectId);
+  }
+  db.prepare(
+    "INSERT INTO sessions (id, kind, cli, native_session_id, project_id, title, cwd, perm_mode, status, last_active_at) VALUES (?,'structured','claude-code',NULL,?,NULL,'C:\\p','auto','idle',NULL)",
+  ).run(id, projectId);
+}
+
 describe("SkillObservation → Engine 落库（#9 接线）", () => {
-  it("verified design-feature → 自动建卡 REQ-001 + 关联 session + stage_events 落库；事件仍转发 renderer", () => {
-    const { engine, handler, forwarded } = makeWiring(":memory:");
+  it("verified design-feature（会话已挂项目）→ 自动建卡 REQ-001 归属项目 + 关联 session + stage_events 落库；事件仍转发 renderer", () => {
+    const { db, engine, handler, forwarded } = makeWiring(":memory:");
+    insertSession(db, "s-app-1", "p-1");
     const obs = verifiedDesignFeature("s-app-1", "2026-11-05T10:00:01.000Z", "sk-1");
     handler(obs);
     const snap = engine.snapshot();
     expect(snap).toHaveLength(1);
-    expect(snap[0]).toMatchObject({ id: "REQ-001", stage: "Design", uncertain: false, sessions: ["s-app-1"] });
+    expect(snap[0]).toMatchObject({ id: "REQ-001", stage: "Design", uncertain: false, sessions: ["s-app-1"], projectId: "p-1" });
     expect(engine.store.snapshotTables().stageEventCount).toBe(1);
-    expect(forwarded).toEqual([obs]); // tracker 消费不吞事件
+    expect(forwarded).toEqual([obs]); // tracker 消费不吞事件；转发 renderer 的原始事件不带 projectId
+  });
+
+  it("#16：无项目会话的 verified design-feature 不建卡（S2-18，事件泵注入 projectId=null）", () => {
+    const { db, engine, handler } = makeWiring(":memory:");
+    insertSession(db, "s-demo", null); // 演示链路：会话未挂项目
+    handler(verifiedDesignFeature("s-demo", "2026-11-05T10:00:01.000Z", "sk-np"));
+    expect(engine.snapshot()).toEqual([]);
+    expect(engine.store.snapshotTables().stageEventCount, "事件仍落日志（审计）").toBe(1);
   });
 
   it("同 eventId 重发（重连重放）→ 状态不变化、stage_events 不重复（INSERT OR IGNORE）", () => {
-    const { engine, handler } = makeWiring(":memory:");
+    const { db, engine, handler } = makeWiring(":memory:");
+    insertSession(db, "s-app-1", "p-1");
     handler(verifiedDesignFeature("s-app-1", "2026-11-05T10:00:01.000Z", "sk-dup"));
     const before = engine.snapshot();
     handler(verifiedDesignFeature("s-app-1", "2026-11-05T10:00:01.000Z", "sk-dup"));
@@ -89,18 +109,20 @@ describe("SkillObservation → Engine 落库（#9 接线）", () => {
     dbFiles.push(dbFile);
     const sessionId = "s-app-9";
     {
-      const { engine, handler } = makeWiring(dbFile);
+      const { db, engine, handler } = makeWiring(dbFile);
+      insertSession(db, sessionId, "p-1");
       handler(verifiedDesignFeature(sessionId, "2026-11-05T10:00:01.000Z", "sk-main-1"));
-      expect(engine.snapshot()[0]).toMatchObject({ id: "REQ-001", sessions: [sessionId] });
+      expect(engine.snapshot()[0]).toMatchObject({ id: "REQ-001", sessions: [sessionId], projectId: "p-1" });
       engine.close();
       openDbs.pop(); // engine.close 已关连接，移出统一关闭清单
     }
     {
       // 重启：新 wiring 读同一库，恢复后状态一致 + 新事件继续驱动
-      const { engine } = makeWiring(dbFile);
+      const { db, engine } = makeWiring(dbFile);
+      insertSession(db, "s-app-10", "p-1");
       const snap = engine.snapshot();
       expect(snap).toHaveLength(1);
-      expect(snap[0]).toMatchObject({ id: "REQ-001", stage: "Design", sessions: [sessionId] });
+      expect(snap[0]).toMatchObject({ id: "REQ-001", stage: "Design", sessions: [sessionId], projectId: "p-1" });
       expect(engine.store.snapshotTables().stageEventCount).toBe(1);
       engine.process({
         eventId: "sk-main-2",
@@ -110,6 +132,8 @@ describe("SkillObservation → Engine 落库（#9 接线）", () => {
         skill: "design-feature",
         stage: null,
         requirementId: null,
+        projectId: "p-1",
+        title: null,
         occurredAt: "2026-11-05T11:00:00.000Z",
         receivedAt: "2026-11-05T11:00:00.000Z",
         seq: null,

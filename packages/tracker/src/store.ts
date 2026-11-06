@@ -1,9 +1,9 @@
-// 用途：SQLite 持久化层（演进自 poc-4 store.mjs）—— requirements/stage_events 两表（C3 沿用 poc-4 冻结 DDL）、stage_events INSERT OR IGNORE 落库幂等；DB 连接经注入（node:sqlite 实例，可临时文件/内存库）
+// 用途：SQLite 持久化层（演进自 poc-4 store.mjs；#16 起 requirements 加 project_id 列，与 apps/desktop db.ts v2 形态一致）—— requirements/stage_events 两表、stage_events INSERT OR IGNORE 落库幂等；DB 连接经注入（node:sqlite 实例，可临时文件/内存库）
 import type { DatabaseSync } from "node:sqlite";
 import type { NormalizedEvent } from "./schema";
 import type { RequirementState } from "./tracker";
 
-// C3：requirements / stage_events 沿用 poc-4 冻结 DDL 不变（与 apps/desktop db.ts 五表中的同两表一致；IF NOT EXISTS 幂等）
+// C3 + #16 v2（spec #15 F 节）：requirements 加 project_id；stage_events 沿用冻结 DDL（新库直建 v2 形态；老库迁移在 apps/desktop db.ts）
 const DDL = `
 CREATE TABLE IF NOT EXISTS requirements (
   id TEXT PRIMARY KEY,
@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS requirements (
   stage_basis_at INTEGER,
   stage_basis_json TEXT,
   uncertain INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  project_id TEXT
 );
 CREATE TABLE IF NOT EXISTS stage_events (
   event_id TEXT PRIMARY KEY,
@@ -59,6 +60,7 @@ export interface RequirementRow {
   stage_basis_json: string | null;
   uncertain: number;
   created_at: string;
+  project_id: string | null;
 }
 
 export class Store {
@@ -97,16 +99,22 @@ export class Store {
       );
   }
 
-  /** tracker 需求状态落库（全量 upsert 投影，状态量小） */
+  /** tracker 需求状态落库（全量 upsert 投影，状态量小；#16 起写 project_id） */
   saveRequirement(r: RequirementState & { stageBasisAt: number | null; stageBasis: RequirementState["stageBasis"] }): void {
     this.db
       .prepare(
-        `INSERT INTO requirements (id,title,stage,stage_basis_at,stage_basis_json,uncertain,created_at)
-         VALUES (?,?,?,?,?,?,?)
+        `INSERT INTO requirements (id,title,stage,stage_basis_at,stage_basis_json,uncertain,created_at,project_id)
+         VALUES (?,?,?,?,?,?,?,?)
          ON CONFLICT(id) DO UPDATE SET title=excluded.title, stage=excluded.stage,
-           stage_basis_at=excluded.stage_basis_at, stage_basis_json=excluded.stage_basis_json, uncertain=excluded.uncertain`,
+           stage_basis_at=excluded.stage_basis_at, stage_basis_json=excluded.stage_basis_json, uncertain=excluded.uncertain,
+           project_id=excluded.project_id`,
       )
-      .run(r.id, r.title, r.stage, r.stageBasisAt, JSON.stringify(r.stageBasis ?? null), r.uncertain ? 1 : 0, this.now());
+      .run(r.id, r.title, r.stage, r.stageBasisAt, JSON.stringify(r.stageBasis ?? null), r.uncertain ? 1 : 0, this.now(), r.projectId ?? null);
+  }
+
+  /** 删除需求投影行（#16 墓碑：投影删行；事件日志 stage_events 永不删除） */
+  deleteRequirement(id: string): void {
+    this.db.prepare("DELETE FROM requirements WHERE id = ?").run(id);
   }
 
   /** 事件日志查询（按落库顺序；sessionId/requirementId 过滤）—— 恢复重放与历史审计共用 */

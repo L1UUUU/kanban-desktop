@@ -1,4 +1,4 @@
-// 用途：tracker 测试共享构造器 —— 固定时间轴 + 四类归一化事件工厂（演进自 poc-4 tracker.test.mjs 的 mk* 辅助与测试用 SQLite 打开器）
+// 用途：tracker 测试共享构造器 —— 固定时间轴 + 各类归一化事件工厂（#16 起含 projectId/title 可选参与 mkCreate/mkRename/mkDelete；演进自 poc-4 tracker.test.mjs 的 mk* 辅助与测试用 SQLite 打开器）
 import * as nodeSqlite from "node:sqlite";
 import type { NormalizedEvent } from "./schema";
 
@@ -16,7 +16,10 @@ export const T = {
 } as const;
 
 let n = 0;
-/** skill 事件工厂（eventId 缺省自增；时间/证据等级/CLI 可覆盖） */
+// v2 wire 契约（spec #15 A 节）：进 Engine 的事件由 Main 注入会话项目；工厂缺省给测试项目 p-test，行为用例无需逐条携带
+const DEFAULT_PROJECT = "p-test";
+
+/** skill 事件工厂（eventId 缺省自增；时间/证据等级/CLI/projectId 可覆盖） */
 export function mkSkill({
   sessionId = "s-a",
   cli = "claude-code",
@@ -25,6 +28,7 @@ export function mkSkill({
   evidence = "verified",
   eventId,
   seq = null,
+  projectId = DEFAULT_PROJECT,
 }: {
   sessionId?: string;
   cli?: "claude-code" | "codex" | "opencode";
@@ -33,6 +37,7 @@ export function mkSkill({
   evidence?: "verified" | "self_reported" | "simulated";
   eventId?: string;
   seq?: number | null;
+  projectId?: string | null;
 } = {}): NormalizedEvent {
   return {
     eventId: eventId ?? `ev-${++n}`,
@@ -42,6 +47,8 @@ export function mkSkill({
     skill,
     stage: null,
     requirementId: null,
+    title: null,
+    projectId,
     occurredAt: at,
     receivedAt: at,
     seq,
@@ -50,7 +57,7 @@ export function mkSkill({
   };
 }
 
-/** 手动修正/确认事件工厂 */
+/** 手动修正/确认事件工厂（stage 支持 "none" 字面量——归一测试用） */
 export function mkManual(reqId: string, stage: string, at: string, source = "gui-manual"): NormalizedEvent {
   return {
     eventId: `m-${++n}`,
@@ -60,6 +67,8 @@ export function mkManual(reqId: string, stage: string, at: string, source = "gui
     skill: null,
     stage,
     requirementId: reqId,
+    title: null,
+    projectId: null,
     occurredAt: at,
     receivedAt: at,
     seq: null,
@@ -68,8 +77,14 @@ export function mkManual(reqId: string, stage: string, at: string, source = "gui
   };
 }
 
-/** GUI 关联事件工厂 */
-export function mkLink(sessionId: string, reqId: string, at: string, cli: "claude-code" | "codex" | "opencode" = "codex"): NormalizedEvent {
+/** GUI 关联事件工厂（cli 允许 pty；#16 起携带 session 项目，缺省与 mkSkill 同项目） */
+export function mkLink(
+  sessionId: string,
+  reqId: string,
+  at: string,
+  cli: "claude-code" | "codex" | "opencode" | "pty" = "codex",
+  projectId: string | null = DEFAULT_PROJECT,
+): NormalizedEvent {
   return {
     eventId: `l-${++n}`,
     kind: "link",
@@ -78,6 +93,8 @@ export function mkLink(sessionId: string, reqId: string, at: string, cli: "claud
     skill: null,
     stage: null,
     requirementId: reqId,
+    title: null,
+    projectId,
     occurredAt: at,
     receivedAt: at,
     seq: null,
@@ -96,11 +113,79 @@ export function mkUnlink(sessionId: string, at: string): NormalizedEvent {
     skill: null,
     stage: null,
     requirementId: null,
+    title: null,
+    projectId: null,
     occurredAt: at,
     receivedAt: at,
     seq: null,
     evidenceLevel: "verified",
     source: "gui",
+  };
+}
+
+/** 手动建卡事件工厂（确定性 requirementId/title/projectId，spec #15 A 节） */
+export function mkCreate(
+  reqId: string,
+  projectId: string,
+  at: string,
+  title = "待命名需求",
+  eventId?: string,
+): NormalizedEvent {
+  return {
+    eventId: eventId ?? `c-${++n}`,
+    kind: "create",
+    sessionId: null,
+    cli: null,
+    skill: null,
+    stage: null,
+    requirementId: reqId,
+    title,
+    projectId,
+    occurredAt: at,
+    receivedAt: at,
+    seq: null,
+    evidenceLevel: "verified",
+    source: "gui-create",
+  };
+}
+
+/** 标题编辑事件工厂（requirementId+title，经事件流持久化重放） */
+export function mkRename(reqId: string, title: string, at: string): NormalizedEvent {
+  return {
+    eventId: `r-${++n}`,
+    kind: "rename",
+    sessionId: null,
+    cli: null,
+    skill: null,
+    stage: null,
+    requirementId: reqId,
+    title,
+    projectId: null,
+    occurredAt: at,
+    receivedAt: at,
+    seq: null,
+    evidenceLevel: "verified",
+    source: "gui-rename",
+  };
+}
+
+/** 删除需求（墓碑）事件工厂 */
+export function mkDelete(reqId: string, at: string): NormalizedEvent {
+  return {
+    eventId: `d-${++n}`,
+    kind: "delete",
+    sessionId: null,
+    cli: null,
+    skill: null,
+    stage: null,
+    requirementId: reqId,
+    title: null,
+    projectId: null,
+    occurredAt: at,
+    receivedAt: at,
+    seq: null,
+    evidenceLevel: "verified",
+    source: "gui-delete",
   };
 }
 

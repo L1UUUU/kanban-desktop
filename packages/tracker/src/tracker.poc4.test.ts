@@ -147,7 +147,7 @@ describe("S3: link 时间同步", () => {
 
   it("需求尚无阶段依据时，link 同步可初始化阶段", () => {
     const tr = new RequirementTracker();
-    const reqId = tr.createRequirement({ sessionId: "cs-1" }); // 手动建卡无阶段
+    const reqId = tr.createRequirement({ sessionId: "cs-1", projectId: "p-test" }); // 手动建卡无阶段（#16 起需求必属项目）
     tr.process(mkSkill({ sessionId: "co-1", cli: "opencode", skill: "implement-spec", at: T.t2, evidence: "simulated" }));
     tr.process(mkLink("co-1", reqId, T.t3, "opencode"));
     expect(tr.req(reqId)!.stage).toBe("Implement");

@@ -35,10 +35,15 @@ export class TrackerEngine {
     return { accepted: true, changes };
   }
 
-  /** 把 tracker 当前状态投影落库（requirements 表全量 upsert，供阶段 2 看板直读与一致性审计） */
+  /** 把 tracker 当前状态投影落库（requirements 表全量 upsert + #16 墓碑对账删行，供阶段 2 看板直读与一致性审计） */
   persistAll(): void {
     for (const r of this.tracker.requirements.values()) {
       this.store.saveRequirement({ ...r, stageBasisAt: r.stageBasisAt ?? null, stageBasis: r.stageBasis ?? null });
+    }
+    // 墓碑对账：投影中已不在内存态的行删掉（delete 后投影不留残留；事件日志仍在 stage_events）
+    const live = new Set(this.tracker.requirements.keys());
+    for (const row of this.store.listRequirements()) {
+      if (!live.has(row.id)) this.store.deleteRequirement(row.id);
     }
   }
 

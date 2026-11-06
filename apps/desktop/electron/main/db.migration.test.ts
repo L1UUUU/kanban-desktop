@@ -1,0 +1,266 @@
+// 用途：SQLite 迁移 v2 单测（#16，spec #15 F 节）—— v1 库加 project_id 列 + 按最早关联会话回填 + 补写旧事件 payload projectId + 单事务（中断重入幂等、无关联会话失败回滚）+ 迁移后重放态=迁移前在线态
+import { rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import * as nodeSqlite from "node:sqlite";
+import { TrackerEngine } from "@kanban/tracker";
+import { afterAll, describe, expect, it } from "vitest";
+import { listTables, openDatabase, type SqliteDb } from "./db";
+
+// 与 db.ts 相同的 node:sqlite 入口回退（测试需绕过 openDatabase 直造 v1 库）
+const exportsRecord = nodeSqlite as unknown as Record<string, unknown>;
+const RawDb = (typeof exportsRecord.Database === "function"
+  ? exportsRecord.Database
+  : nodeSqlite.DatabaseSync) as new (path: string) => nodeSqlite.DatabaseSync;
+
+const dbFiles: string[] = [];
+const openDbs: SqliteDb[] = [];
+afterAll(() => {
+  for (const db of openDbs) db.close();
+  for (const f of dbFiles) rmSync(f, { force: true });
+});
+function tmpDbPath(tag: string): string {
+  const f = join(tmpdir(), `kb-db-migration-${tag}-${process.pid}-${Date.now()}.db`);
+  dbFiles.push(f);
+  return f;
+}
+
+// v1 形态最小库（requirements 无 project_id；五表齐备以满足外键）
+const V1_DDL = `
+CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, canonical_path TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'ok', created_at TEXT NOT NULL);
+CREATE TABLE sessions (id TEXT PRIMARY KEY, kind TEXT NOT NULL, cli TEXT NOT NULL, native_session_id TEXT, project_id TEXT REFERENCES projects(id), title TEXT, cwd TEXT, perm_mode TEXT, status TEXT, last_active_at TEXT, created_at TEXT NOT NULL);
+CREATE TABLE requirements (id TEXT PRIMARY KEY, title TEXT NOT NULL, stage TEXT, stage_basis_at INTEGER, stage_basis_json TEXT, uncertain INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+CREATE TABLE stage_events (event_id TEXT PRIMARY KEY, kind TEXT NOT NULL, session_id TEXT, cli TEXT, skill TEXT, stage TEXT, requirement_id TEXT, occurred_at TEXT, received_at TEXT, seq TEXT, evidence_level TEXT NOT NULL, source TEXT, payload_json TEXT NOT NULL, processed_at TEXT NOT NULL);
+CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+INSERT INTO schema_migrations (version, name, applied_at) VALUES (1, 'v1-c3-base', '2026-11-05T00:00:00.000Z');
+`;
+
+/** v1 skill 事件行（payload 无 projectId——迁移前旧事件形态） */
+function seedSkillEvent(db: nodeSqlite.DatabaseSync, eventId: string, sessionId: string, skill: string, at: string, evidence = "verified"): void {
+  const payload = {
+    eventId,
+    kind: "skill",
+    sessionId,
+    cli: "claude-code",
+    skill,
+    stage: null,
+    requirementId: null,
+    occurredAt: at,
+    receivedAt: at,
+    seq: null,
+    evidenceLevel: evidence,
+    source: "claude-hook",
+  };
+  db.prepare(
+    "INSERT INTO stage_events (event_id, kind, session_id, cli, skill, stage, requirement_id, occurred_at, received_at, seq, evidence_level, source, payload_json, processed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+  ).run(eventId, "skill", sessionId, "claude-code", skill, null, null, at, at, null, evidence, "claude-hook", JSON.stringify(payload), at);
+}
+
+/** v1 link 事件行 */
+function seedLinkEvent(db: nodeSqlite.DatabaseSync, eventId: string, sessionId: string, reqId: string, at: string): void {
+  const payload = {
+    eventId,
+    kind: "link",
+    sessionId,
+    cli: "codex",
+    skill: null,
+    stage: null,
+    requirementId: reqId,
+    occurredAt: at,
+    receivedAt: at,
+    seq: null,
+    evidenceLevel: "verified",
+    source: "gui-card",
+  };
+  db.prepare(
+    "INSERT INTO stage_events (event_id, kind, session_id, cli, skill, stage, requirement_id, occurred_at, received_at, seq, evidence_level, source, payload_json, processed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+  ).run(eventId, "link", sessionId, "codex", null, null, reqId, at, at, null, "verified", "gui-card", JSON.stringify(payload), at);
+}
+
+function seedProject(db: nodeSqlite.DatabaseSync, id: string): void {
+  db.prepare("INSERT INTO projects (id, name, canonical_path, status, created_at) VALUES (?, 'n', 'C:\\x', 'ok', '2026-11-05T00:00:00.000Z')").run(id);
+}
+
+function seedSession(db: nodeSqlite.DatabaseSync, id: string, projectId: string | null): void {
+  db.prepare(
+    "INSERT INTO sessions (id, kind, cli, native_session_id, project_id, title, cwd, perm_mode, status, last_active_at, created_at) VALUES (?,'structured','claude-code',NULL,?,NULL,'C:\\x','auto','idle',NULL,'2026-11-05T00:00:00.000Z')",
+  ).run(id, projectId);
+}
+
+function seedRequirement(db: nodeSqlite.DatabaseSync, id: string, stage: string | null): void {
+  db.prepare("INSERT INTO requirements (id, title, stage, stage_basis_at, stage_basis_json, uncertain, created_at) VALUES (?, '待命名需求', ?, 1000, NULL, 0, '2026-11-05T00:00:00.000Z')").run(id, stage);
+}
+
+/** 直造 v1 库（不走 openDatabase，避免触发 v2 建表/迁移） */
+function buildV1Db(path: string, seed: (db: nodeSqlite.DatabaseSync) => void): void {
+  const db = new RawDb(path);
+  db.exec(V1_DDL);
+  seed(db);
+  db.close();
+}
+
+function columnsOf(db: nodeSqlite.DatabaseSync, table: string): string[] {
+  return (db.prepare(`PRAGMA table_info(${table})`).all() as unknown as Array<{ name: string }>).map((r) => r.name);
+}
+
+// ========== 迁移 v2 主路径 ==========
+describe("迁移 v2：v1 库 → project_id 回填 + payload 补写", () => {
+  it("v1 库迁移：加列、按建卡会话回填 project_id、补写旧事件 payload、记 v2 迁移", () => {
+    const path = tmpDbPath("main");
+    buildV1Db(path, (db) => {
+      seedProject(db, "p-1");
+      seedSession(db, "s-1", "p-1");
+      seedSkillEvent(db, "ev-1", "s-1", "design-feature", "2026-11-05T10:00:01.000Z");
+      seedRequirement(db, "REQ-001", "Design");
+    });
+    const db = openDatabase(path);
+    openDbs.push(db);
+    expect(columnsOf(db, "requirements")).toContain("project_id");
+    expect(db.prepare("SELECT project_id FROM requirements WHERE id = 'REQ-001'").get()).toEqual({ project_id: "p-1" });
+    // 补写旧事件 payload（事件日志不可变原则的有意破例——schema 演进迁移，依据 spec #15 F 节）
+    const payload = JSON.parse((db.prepare("SELECT payload_json FROM stage_events WHERE event_id = 'ev-1'").get() as { payload_json: string }).payload_json) as { projectId?: string };
+    expect(payload.projectId).toBe("p-1");
+    const migrations = db.prepare("SELECT version, name FROM schema_migrations ORDER BY version").all() as unknown as Array<{ version: number; name: string }>;
+    expect(migrations).toEqual([
+      { version: 1, name: "v1-c3-base" },
+      { version: 2, name: "v2-requirements-project" },
+    ]);
+  });
+
+  it("迁移后重放态=迁移前在线态：restore 重建需求带正确 project_id、阶段与关联", () => {
+    const path = tmpDbPath("replay");
+    buildV1Db(path, (db) => {
+      seedProject(db, "p-1");
+      seedSession(db, "s-1", "p-1");
+      seedSkillEvent(db, "ev-1", "s-1", "design-feature", "2026-11-05T10:00:01.000Z");
+      seedSkillEvent(db, "ev-2", "s-1", "implement-spec", "2026-11-05T10:00:02.000Z");
+      seedRequirement(db, "REQ-001", "Implement");
+    });
+    const db = openDatabase(path);
+    openDbs.push(db);
+    const eng = new TrackerEngine(db);
+    eng.restore();
+    expect(eng.snapshot()).toEqual([
+      {
+        id: "REQ-001",
+        title: "待命名需求",
+        stage: "Implement",
+        stageBasis: { kind: "skill", skill: "implement-spec", cli: "claude-code", evidenceLevel: "verified", eventId: "ev-2", at: "2026-11-05T10:00:02.000Z" },
+        uncertain: false,
+        sessions: ["s-1"],
+        projectId: "p-1",
+      },
+    ]);
+    // 重放态投影与迁移回填一致（无分叉）
+    expect(eng.store.listRequirements().map((r) => ({ id: r.id, project_id: r.project_id }))).toEqual([{ id: "REQ-001", project_id: "p-1" }]);
+  });
+
+  it("最早关联会话 tie-break：多个 link 会话时取事件顺序最早者推导项目", () => {
+    const path = tmpDbPath("tiebreak");
+    buildV1Db(path, (db) => {
+      seedProject(db, "p-1");
+      seedProject(db, "p-2");
+      seedSession(db, "s-a", "p-2"); // 最早关联（t1）
+      seedSession(db, "s-b", "p-1"); // 次早（t2）
+      seedLinkEvent(db, "l-2", "s-a", "REQ-009", "2026-11-05T10:00:01.000Z");
+      seedLinkEvent(db, "l-3", "s-b", "REQ-009", "2026-11-05T10:00:02.000Z");
+      seedRequirement(db, "REQ-009", null);
+    });
+    const db = openDatabase(path);
+    openDbs.push(db);
+    expect(db.prepare("SELECT project_id FROM requirements WHERE id = 'REQ-009'").get(), "最早 link 的 s-a 属 p-2").toEqual({ project_id: "p-2" });
+  });
+
+  it("自动建卡会话早于后续 link 时以建卡会话为准", () => {
+    const path = tmpDbPath("create-wins");
+    buildV1Db(path, (db) => {
+      seedProject(db, "p-1");
+      seedProject(db, "p-2");
+      seedSession(db, "s-1", "p-1");
+      seedSession(db, "s-2", "p-2");
+      seedSkillEvent(db, "ev-1", "s-1", "design-feature", "2026-11-05T10:00:01.000Z"); // 建卡事件（t1）
+      seedLinkEvent(db, "l-1", "s-2", "REQ-001", "2026-11-05T10:00:05.000Z"); // 次晚 link
+      seedRequirement(db, "REQ-001", "Design");
+    });
+    const db = openDatabase(path);
+    openDbs.push(db);
+    expect(db.prepare("SELECT project_id FROM requirements WHERE id = 'REQ-001'").get()).toEqual({ project_id: "p-1" });
+  });
+});
+
+// ========== 失败回滚与重入幂等 ==========
+describe("迁移 v2：单事务（失败回滚 + 中断重入幂等）", () => {
+  it("无关联会话的存量需求 → 迁移失败回滚（列/记录/payload 全部未动），补数据后重入成功", () => {
+    const path = tmpDbPath("orphan");
+    buildV1Db(path, (db) => {
+      seedProject(db, "p-1");
+      seedSession(db, "s-1", "p-1");
+      seedSkillEvent(db, "ev-1", "s-1", "design-feature", "2026-11-05T10:00:01.000Z");
+      seedRequirement(db, "REQ-001", "Design");
+      seedRequirement(db, "REQ-009", null); // 孤儿需求：无任何关联事件
+    });
+    expect(() => openDatabase(path), "宁可不迁移不分叉").toThrow(/REQ-009/);
+    {
+      // 回滚验证：v1 形态保持（无 project_id 列、无 v2 记录、payload 未补写）
+      const raw = new RawDb(path);
+      expect(columnsOf(raw, "requirements")).not.toContain("project_id");
+      expect((raw.prepare("SELECT count(*) AS n FROM schema_migrations WHERE version = 2").get() as { n: number }).n).toBe(0);
+      const payload = JSON.parse((raw.prepare("SELECT payload_json FROM stage_events WHERE event_id = 'ev-1'").get() as { payload_json: string }).payload_json) as { projectId?: string };
+      expect(payload.projectId).toBeUndefined();
+      raw.close();
+    }
+    {
+      // 修复数据（给孤儿需求补最早关联会话）后重入 → 迁移成功
+      const raw = new RawDb(path);
+      seedProject(raw, "p-3");
+      seedSession(raw, "s-9", "p-3");
+      seedLinkEvent(raw, "l-9", "s-9", "REQ-009", "2026-11-05T10:00:09.000Z");
+      raw.close();
+    }
+    const db = openDatabase(path);
+    openDbs.push(db);
+    expect(db.prepare("SELECT id, project_id FROM requirements ORDER BY id").all()).toEqual([
+      { id: "REQ-001", project_id: "p-1" },
+      { id: "REQ-009", project_id: "p-3" },
+    ]);
+  });
+
+  it("事务中断（DDL 已执行未提交）重入：迁移从头完整执行且幂等", () => {
+    const path = tmpDbPath("interrupted");
+    buildV1Db(path, (db) => {
+      seedProject(db, "p-1");
+      seedSession(db, "s-1", "p-1");
+      seedSkillEvent(db, "ev-1", "s-1", "design-feature", "2026-11-05T10:00:01.000Z");
+      seedRequirement(db, "REQ-001", "Design");
+    });
+    {
+      // 模拟迁移中途进程被杀：BEGIN 后 ALTER 未提交即断连（SQLite 自动回滚 DDL）
+      const raw = new RawDb(path);
+      raw.exec("BEGIN");
+      raw.exec("ALTER TABLE requirements ADD COLUMN project_id TEXT");
+      raw.close();
+    }
+    const db = openDatabase(path); // 重入：完整迁移
+    openDbs.push(db);
+    expect(columnsOf(db, "requirements")).toContain("project_id");
+    expect(db.prepare("SELECT project_id FROM requirements WHERE id = 'REQ-001'").get()).toEqual({ project_id: "p-1" });
+    // 二次打开幂等：不重复迁移、记录不重复
+    const again = openDatabase(path);
+    openDbs.push(again);
+    const migrations = again.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as unknown as Array<{ version: number }>;
+    expect(migrations.map((m) => m.version)).toEqual([1, 2]);
+  });
+});
+
+// ========== 新库直建 v2 形态 ==========
+describe("迁移 v2：新库", () => {
+  it("新库 requirements 直建 v2 形态（含 project_id 列），openDatabase 幂等", () => {
+    const db = openDatabase(":memory:");
+    openDbs.push(db);
+    expect(listTables(db)).toEqual(["projects", "requirements", "schema_migrations", "sessions", "stage_events"]);
+    expect(columnsOf(db, "requirements")).toContain("project_id");
+    const again = openDatabase(":memory:");
+    openDbs.push(again);
+    expect(again.prepare("SELECT count(*) AS n FROM schema_migrations").get()).toEqual({ n: 2 });
+  });
+});
