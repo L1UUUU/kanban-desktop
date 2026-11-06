@@ -1,0 +1,4 @@
+2026-11-06T06:30:58.223Z（真实最小集验收）
+claude --version => 2.1.317 (Claude Code)
+codex --version => codex-cli 0.144.1
+opencode --version => 1.19.5

@@ -1,4 +1,4 @@
-// 用途：看板视图 E2E（#18/#19/#20 验收）—— 侧栏「看板」入口 → 五列看板（Fake 全链）；verified design-feature 自动建卡实时出现；视图切换回聊天会话仍在；重启后 kanban:list 再水化看板与退出前一致（#18，对照原型一致项 1/2/3）；#19 详情面板全套操作往返（编辑/修正/确认/删除/建卡，对照原型一致项 4/5）；#20 关联管理往返（关联已有/解除/卡片建会话/跳转/会话徽标，对照原型一致项 4 关联区/6）
+// 用途：看板视图 E2E（#18/#19/#20 验收 + #22 全流程串测）—— 侧栏「看板」入口 → 五列看板（Fake 全链）；verified design-feature 自动建卡实时出现；视图切换回聊天会话仍在；重启后 kanban:list 再水化看板与退出前一致（#18，对照原型一致项 1/2/3）；#19 详情面板全套操作往返（编辑/修正/确认/删除/建卡，对照原型一致项 4/5）；#20 关联管理往返（关联已有/解除/卡片建会话/跳转/会话徽标，对照原型一致项 4 关联区/6）；#22 单条连续旅程串完全部环节（入口→建卡→关联→修正→确认→删除→重启）
 import { test, expect, _electron, type ElectronApplication, type Page } from "@playwright/test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -188,6 +188,90 @@ test("重启再水化：退出前 Design 列有卡 → 重启后看板与退出�
     await expect(designCol2.getByText("◍ 1 会话")).toBeVisible();
     await expect(designCol2.getByTestId("verified-badge").first()).toBeVisible();
     await expect(designCol2.getByTestId("kanban-col-count")).toHaveText("1");
+    await second.app.close();
+  } finally {
+    await rmBestEffort(userData);
+    await rmBestEffort(repoRoot);
+  }
+});
+
+test("全流程串测（#22 验收）：入口→看板→手动建卡→卡片建会话关联→阶段修正→uncertain 确认→删除→重启再水化一致", async () => {
+  const { userData, repoDir, repoRoot } = makeFixture();
+  try {
+    const { app, win } = await launchApp(userData, repoDir);
+    await registerAndCreate(win);
+
+    // ① 侧栏「看板」入口 → 五列看板（S2-13 视图切换不触碰 CLI：会话行仍在）
+    await expect(win.getByTestId("kanban-entry")).toContainText(PROJECT_NAME);
+    await win.getByTestId("kanban-entry").click();
+    await expect(win.getByTestId("kanban-board")).toBeVisible();
+    for (const key of ["none", "Design", "Implement", "PR", "Retro"]) {
+      await expect(win.getByTestId(`kanban-col-${key}`)).toBeVisible();
+    }
+
+    // ② 手动建卡（S2-09）：未开始列「＋」→「待命名需求」→ 详情行内编辑改名
+    const noneCol = win.getByTestId("kanban-col-none");
+    await noneCol.getByTitle("手动新建需求（归属当前项目）").click();
+    await expect(noneCol.getByText("待命名需求")).toBeVisible({ timeout: 10_000 });
+    await noneCol.getByText("待命名需求").click();
+    await expect(win.getByTestId("detail-panel")).toBeVisible();
+    const titleInput = win.getByTestId("detail-title-input");
+    await titleInput.fill("全流程演示需求");
+    await titleInput.press("Enter");
+    await expect(noneCol.getByText("全流程演示需求")).toBeVisible({ timeout: 10_000 });
+
+    // ③ 关联 = 卡片建会话（S2-11）：详情「＋新建会话」OpenCode → 创建即自动关联
+    await win.getByTestId("new-session-menu").click();
+    await win.getByTestId("new-session-item-opencode").click();
+    const openRow = win.getByTestId("detail-panel").locator('[data-testid="related-session"]', { hasText: "新会话 · OpenCode" });
+    await expect(openRow).toBeVisible({ timeout: 15_000 });
+    await expect(noneCol.getByText("◍ 1 会话")).toBeVisible({ timeout: 10_000 });
+    const sidebarOpen = win.locator("aside").locator('[data-testid="session-row"]', { hasText: "新会话 · OpenCode" });
+    await expect(sidebarOpen.getByTestId("req-badge")).toHaveText("REQ-001", { timeout: 10_000 });
+
+    // ④ 阶段修正（S2-05）：五段条 Design → 卡片移列 + 依据「手动修正」；随后关面板（后续步骤重新点卡开）
+    await win.getByTestId("stage-seg-Design").click();
+    const designCol = win.getByTestId("kanban-col-Design");
+    await expect(designCol.getByText("全流程演示需求")).toBeVisible({ timeout: 10_000 });
+    await expect(win.getByText(/当前依据：手动修正/)).toBeVisible();
+    await win.getByTestId("detail-close").click();
+    await expect(win.getByTestId("detail-panel")).toBeHidden();
+
+    // ⑤ uncertain（S2-04）：切聊天视图选 OpenCode 会话发 /implement-spec（Fake self_reported）→ Implement 列 + 待确认
+    await win.getByTestId("kanban-entry").click();
+    await sidebarOpen.click();
+    await win.getByPlaceholder("输入消息，/ 开头触发 Skill…").fill("/implement-spec");
+    await win.getByRole("button", { name: "发送 ➤" }).click();
+    await win.getByTestId("kanban-entry").click();
+    const implCol = win.getByTestId("kanban-col-Implement");
+    await expect(implCol.getByText("全流程演示需求")).toBeVisible({ timeout: 15_000 });
+    await expect(implCol.getByTestId("uncertain-badge").first()).toBeVisible();
+
+    // ⑥ 手动确认（S2-04）：详情「确认当前阶段」→ 待确认徽标清除、阶段保持 Implement
+    await implCol.getByText("全流程演示需求").click();
+    await expect(win.getByTestId("uncertain-note")).toContainText("implement-spec");
+    await win.getByTestId("confirm-stage-button").click();
+    await expect(implCol.getByTestId("uncertain-badge")).toHaveCount(0, { timeout: 10_000 });
+    await expect(implCol.getByText("全流程演示需求")).toBeVisible();
+
+    // ⑦ 删除（S2-10）：二次确认弹层文案三要素 → 确认后卡片实时消失
+    await win.getByTestId("delete-requirement-button").click();
+    const dialog = win.getByTestId("delete-confirm-dialog");
+    await expect(dialog).toContainText("仅删除需求卡片与全部会话关联");
+    await expect(dialog).toContainText("会话本身、聊天历史与事件日志保留");
+    await expect(dialog).toContainText("不可撤销");
+    await win.getByTestId("confirm-delete-button").click();
+    await expect(win.getByTestId("requirement-card")).toHaveCount(0, { timeout: 10_000 });
+
+    // ⑧ 重启再水化一致（S2-17）：墓碑不复活；OpenCode 会话本身保留但 REQ 徽标随关联清除
+    await app.close();
+    const second = await launchApp(userData);
+    await second.win.getByTestId("kanban-entry").click();
+    await expect(second.win.getByTestId("kanban-board")).toBeVisible();
+    await expect(second.win.getByTestId("requirement-card")).toHaveCount(0, { timeout: 15_000 });
+    const sidebarOpen2 = second.win.locator("aside").locator('[data-testid="session-row"]', { hasText: "新会话 · OpenCode" });
+    await expect(sidebarOpen2).toBeVisible({ timeout: 15_000 }); // 会话本身保留（S2-10：不删会话）
+    await expect(sidebarOpen2.getByTestId("req-badge")).toHaveCount(0, { timeout: 10_000 }); // 关联已随卡清除
     await second.app.close();
   } finally {
     await rmBestEffort(userData);
