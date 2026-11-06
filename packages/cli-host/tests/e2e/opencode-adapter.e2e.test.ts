@@ -9,6 +9,7 @@ import { OpenCodeServerHost } from "../../src/opencode/server-host";
 import { createCollector, defineAdapterContractTests } from "../../src/adapter.contract";
 import type { CliAdapter } from "../../src/adapter";
 import type { AdapterEvent, ChatEvent, SkillObservation } from "@kanban/ipc-schema";
+import { transcriptEventSchema } from "@kanban/ipc-schema";
 
 const E2E = process.env.KANBAN_E2E === "1";
 
@@ -176,6 +177,7 @@ describe.skipIf(!E2E)("OpenCodeAdapter 真实集成（env-gated）", () => {
     interruptTurn: (id) => adapter.interruptTurn(id),
     resolveApproval: (i) => adapter.resolveApproval(i),
     readHistory: (id) => adapter.readHistory(id),
+    readTranscript: (id) => adapter.readTranscript(id),
     resume: (id) => adapter.resume(id),
     dispose: (i) => adapter.dispose(i),
   };
@@ -280,6 +282,31 @@ describe.skipIf(!E2E)("OpenCodeAdapter 真实集成（env-gated）", () => {
     const build = agents.find((x) => x.name === "build");
     const table = build?.permission ?? [];
     expect(table.some((r) => r.permission === "*" && r.pattern === "*" && r.action === "allow")).toBe(true); // *:*:allow 原生默认
+    await a.dispose(); // 引用归零停 server
+  });
+
+  /* ---------------- readTranscript：message API 双视角（#28 验收：user 提问 + 工具调用历史） ---------------- */
+  it("readTranscript：读取含 user 提问与工具调用的原生历史（message API，full 档独立 server），断言 role/text/tool 形状", async () => {
+    markScope();
+    const trDir = path.join(root, "tr");
+    mkdirSync(trDir, { recursive: true });
+    const host = makeE2EHost(path.join(root, "servers-tr.json"));
+    const a = new OpenCodeAdapter({ host });
+    const local: AdapterEvent[] = [];
+    a.subscribe((e) => local.push(e));
+    const file = path.join(trDir, "tr-probe.txt");
+    const { sessionId } = await a.createSession({ cwd: trDir, permMode: "full" });
+    await a.sendTurn({ sessionId, text: `请运行这条命令并报告结果：echo TR-PROBE-OC > "${file}"` });
+    await waitSessionsDone(local, [sessionId]);
+    expect(existsSync(file)).toBe(true); // 工具真执行
+    const transcript = await a.readTranscript(sessionId);
+    for (const ev of transcript) expect(() => transcriptEventSchema.parse(ev)).not.toThrow(); // 形状全过 schema
+    expect(transcript.some((e) => e.role === "user" && e.text.includes("TR-PROBE-OC"))).toBe(true); // user 提问原文
+    const tool = transcript.find((e) => e.tool);
+    expect(tool).toBeDefined();
+    expect(tool!.tool!.name.length).toBeGreaterThan(0);
+    expect(tool!.tool!.summary.length).toBeGreaterThan(0);
+    expect(transcript.some((e) => e.role === "assistant" && e.text.length > 0)).toBe(true); // assistant 回复在场
     await a.dispose(); // 引用归零停 server
   });
 

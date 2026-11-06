@@ -81,6 +81,7 @@ export function KanbanWorkspace({
             onClose: () => kanban.setActive(null),
           }}
           related={{ ...related, sessionToReq: kanban.sessionToReq }}
+          memory={kanban.memory}
         />
       ) : null}
     </section>

@@ -1,5 +1,8 @@
-// 用途：CliHost seam 单测 —— command 分发（经 AdapterRouter）、事件聚合、未支持 CLI 报错、shutdown 拒绝新命令并 dispose 全部 adapter
-import { describe, expect, it } from "vitest";
+// 用途：CliHost seam 单测 —— command 分发（经 AdapterRouter）、事件聚合、未支持 CLI 报错、shutdown 拒绝新命令并 dispose 全部 adapter；run-once/cancel-run-once 命令路由（#29 C5 演进）
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CliHost, type HostCommand } from "./cli-host";
 import { FakeAdapter } from "../fake-adapter";
 import type { AdapterEvent } from "@kanban/ipc-schema";
@@ -49,6 +52,20 @@ describe("CliHost seam（C5）", () => {
     expect(h2.events!.every((e) => e.type === "session_status")).toBe(true);
   });
 
+  it("readTranscript 命令（#28）：按 sessionId 路由，返回双视角剧本（user 提问 + 助手文本 + 工具标注）；未知会话报错", async () => {
+    const { host } = makeHost();
+    const s1 = await host.command({ kind: "createSession", init: { cwd: "C:\\demo", cli: "fake" } });
+    await host.command({ kind: "sendTurn", sessionId: s1.sessionId!, text: "拆类型" });
+    await new Promise((r) => setTimeout(r, 4000)); // 等 DEFAULT 脚本完整走完（SystemClock 实时推进）
+    const r = await host.command({ kind: "readTranscript", sessionId: s1.sessionId! });
+    expect(r.transcript).toBeDefined();
+    const transcript = r.transcript!;
+    expect(transcript.some((e) => e.role === "user" && e.text === "拆类型")).toBe(true);
+    expect(transcript.some((e) => e.role === "assistant" && e.text.length > 0)).toBe(true);
+    expect(transcript.some((e) => e.tool?.name === "Bash")).toBe(true);
+    await expect(host.command({ kind: "readTranscript", sessionId: "nope" })).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
+  });
+
   it("未知会话命令报 E_SESSION_NOT_FOUND", async () => {
     const { host } = makeHost();
     await expect(host.command({ kind: "sendTurn", sessionId: "nope", text: "x" })).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
@@ -93,6 +110,45 @@ describe("CliHost seam（C5）", () => {
     // dispose 后原会话不可用
     await expect(host.command({ kind: "readHistory", sessionId: "any" })).rejects.toMatchObject({ code: "E_INTERNAL" });
     expect(adapters.length).toBeGreaterThan(0);
+  });
+});
+
+describe("CliHost run-once 命令（C5 演进，#29）", () => {
+  /** fake CLI（node.exe 直连；KANBAN_CLAUDE_BIN 指向 node.exe 走真实解析链） */
+  const FAKE_CLI = path.join(import.meta.dirname, "../../tests/fixtures/fake-cli.mjs");
+  let cwd: string;
+
+  beforeAll(() => {
+    cwd = mkdtempSync(path.join(tmpdir(), "kb-host-runonce-"));
+    process.env.KANBAN_CLAUDE_BIN = process.execPath;
+  });
+
+  afterAll(() => {
+    rmSync(cwd, { recursive: true, force: true });
+    delete process.env.KANBAN_CLAUDE_BIN;
+  });
+
+  it("run-once 命令：worker 协议内路由执行，结果经 runOnce 字段回传", { timeout: 20_000 }, async () => {
+    const { host } = makeHost();
+    const r = await host.command({ kind: "run-once", runId: "h-1", cli: "claude", args: [FAKE_CLI, "ok", "H1"], cwd });
+    expect(r.runOnce).toMatchObject({ status: "completed", exitCode: 0 });
+    expect(r.runOnce!.stdout).toContain("fake-out:H1");
+  });
+
+  it("cancel-run-once 命令：终结进行中执行（cancelled）；未知 runId no-op 不报错", { timeout: 20_000 }, async () => {
+    const { host } = makeHost();
+    const p = host.command({ kind: "run-once", runId: "h-2", cli: "claude", args: [FAKE_CLI, "sleep", "60000"], cwd });
+    await host.command({ kind: "cancel-run-once", runId: "h-2" });
+    expect((await p).runOnce).toMatchObject({ status: "cancelled" });
+    await expect(host.command({ kind: "cancel-run-once", runId: "nope" })).resolves.toBeDefined();
+  });
+
+  it("shutdown：终止进行中的 run-once（cancelled 收口）并拒绝新命令", { timeout: 20_000 }, async () => {
+    const { host } = makeHost();
+    const p = host.command({ kind: "run-once", runId: "h-3", cli: "claude", args: [FAKE_CLI, "sleep", "60000"], cwd });
+    await host.shutdown({ reason: "test" });
+    expect((await p).runOnce).toMatchObject({ status: "cancelled" });
+    await expect(host.command({ kind: "run-once", runId: "h-4", cli: "claude", args: [FAKE_CLI, "ok"], cwd })).rejects.toMatchObject({ code: "E_INTERNAL" });
   });
 });
 

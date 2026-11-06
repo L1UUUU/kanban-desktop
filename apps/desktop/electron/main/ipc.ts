@@ -3,13 +3,16 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import {
   ipcRequestSchema,
+  memoryRequestSchema,
   type IpcRequest,
   type IpcResult,
+  type MemoryResult,
   type SessionRow,
 } from "@kanban/ipc-schema";
 import { AdapterError, detectSkillConflicts, resolveUserClaudeDir, type CliAdapter } from "@kanban/cli-host";
 import { TrackerEngine, formatRequirementId, type Cli, type NormalizedEvent, type TrackerChange } from "@kanban/tracker";
 import { detectDirIdentity } from "./git-identity";
+import { type MemoryService } from "./memory-service";
 import type { PtyHost } from "./pty-host";
 import type { ProjectStore } from "./project-store";
 import type { SessionStore } from "./session-store";
@@ -33,6 +36,8 @@ export interface IpcDeps {
   isShuttingDown?(): boolean;
   /** #21（spec #15 E 节）：用户级 Claude 基准目录解析（CLAUDE_CONFIG_DIR 优先，否则 ~/.claude）；仅 session:create cli=claude 的同名 skill 检测用。缺省读 process.env + os.homedir，测试注入固定目录 */
   resolveUserClaudeDir?(): string;
+  /** #35（spec #27 J 节）：memory 面（kanban:delete 需求删除级联清理）；index.ts 经 openMemoryService 装配注入，缺省无 memory 数据可清理（旧测试/降级装配） */
+  memory?: MemoryService;
 }
 
 // CLI 显示名（新建会话默认标题「新会话 · {名}」，原型 §3.6）
@@ -291,7 +296,11 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
       return { ok: true };
     }
     case "kanban:delete": {
-      if (!deps.engine.tracker.req(req.requirementId)) return requirementNotFound(req.requirementId);
+      const r = deps.engine.tracker.req(req.requirementId);
+      if (!r) return requirementNotFound(req.requirementId);
+      // #35（spec #27 J 节 US22）：需求删除级联清理 memory 数据（批次/待审与已忽略候选/总结与 proposed/需求目录），
+      // accepted/edited 知识保留；置于墓碑事件前——清理抛错时需求仍在、用户可重试删除，不产生永不可达的孤儿 memory 数据
+      deps.memory?.deleteRequirementData(req.requirementId, r.projectId);
       processAndEmit(deps, guiEvent(`delete:${req.requirementId}`, {
         kind: "delete",
         source: "gui-delete",
@@ -329,8 +338,9 @@ function nowIso(): string {
 }
 
 /** 应用侧 cli 名（sessions 表：fake/codex/claude/opencode/pty）→ tracker CLIS（claude-code/codex/opencode/pty）；
- *  fake 演示链路的观察信号由 FakeAdapter 以 claude-code 口径上报，故同映射到 claude-code */
-const TRACKER_CLI_BY_APP: Record<string, Cli> = {
+ *  fake 演示链路的观察信号由 FakeAdapter 以 claude-code 口径上报，故同映射到 claude-code；
+ *  #31 起 memory 装配（index.ts）复用本映射把关联会话 cli 归一为 tracker 口径 */
+export const TRACKER_CLI_BY_APP: Record<string, Cli> = {
   fake: "claude-code",
   codex: "codex",
   claude: "claude-code",
@@ -426,4 +436,56 @@ function summarizeIssues(issues: readonly { path: PropertyKey[]; message: string
 /** #21：用户级 Claude 基准目录缺省解析（生产路径：CLAUDE_CONFIG_DIR 优先，否则 ~/.claude；测试经 deps.resolveUserClaudeDir 注入） */
 function defaultUserClaudeDir(): string {
   return resolveUserClaudeDir(process.env, homedir());
+}
+
+// ============ #31 memory:ipc 通道（spec #27 H 节，对齐 kanban:ipc 模式：单通道 + Main 入站 zod 强制校验 + 业务拒绝 ok:false+reason） ============
+
+/** memory:ipc 路由依赖（MemoryService 由 index.ts 经 openMemoryService 装配注入） */
+export interface MemoryIpcDeps {
+  memory: MemoryService;
+  /** 退出序列门闸（true=正在退出，拒绝新请求；缺省恒 false 供测试） */
+  isShuttingDown?(): boolean;
+}
+
+/** 处理一条 memory:ipc 入站请求：zod 强制校验 → 退出门闸 → 八通道路由（业务拒绝直达调用方，不新增全局错误码） */
+export async function handleMemoryIpc(deps: MemoryIpcDeps, raw: unknown): Promise<MemoryResult> {
+  const parsed = memoryRequestSchema.safeParse(raw);
+  if (!parsed.success) {
+    return { ok: false, reason: "invalid-request", detail: summarizeIssues(parsed.error.issues) };
+  }
+  if (deps.isShuttingDown?.()) {
+    return { ok: false, reason: "shutting-down", detail: "应用正在退出，已停止接收新请求" };
+  }
+  const req = parsed.data;
+  switch (req.channel) {
+    case "memory:extract": {
+      const r = deps.memory.extract(req.requirementId);
+      return r.ok ? { ok: true, started: true, batchId: r.batchId } : r;
+    }
+    case "memory:cancel": {
+      // #32：取消管线已接线（异步等待整批落定）
+      const r = await deps.memory.cancel(req.requirementId);
+      return r.ok ? { ok: true, cancelled: true } : r;
+    }
+    case "memory:reviewCandidate": {
+      const r = deps.memory.reviewCandidate(req.candidateId, req.action, req.edit);
+      return r.ok ? { ok: true, candidate: r.candidate } : r;
+    }
+    case "memory:resolveSummary": {
+      return deps.memory.resolveSummary(req.requirementId, req.choice);
+    }
+    case "memory:requirementMemory": {
+      return deps.memory.requirementMemory(req.requirementId);
+    }
+    case "memory:projectMemory": {
+      return deps.memory.projectMemory(req.projectId, req.query);
+    }
+    case "memory:editAccepted": {
+      const r = deps.memory.editAccepted(req.candidateId, { claim: req.claim, scope: req.scope });
+      return r.ok ? { ok: true, candidate: r.candidate } : r;
+    }
+    case "memory:editSummary": {
+      return deps.memory.editSummary(req.requirementId, req.content);
+    }
+  }
 }

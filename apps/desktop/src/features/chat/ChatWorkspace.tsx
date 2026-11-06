@@ -22,6 +22,7 @@ export function ChatWorkspace({
   kanban,
   onOpenRequirement,
   onSetView,
+  memory,
 }: {
   transport: ChatTransport | null;
   /** 项目控制器（App 层创建，TopBar 与侧栏共享状态） */
@@ -31,14 +32,16 @@ export function ChatWorkspace({
   /** 暴露 controller（测试驱动用；生产不传） */
   onController?: (controller: ChatController) => void;
   sidebarFooter?: ReactNode;
-  /** 当前视图（#18：chat=聊天区，kanban=看板；组件常挂，切换不卸载会话/终端控制器） */
-  view?: "chat" | "kanban";
+  /** 当前视图（#18：chat=聊天区，kanban=看板；#34 增 memory=记忆视图；组件常挂，切换不卸载会话/终端控制器） */
+  view?: "chat" | "kanban" | "memory";
   /** 看板控制器（App 层创建常驻；view=kanban 时中央渲染看板） */
   kanban?: KanbanController | null;
   /** 卡片点击挂点（#19 详情滑出面板；本票不接） */
   onOpenRequirement?: (card: RequirementCardRow) => void;
   /** #20：跨视图跳转（面板「跳转」→ 聊天；侧栏 REQ 徽标 → 看板）；App 层 setView 注入 */
   onSetView?(v: "chat" | "kanban"): void;
+  /** #34：记忆视图中央区节点（view=memory 时渲染；App 层注入，chat 模块不依赖 memory feature） */
+  memory?: ReactNode;
 }) {
   const controller = useChatController(transport, demoCwd ?? null);
   const terminals = useTerminals(transport, controller);
@@ -129,6 +132,9 @@ export function ChatWorkspace({
             },
           }}
         />
+      ) : view === "memory" ? (
+        // #34：记忆视图中央区（节点由 App 层注入；本组件只负责槽位，控制器常挂不受切换影响）
+        memory
       ) : active && active.cli === "pty" ? (
         <TerminalWorkspace session={active} manager={terminals.manager} onKill={terminals.kill} />
       ) : (

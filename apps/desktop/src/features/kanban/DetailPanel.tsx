@@ -1,8 +1,10 @@
-// 用途：需求详情滑出面板（#19，原型一致项 4/5）—— 看板右侧滑出：标题行内编辑（kanban:rename，事件流保证重启不回退）/ uncertain 提示条 +「确认当前阶段」（= setStage 当前阶段）/ 五段阶段修正条（含当前依据展示 skill·CLI·证据等级·时间；manual 显示手动修正）/ 删除需求 + 二次确认弹层；关联会话区为 RelatedSessionsArea 挂点（#20 填充）
+// 用途：需求详情滑出面板（#19，原型一致项 4/5）—— 看板右侧滑出：标题行内编辑（kanban:rename，事件流保证重启不回退）/ uncertain 提示条 +「确认当前阶段」（= setStage 当前阶段）/ 五段阶段修正条（含当前依据展示 skill·CLI·证据等级·时间；manual 显示手动修正）/ 删除需求 + 二次确认弹层；关联会话区为 RelatedSessionsArea 挂点（#20 填充）；需求经验区为 MemoryArea 挂点（#33 填充，挂关联会话区之后）
 import { useState } from "react";
 import type { KanbanStageInput, RequirementCardRow, StageBasisWire } from "@kanban/ipc-schema";
 import { KANBAN_COLUMNS, cliLabel, formatDetailBasis } from "./columns";
+import { MemoryArea } from "./MemoryArea";
 import { RelatedSessionsArea, type RelatedSessionsAreaProps } from "./RelatedSessionsArea";
+import type { RequirementMemoryController } from "./use-requirement-memory";
 
 /** 面板动作面（use-kanban 控制器提供；全部经 kanban:* IPC 落事件流，变更经 tracker 推送回流） */
 export interface DetailActions {
@@ -32,11 +34,14 @@ export function DetailPanel({
   card,
   actions,
   related,
+  memory,
 }: {
   card: RequirementCardRow;
   actions: DetailActions;
   /** #20：关联会话区数据与动作（会话列表/关联已有候选/跳转/建会话）；缺省时关联区保持占位形态 */
   related?: Omit<RelatedSessionsAreaProps, "card">;
+  /** #33：需求记忆控制器（需求经验区数据源与动作；缺省时该区保持占位形态） */
+  memory?: RequirementMemoryController | null;
 }) {
   // 行内标题草稿：外部标题变化（rename 回流/再水化）在渲染期同步回输入框（React 调整态模式，不用 effect）
   const [title, setTitle] = useState(card.title);
@@ -85,7 +90,8 @@ export function DetailPanel({
           >
             <h3 className="mb-2 text-sm font-semibold">删除需求「{card.title}」？</h3>
             <p className="mb-3.5 text-xs leading-relaxed text-muted-foreground">
-              仅删除需求卡片与全部会话关联；会话本身、聊天历史与事件日志保留，不受影响。此操作不可撤销。
+              仅删除需求卡片与全部会话关联；会话本身、聊天历史与事件日志保留，不受影响。
+              已接受/已编辑的项目知识保留；需求总结与待审候选一并删除。此操作不可撤销。
             </p>
             <div className="flex justify-end gap-2">
               <button
@@ -186,6 +192,8 @@ export function DetailPanel({
           </section>
           {/* 关联会话区（#20：列表/关联已有/新建会话由 related 注入 RelatedSessionsArea） */}
           <RelatedSessionsArea card={card} {...(related ?? {})} />
+          {/* 需求经验区（#33：提取/批次卡/候选审核由 memory 注入 MemoryArea，挂关联会话区之后） */}
+          <MemoryArea card={card} memory={memory} sessions={related?.sessions} />
           {/* 需求信息 + 删除 */}
           <section className="mt-auto flex flex-col gap-2">
             <h5 className="text-[11px] tracking-wide text-muted-foreground">需求</h5>

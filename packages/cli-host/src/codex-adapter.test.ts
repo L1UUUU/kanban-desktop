@@ -1,4 +1,7 @@
 // 用途：CodexAdapter 协议映射单测 —— FakeRpc 手动注入通知/服务端请求，断言 C1 事件映射、审批三态、终文自愈、忙态排队、interrupt 幂等、进程退出报错（不依赖真实 codex）
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { rmSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { CodexAdapter, type CodexRpcClientLike } from "./codex-adapter";
 import type { AdapterEvent, ChatEvent } from "@kanban/ipc-schema";
@@ -437,5 +440,114 @@ describe("CodexAdapter：adoptSession 与跨进程恢复（#13）", () => {
     await expect(ctx.adapter.sendTurn({ sessionId: "s-adopt", text: "暗号是什么？" })).resolves.toBeUndefined();
     expect(ctx.rpc.callsOf("turn/start").length).toBe(1);
     expect(ctx.chat("s-adopt").some((e) => e.type === "turn_started")).toBe(true);
+  });
+});
+
+describe("CodexAdapter：readTranscript 双视角（#28）", () => {
+  const NATIVE = "th-tr";
+  /** 预置 thread/read 原生历史：completed turn（userMessage+agentMessage+commandExecution+fileChange）+ interrupted turn */
+  function seedTranscriptHistory(rpc: ReturnType<typeof makeAdapter>["rpc"]): void {
+    rpc.responses["thread/read"] = {
+      thread: {
+        id: NATIVE,
+        turns: [
+          {
+            id: "turn-1",
+            status: "completed",
+            items: [
+              { id: "u1", type: "userMessage", content: [{ type: "text", text: "请实现 X 并跑测试" }] },
+              { id: "a1", type: "agentMessage", text: "收到，我先看代码。" },
+              { id: "cmd1", type: "commandExecution", command: "pnpm vitest run", status: "completed", exitCode: 0, aggregatedOutput: "ok", durationMs: 12 },
+              { id: "fc1", type: "fileChange", status: "completed", changes: [{ path: "src/a.ts" }, { path: "src/b.ts" }], durationMs: 5 },
+              { id: "a2", type: "agentMessage", text: "完成。" },
+            ],
+          },
+          { id: "turn-2", status: "interrupted", items: [{ id: "a3", type: "agentMessage", text: "被打断的输出" }] },
+        ],
+      },
+    };
+  }
+
+  /** 写 rollout 落盘文件（真实 ~/.codex/sessions 行序形态：event_msg 双视角 + response_item 工具） */
+  function writeRollout(file: string): void {
+    const lines = [
+      { timestamp: "2026-11-05T01:00:00.000Z", type: "session_meta", payload: { session_id: NATIVE, cwd: CWD } },
+      { timestamp: "2026-11-05T01:00:01.000Z", type: "turn_context", payload: { turn_id: "t1", cwd: CWD } },
+      { timestamp: "2026-11-05T01:00:02.000Z", type: "event_msg", payload: { type: "user_message", message: "请实现 X 并跑测试", images: [], local_images: [] } },
+      { timestamp: "2026-11-05T01:00:03.000Z", type: "event_msg", payload: { type: "agent_message", message: "收到，我先看代码。", phase: "commentary", memory_citation: null } },
+      {
+        timestamp: "2026-11-05T01:00:04.000Z",
+        type: "response_item",
+        payload: { type: "custom_tool_call", id: "ctc_1", status: "completed", call_id: "call_1", name: "exec", input: "await tools.shell_command({command:'pnpm vitest run'})" },
+      },
+      { timestamp: "2026-11-05T01:00:05.000Z", type: "response_item", payload: { type: "custom_tool_call_output", call_id: "call_1", output: [] } },
+      { timestamp: "2026-11-05T01:00:06.000Z", type: "event_msg", payload: { type: "agent_message", message: "完成。", phase: "final_answer", memory_citation: null } },
+      // 噪音行：developer 注入的 user response_item 不入 user 视角（event_msg.user_message 才是用户发言）
+      { timestamp: "2026-11-05T01:00:07.000Z", type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "<recommended_plugins>环境注入</recommended_plugins>" }] } },
+    ];
+    writeFileSync(file, lines.map((l) => JSON.stringify(l)).join("\n") + "\n", "utf8");
+  }
+
+  it("主路径 rollout 落盘解析：user/assistant/工具全形态（thread/read 只拿 path，不 resume、不发 turn）", async () => {
+    const rolloutFile = path.join(tmpdir(), `kb-cx-rollout-${Date.now()}.jsonl`);
+    writeRollout(rolloutFile);
+    const ctx = makeAdapter();
+    ctx.rpc.responses["thread/read"] = { thread: { id: NATIVE, path: rolloutFile, turns: [] } };
+    await ctx.adapter.adoptSession({ sessionId: "s-tr", nativeSessionId: NATIVE, cwd: CWD });
+    const transcript = await ctx.adapter.readTranscript("s-tr");
+    expect(transcript).toEqual([
+      { role: "user", text: "请实现 X 并跑测试" },
+      { role: "assistant", text: "收到，我先看代码。" },
+      { role: "assistant", text: "", tool: { name: "exec", summary: "await tools.shell_command({command:'pnpm vitest run'})" } },
+      { role: "assistant", text: "完成。" },
+    ]);
+    // 只读保证：仅 thread/read（includeTurns），无 thread/resume、无 turn/start
+    expect(ctx.rpc.callsOf("thread/read").length).toBe(1);
+    expect((ctx.rpc.callsOf("thread/read")[0] as { includeTurns?: boolean }).includeTurns).toBe(true);
+    expect(ctx.rpc.callsOf("thread/resume").length).toBe(0);
+    expect(ctx.rpc.callsOf("turn/start").length).toBe(0);
+    rmSync(rolloutFile, { force: true });
+  });
+
+  it("回退：rollout 不可用（无 path）→ thread/read turns 映射（工具按归档条目，interrupted turn 事件在场）", async () => {
+    const ctx = makeAdapter();
+    seedTranscriptHistory(ctx.rpc); // thread 无 path
+    await ctx.adapter.adoptSession({ sessionId: "s-tr", nativeSessionId: NATIVE, cwd: CWD });
+    const transcript = await ctx.adapter.readTranscript("s-tr");
+    expect(transcript).toEqual([
+      { role: "user", text: "请实现 X 并跑测试" },
+      { role: "assistant", text: "收到，我先看代码。" },
+      { role: "assistant", text: "", tool: { name: "commandExecution", summary: "pnpm vitest run" } },
+      { role: "assistant", text: "", tool: { name: "fileChange", summary: "src/a.ts, src/b.ts" } },
+      { role: "assistant", text: "完成。" },
+      { role: "assistant", text: "被打断的输出" },
+    ]);
+    expect(ctx.rpc.callsOf("thread/resume").length).toBe(0);
+    expect(ctx.rpc.callsOf("turn/start").length).toBe(0);
+  });
+
+  it("本进程会话同样从原生历史拉取（权威源与本地日志无关）", async () => {
+    const ctx = makeAdapter();
+    ctx.rpc.responses["thread/read"] = {
+      thread: { id: "th-1", turns: [{ id: "t1", status: "completed", items: [{ id: "u1", type: "userMessage", content: "只回复：好的" }] }] },
+    };
+    const { sessionId } = await ctx.adapter.createSession({ cwd: CWD });
+    const transcript = await ctx.adapter.readTranscript(sessionId);
+    expect(transcript).toEqual([{ role: "user", text: "只回复：好的" }]);
+  });
+
+  it("未 materialized：includeTurns 失败回退无参 read，空转剧本不报错", async () => {
+    const ctx = makeAdapter();
+    ctx.rpc.failReadIncludeTurns = true;
+    ctx.rpc.responses["thread/read"] = { thread: { id: NATIVE } };
+    await ctx.adapter.adoptSession({ sessionId: "s-tr", nativeSessionId: NATIVE, cwd: CWD });
+    const transcript = await ctx.adapter.readTranscript("s-tr");
+    expect(transcript).toEqual([]);
+    expect(ctx.rpc.callsOf("thread/read").length).toBe(2); // includeTurns 失败 → 无参重试
+  });
+
+  it("未知会话 → E_SESSION_NOT_FOUND", async () => {
+    const ctx = makeAdapter();
+    await expect(ctx.adapter.readTranscript("nope")).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
   });
 });

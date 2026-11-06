@@ -1,12 +1,17 @@
-// 用途：preload 桥接的 renderer 侧 transport 工厂 —— 出站开发态 zod 校验（spec E：Renderer 出站 dev 校验，生产零开销）+ chat/terminal/tracker 事件订阅
+// 用途：preload 桥接的 renderer 侧 transport 工厂 —— 出站开发态 zod 校验（spec E：Renderer 出站 dev 校验，生产零开销）+ chat/terminal/tracker/memory 事件订阅
 import {
   adapterEventSchema,
   ipcRequestSchema,
+  memoryEventSchema,
+  memoryRequestSchema,
   terminalEventSchema,
   trackerChangeSchema,
   type AdapterEvent,
   type IpcRequest,
   type IpcResult,
+  type MemoryEventWire,
+  type MemoryRequest,
+  type MemoryResult,
   type TerminalEvent,
   type TrackerChangeWire,
 } from "@kanban/ipc-schema";
@@ -18,6 +23,10 @@ export interface ChatTransport {
   onTerminalEvent(handler: (event: TerminalEvent) => void): () => void;
   /** tracker 变更订阅（#18 看板实时刷新：requirement_created/stage_changed/session_linked/... 推送载荷） */
   onTrackerEvent(handler: (change: TrackerChangeWire) => void): () => void;
+  /** #33：memory:ipc 请求（提取/取消/审核/总结处置/需求一次读；可选——未接的旧 fake 由消费方降级占位） */
+  invokeMemory?(req: MemoryRequest): Promise<MemoryResult>;
+  /** #33：memory 事件订阅（batch-status 批次状态 / chunk-progress 段进度） */
+  onMemoryEvent?(handler: (event: MemoryEventWire) => void): () => void;
 }
 
 /** 从 window.api（contextBridge 暴露）构造 transport；桥接不可用（如 jsdom 测试）返回 null */
@@ -58,6 +67,20 @@ export function createWindowTransport(): ChatTransport | null {
           }
         }
         handler(change);
+      }),
+    invokeMemory: async (req) => {
+      if (import.meta.env.DEV) memoryRequestSchema.parse(req);
+      return api.invokeMemory(req);
+    },
+    onMemoryEvent: (handler) =>
+      api.onMemoryEvent((event: MemoryEventWire) => {
+        if (import.meta.env.DEV) {
+          const parsed = memoryEventSchema.safeParse(event);
+          if (!parsed.success) {
+            console.warn("[kanban] 入站 memory 事件不符合 schema", parsed.error.issues);
+          }
+        }
+        handler(event);
       }),
   };
 }

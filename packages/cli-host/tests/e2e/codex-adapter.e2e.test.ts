@@ -8,6 +8,7 @@ import { defineAdapterContractTests, createCollector } from "../../src/adapter.c
 import { resolveCodexExe, readCodexVersion } from "../../src/codex/exe";
 import { probeProtocol } from "../../src/codex/protocol-probe";
 import type { AdapterEvent, ChatEvent, PermMode } from "@kanban/ipc-schema";
+import { transcriptEventSchema } from "@kanban/ipc-schema";
 
 const E2E = process.env.KANBAN_E2E === "1";
 
@@ -155,6 +156,23 @@ describe.skipIf(!E2E)("CodexAdapter 真实集成（env-gated）", () => {
         if (j !== i) expect(text).not.toContain(marks[j]); // 无串扰
       }
     }
+  });
+
+  /* ---------------- readTranscript：thread/read 只读双视角（#28 验收：user 提问 + 工具调用历史） ---------------- */
+  it("readTranscript：读取含 user 提问与工具调用的原生历史（thread/read 只读，不 resume 不发 turn），断言 role/text/tool 形状", async () => {
+    const sid = await permSession("full");
+    const file = path.join(workdir, "tr-probe.txt");
+    await adapter.sendTurn({ sessionId: sid, text: `请运行这条命令并报告结果：echo TR-PROBE-CODEX > "${file}"` });
+    await driveIdle();
+    expect(existsSync(file)).toBe(true); // 工具真执行
+    const transcript = await adapter.readTranscript(sid);
+    for (const ev of transcript) expect(() => transcriptEventSchema.parse(ev)).not.toThrow(); // 形状全过 schema
+    expect(transcript.some((e) => e.role === "user" && e.text.includes("TR-PROBE-CODEX"))).toBe(true); // user 提问原文
+    const tool = transcript.find((e) => e.tool);
+    expect(tool).toBeDefined();
+    expect(tool!.tool!.name.length).toBeGreaterThan(0);
+    expect(tool!.tool!.summary.length).toBeGreaterThan(0);
+    expect(transcript.some((e) => e.role === "assistant" && e.text.length > 0)).toBe(true); // assistant 回复在场
   });
 
   /* ---------------- 模型可用性回退（model/list 不可信，poc-1 发现 2） ---------------- */

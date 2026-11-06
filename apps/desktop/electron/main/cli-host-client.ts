@@ -1,56 +1,11 @@
-// 用途：Main 侧 CliHost 托管客户端 —— utilityProcess fork worker（ADR-0001 形态）+ Windows Job Object 绑定（t0-01 验证策略）+ CliAdapter 远程代理（Renderer/路由无感托管形态）
+// 用途：Main 侧 CliHost 托管客户端 —— utilityProcess fork worker（ADR-0001 形态）+ Windows Job Object 绑定（t0-01 验证策略）+ CliAdapter 远程代理（Renderer/路由无感托管形态）+ run-once 一次性执行桥（#29 C5 演进）
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { AdapterEvent, ChatEvent } from "@kanban/ipc-schema";
+import type { AdapterEvent, ChatEvent, TranscriptEvent } from "@kanban/ipc-schema";
 import { utilityProcess, type UtilityProcess } from "electron";
-import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "@kanban/cli-host";
-
-/** KILL_ON_JOB_CLOSE Job guard：等宿主(main)死亡后退出 → 句柄关 → OS 终止 job 内全部 CLI 进程（t0-01 T1 实证的 PowerShell 等价实现；ASCII-only 防 PS5.1 ANSI 解析坑） */
-const JOB_GUARD_PS = [
-  "param(",
-  "  [Parameter(Mandatory = $true)][int]$MemberPid,",
-  "  [Parameter(Mandatory = $true)][int]$TargetPid,",
-  "  [Parameter(Mandatory = $true)][string]$JobName",
-  ")",
-  "$ErrorActionPreference = 'Stop'",
-  "$src = @'",
-  "using System;",
-  "using System.Runtime.InteropServices;",
-  "public static class JobGuardNative {",
-  "  [DllImport(\"kernel32.dll\", CharSet = CharSet.Unicode, SetLastError = true)]",
-  "  public static extern IntPtr CreateJobObject(IntPtr a, string n);",
-  "  [DllImport(\"kernel32.dll\", SetLastError = true)]",
-  "  public static extern bool SetInformationJobObject(IntPtr h, int c, ref JOBOBJECT_EXTENDED_LIMIT_INFORMATION i, int cb);",
-  "  [DllImport(\"kernel32.dll\", SetLastError = true)]",
-  "  public static extern bool AssignProcessToJobObject(IntPtr h, IntPtr p);",
-  "  [DllImport(\"kernel32.dll\", SetLastError = true)]",
-  "  public static extern IntPtr OpenProcess(uint a, bool i, int pid);",
-  "  [DllImport(\"kernel32.dll\", SetLastError = true)]",
-  "  public static extern int WaitForSingleObject(IntPtr h, int ms);",
-  "  [StructLayout(LayoutKind.Sequential)]",
-  "  public struct IO_COUNTERS { public ulong R, W, O, RT, WT, OT; }",
-  "  [StructLayout(LayoutKind.Sequential)]",
-  "  public struct JOBOBJECT_BASIC_LIMIT_INFORMATION { public long PUT, JUT; public uint LF; public UIntPtr MWS, XWS; public uint APL; public UIntPtr AF; public int PC, SC; }",
-  "  [StructLayout(LayoutKind.Sequential)]",
-  "  public struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION { public JOBOBJECT_BASIC_LIMIT_INFORMATION B; public IO_COUNTERS IO; public UIntPtr PM, JM, PP, PJ; }",
-  "}",
-  "'@",
-  "Add-Type -TypeDefinition $src",
-  "$job = [JobGuardNative]::CreateJobObject([IntPtr]::Zero, $JobName)",
-  "if ($job -eq [IntPtr]::Zero) { exit 1 }",
-  "$info = New-Object JobGuardNative+JOBOBJECT_EXTENDED_LIMIT_INFORMATION",
-  "$info.B.LimitFlags = 0x2000 # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE",
-  "$size = [System.Runtime.InteropServices.Marshal]::SizeOf([type][JobGuardNative+JOBOBJECT_EXTENDED_LIMIT_INFORMATION])",
-  "if (-not [JobGuardNative]::SetInformationJobObject($job, 9, [ref]$info, $size)) { exit 1 }",
-  "$member = [JobGuardNative]::OpenProcess(0x0101, $false, $MemberPid)",
-  "if ($member -eq [IntPtr]::Zero) { exit 1 }",
-  "if (-not [JobGuardNative]::AssignProcessToJobObject($job, $member)) { exit 1 }",
-  "$target = [JobGuardNative]::OpenProcess(0x0010, $false, $TargetPid)", // SYNCHRONIZE
-  "if ($target -eq [IntPtr]::Zero) { exit 0 }",
-  "[void][JobGuardNative]::WaitForSingleObject($target, -1)",
-].join("\n");
+import { AdapterError, JOB_GUARD_PS, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type RunOnceResult, type SendTurnInput } from "@kanban/cli-host";
 
 export interface CliHostClientOptions {
   /** worker bundle 绝对路径（out/main/cli-host-worker.js） */
@@ -131,6 +86,12 @@ export class CliHostClient implements CliAdapter {
     return r.events ?? [];
   }
 
+  async readTranscript(sessionId: string): Promise<TranscriptEvent[]> {
+    // #28：双视角历史经 worker 命令往返（Main → cli-host adapter，记忆提取管线的读取入口）
+    const r = (await this.command({ kind: "readTranscript", sessionId })) as { transcript: TranscriptEvent[] };
+    return r.transcript ?? [];
+  }
+
   async resume(sessionId: string): Promise<void> {
     await this.command({ kind: "resume", sessionId });
   }
@@ -167,6 +128,17 @@ export class CliHostClient implements CliAdapter {
     } finally {
       this.proc.kill();
     }
+  }
+
+  /** 一次性执行（#29 C5 演进，spec #27 C 节）：worker 内 spawn 直连 CLI 进程（自动落入 Job Object；提取引擎的 Claude headless 临时进程载体） */
+  async runOnce(input: { runId: string; cli: string; args: string[]; cwd: string; stdin?: string; timeoutMs?: number }): Promise<RunOnceResult> {
+    const r = (await this.command({ kind: "run-once", ...input })) as { runOnce: RunOnceResult };
+    return r.runOnce;
+  }
+
+  /** 取消进行中的一次性执行（终结为 cancelled；未在执行则 no-op） */
+  async cancelRunOnce(runId: string): Promise<void> {
+    await this.command({ kind: "cancel-run-once", runId });
   }
 
   subscribe(handler: (event: AdapterEvent) => void): () => void {
@@ -232,6 +204,3 @@ export class CliHostClient implements CliAdapter {
     }
   }
 }
-
-/** 供测试/降级路径写 guard 脚本（显式导出脚本常量以便断言 ASCII-only） */
-export { JOB_GUARD_PS as JOB_GUARD_SCRIPT };

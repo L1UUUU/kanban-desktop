@@ -521,6 +521,61 @@ describe("OpenCodeAdapter：interrupt / 死亡 / 恢复", () => {
   });
 });
 
+describe("OpenCodeAdapter：readTranscript 双视角（#28）", () => {
+  it("断开会话按需拉起 server + message API 产出 user/assistant/工具三形态（GET /session/{id}/message）", async () => {
+    const ctx = makeAdapter();
+    await ctx.adapter.adoptSession({ sessionId: "s-tr", nativeSessionId: "ses_old", cwd: CWD, permMode: "auto" });
+    expect(ctx.host.serverOf(CWD)).toBeUndefined(); // 收养时无 server
+    const transcript = await ctx.adapter.readTranscript("s-tr");
+    expect(transcript).toEqual([]); // 首次拉起（空历史）
+    expect(ctx.host.acquired.at(-1)).toMatchObject({ cwd: CWD, ownerKey: "s-tr" }); // 按需拉起实证
+    const server = ctx.server(CWD);
+    server.history = [
+      {
+        info: { id: "msg_u1", role: "user", time: { created: 1 } },
+        parts: [{ id: "prt_u1", type: "text", text: "请实现 X 并跑测试" }],
+      },
+      {
+        info: { id: "msg_a1", role: "assistant", parentID: "u0", time: { created: 2 } },
+        parts: [
+          { id: "prt_a1", type: "text", text: "收到，我先跑测试。" },
+          { id: "tool_a1", type: "tool", tool: "bash", state: { status: "completed", input: { command: "pnpm vitest run" }, output: "ok", time: { start: 1, end: 2 } } },
+          { id: "prt_a2", type: "text", text: "完成。" },
+        ],
+      },
+    ];
+    const again = await ctx.adapter.readTranscript("s-tr");
+    expect(again).toEqual([
+      { role: "user", text: "请实现 X 并跑测试" },
+      { role: "assistant", text: "收到，我先跑测试。" },
+      { role: "assistant", text: "", tool: { name: "bash", summary: "pnpm vitest run" } },
+      { role: "assistant", text: "完成。" },
+    ]);
+    const call = server.apiCalls.find((c) => c.method === "GET" && c.path === `/session/ses_old/message?limit=500`);
+    expect(call).toBeDefined();
+  });
+
+  it("live 会话同样走 message API（原生权威源，与本地事件日志无关）", async () => {
+    const ctx = makeAdapter();
+    const { sessionId, nativeSessionId: nativeId } = await ctx.adapter.createSession({ cwd: CWD });
+    ctx.server(CWD).history = [
+      { info: { id: "msg_u1", role: "user" }, parts: [{ type: "text", text: "你好" }] },
+      { info: { id: "msg_a1", role: "assistant" }, parts: [{ type: "text", text: "你好，世界" }] },
+    ];
+    const transcript = await ctx.adapter.readTranscript(sessionId);
+    expect(transcript).toEqual([
+      { role: "user", text: "你好" },
+      { role: "assistant", text: "你好，世界" },
+    ]);
+    void nativeId;
+  });
+
+  it("未知会话 → E_SESSION_NOT_FOUND", async () => {
+    const ctx = makeAdapter();
+    await expect(ctx.adapter.readTranscript("nope")).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
+  });
+});
+
 describe("OpenCodeAdapter：/command 路由与 SkillObservation", () => {
   it("命中已知 command → POST /session/{id}/command（arguments 必填空对象串）+ self_reported；不走 prompt_async", async () => {
     const ctx = makeAdapter();
@@ -576,6 +631,11 @@ function makeContractAdapter() {
     let approvalMsgId: string | null = null;
     server.onPrompt = (nativeId, text) => {
       turnSeq += 1;
+      // 用户输入落账（真实 server 将 prompt 存为 user message；readTranscript 的 user 视角来源）
+      server.history.push({
+        info: { id: `msg_u${turnSeq}`, role: "user", time: { created: Date.now() } },
+        parts: [{ id: `prt_u${turnSeq}`, type: "text", text }],
+      });
       if (text.startsWith("审批")) {
         approvalMsgId = `msg_a${turnSeq}`;
         server.emit("message.part.updated", toolPartFrame(nativeId, approvalMsgId, `tool_a${turnSeq}`, { status: "pending", input: { command: "echo probe" } }));

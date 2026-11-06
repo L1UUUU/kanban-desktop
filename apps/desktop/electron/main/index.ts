@@ -5,14 +5,22 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import * as nodePty from "node-pty";
-import { appInfoSchema, shutdownNoticeSchema, terminalEventSchema, trackerChangeSchema } from "@kanban/ipc-schema";
+import {
+  appInfoSchema,
+  memoryEventSchema,
+  shutdownNoticeSchema,
+  terminalEventSchema,
+  trackerChangeSchema,
+  type MemoryEventWire,
+} from "@kanban/ipc-schema";
 import { AdapterRouter, createDesktopAdapterFactory, type CliAdapter } from "@kanban/cli-host";
 import { TrackerEngine, type TrackerChange } from "@kanban/tracker";
 import { defaultConfig, loadConfig, saveConfig, type AppConfig } from "./config";
 import { createAdapterEventHandler } from "./adapter-events";
 import { CliHostClient } from "./cli-host-client";
 import { SQLITE_ENTRY, openDatabase } from "./db";
-import { handleIpc, type IpcDeps } from "./ipc";
+import { handleIpc, handleMemoryIpc, TRACKER_CLI_BY_APP, type IpcDeps } from "./ipc";
+import { openMemoryService } from "./memory-service";
 import { createPtyHost } from "./pty-host";
 import { ProjectStore } from "./project-store";
 import { SessionStore } from "./session-store";
@@ -24,7 +32,8 @@ function createHostedAdapter(appConfig: AppConfig): CliAdapter {
   const workerPath = join(__dirname, "cli-host-worker.js");
   if (existsSync(workerPath)) {
     try {
-      return new CliHostClient({ workerPath, dataDir, codexExe: appConfig.cliExe.codex, claudeExe: appConfig.cliExe.claude, opencodeExe: appConfig.cliExe.opencode, fullDisposeWaitMs: appConfig.shutdown.graceMs });
+      // log：Job guard 失败等治理事件不再静默（#29 复盘：guard 脚本缺陷曾长期无感知）
+      return new CliHostClient({ workerPath, dataDir, codexExe: appConfig.cliExe.codex, claudeExe: appConfig.cliExe.claude, opencodeExe: appConfig.cliExe.opencode, fullDisposeWaitMs: appConfig.shutdown.graceMs, log: (k, d) => console.error(`[cli-host:${k}] ${d}`) });
     } catch (e) {
       console.error(`[cli-host] utilityProcess 托管不可用，回退进程内：${e instanceof Error ? e.message : String(e)}`);
     }
@@ -97,7 +106,50 @@ app.whenReady().then(async () => {
   // 启动探测：全部项目目录存在性落库（missing 标记，工单 #7 验收第 1 条）
   projects.refreshStatuses();
   // CliHost 托管 adapter（utilityProcess 优先；config 手动覆盖 exe + env 开关在工厂内生效）
+  // —— #32 起先于 memory 装配：提取双桥（readTranscript/runOnce）经它接线
   adapter = createHostedAdapter(appConfig);
+
+  // #31 memory 面装配（spec #27 A/C 节）：打开库即对账（running 批次→failed 等四规则，崩溃窗口收敛不锁死需求）；
+  // dataRoot=<userData>/memory（D 节布局根，亦是提取临时 cwd 根）；需求关联会话/标题/项目归属/存在性由 Main 查 tracker 后传入（memory 不依赖 tracker）
+  // #32 提取双桥：readTranscript 经 CliAdapter 契约（托管/进程内皆有）；runOnce/cancelRunOnce 仅 utilityProcess 托管形态具备
+  //（进程内回退无该能力——extract 落 cli-unavailable 业务拒绝，C5 降级路径如实声明边界）
+  const sendMemoryEvent = (event: MemoryEventWire): void => {
+    memoryEventSchema.parse(event);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("memory:event", event);
+    }
+  };
+  const hostedAdapter = adapter instanceof CliHostClient ? adapter : null;
+  // 需求当前关联会话查询（两闭包同形遍历的共享形状）：按 kind 过滤收集，structured 附加 CLI 名（pty 侧仅取 sessionId）
+  const listLinkedSessions = (
+    requirementId: string,
+    kind: "structured" | "pty",
+  ): Array<{ sessionId: string; cli: string }> => {
+    const out: Array<{ sessionId: string; cli: string }> = [];
+    for (const [sessionId, reqId] of trackerEngine.tracker.sessionToReq) {
+      if (reqId !== requirementId) continue;
+      const s = sessions.get(sessionId);
+      if (s && s.kind === kind) out.push({ sessionId, cli: TRACKER_CLI_BY_APP[s.cli] ?? "claude-code" });
+    }
+    return out;
+  };
+  const listLinkedStructuredSessions = (requirementId: string): Array<{ sessionId: string; cli: string }> =>
+    listLinkedSessions(requirementId, "structured");
+  const listLinkedPtySessions = (requirementId: string): Array<{ sessionId: string }> =>
+    listLinkedSessions(requirementId, "pty").map(({ sessionId }) => ({ sessionId }));
+  const memoryService = openMemoryService({
+    db,
+    dataRoot: join(app.getPath("userData"), "memory"),
+    listLinkedStructuredSessions,
+    listLinkedPtySessions,
+    getRequirementProjectId: (requirementId) => trackerEngine.tracker.req(requirementId)?.projectId ?? null,
+    getRequirementTitle: (requirementId) => trackerEngine.tracker.req(requirementId)?.title ?? null,
+    requirementExists: (requirementId) => trackerEngine.tracker.req(requirementId) != null,
+    readTranscriptBridge: (sessionId) => adapter.readTranscript(sessionId),
+    runOnceBridge: hostedAdapter ? (input) => hostedAdapter.runOnce(input) : undefined,
+    cancelRunOnceBridge: hostedAdapter ? (runId) => hostedAdapter.cancelRunOnce(runId) : undefined,
+    emitMemoryEvent: sendMemoryEvent,
+  }).service;
 
   // Adapter 事件流：出站校验 + 会话状态落库 + SkillObservation 进 tracker 落库（#9）→ 转发 renderer；窗口不在时静默丢弃转发
   // #17：tracker 变更出站过 schema 校验后经 tracker:event 转发 renderer（看板事件驱动刷新；与 chat:event/terminal:event 同模式）
@@ -167,6 +219,8 @@ app.whenReady().then(async () => {
     pty: ptyHost,
     sessions,
     graceMs: appConfig.shutdown.graceMs,
+    // #32（spec #27 C 节）：退出序列第 7 步停止 memory 提取（running 批次 → cancelled；adapter/PTY 后、DB 关闭前）
+    memory: memoryService,
     notifyShutdown: (reason) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("app:shutdown", shutdownNoticeSchema.parse({ reason }));
@@ -192,6 +246,8 @@ app.whenReady().then(async () => {
     sessions,
     // #17：kanban:* 通道经 TrackerEngine 落事件流；变更推送与事件泵共用 sendTrackerChange（tracker:event）
     engine: trackerEngine,
+    // #35（spec #27 J 节）：kanban:delete 需求删除级联清理该需求 memory 数据（知识保留、需求级记录清理）
+    memory: memoryService,
     emitTrackerChange: sendTrackerChange,
     pickDirectory,
     getCurrentProjectId: () => appConfig.currentProjectId,
@@ -216,6 +272,10 @@ app.whenReady().then(async () => {
     }),
   );
   ipcMain.handle("kanban:ipc", (_event, raw: unknown) => handleIpc(deps, raw));
+  // #31：memory:ipc 单通道（入站 zod 强制校验 + 业务拒绝 ok:false+reason，spec #27 H 节）
+  ipcMain.handle("memory:ipc", (_event, raw: unknown) =>
+    handleMemoryIpc({ memory: memoryService, isShuttingDown: () => shutdown.isShuttingDown() }, raw),
+  );
 
   createWindow();
 });

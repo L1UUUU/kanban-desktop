@@ -37,9 +37,10 @@
 | 位置 | 后缀 | runner / vitest project | 环境 | 现有内容 |
 |---|---|---|---|---|
 | 各包 `src/**`（紧邻被测源码） | `*.test.ts` / `*.test.tsx` | vitest | 见下行环境映射 | A 类密封测试 |
-| `packages/cli-host/tests/e2e/` | `*.e2e.test.ts` | vitest（单 project） | node | claude / codex / opencode / lifecycle 四件套 |
-| `apps/desktop/tests/e2e/` | `*.e2e.test.ts` | vitest node project | node | conpty.e2e.test.ts |
-| `apps/desktop/e2e/` | `*.spec.ts` | Playwright | Electron 构建产物（out/） | 9 个整机 spec |
+| `packages/cli-host/tests/e2e/` | `*.e2e.test.ts` | vitest（单 project） | node | claude / codex / opencode / lifecycle 四件套 + run-once-claude / run-once-job |
+| `apps/desktop/tests/`（根） | `*.test.ts` | vitest node project | node | memory-ipc.test.ts（IPC 集成，默认跑）+ memory-fixture.ts（共享装配，非测试文件） |
+| `apps/desktop/tests/e2e/` | `*.e2e.test.ts` | vitest node project | node | conpty.e2e.test.ts + memory.e2e.test.ts |
+| `apps/desktop/e2e/` | `*.spec.ts` | Playwright | Electron 构建产物（out/） | 11 个整机 spec |
 
 环境映射靠目录不靠文件内声明：
 
@@ -59,10 +60,10 @@ Playwright（`apps/desktop/playwright.config.ts`）：testDir `./e2e`，workers 
 
 | 变量 | 作用位置 | 语义 | 性质 |
 |---|---|---|---|
-| `KANBAN_E2E` | 全部 5 个 B 类文件（cli-host 四件套 + desktop conpty） | `=== "1"` 才跑；否则 `describe.skipIf` 整套显示 skipped | **B 类主开关** |
+| `KANBAN_E2E` | 全部 8 个 B 类文件（cli-host：四件套 + run-once-claude/run-once-job；desktop：conpty + memory） | `=== "1"` 才跑；否则 `describe.skipIf` 整套显示 skipped | **B 类主开关** |
 | `KANBAN_PROTOCOL_PROBE` | `packages/cli-host/tests/e2e/codex-adapter.e2e.test.ts` 内「协议探针」套 | `!== "1"` 时该子套 skip；叠加在 `KANBAN_E2E` 之上的第二道细粒度开关 | 附属（细粒度） |
-| `KANBAN_REAL_E2E` | `apps/desktop/e2e/kanban-real.spec.ts` | `=== "1"` 才跑真实最小集（需本机三 CLI 已装已认证） | C 类门禁 |
-| `KANBAN_DISABLE_CLAUDE` | 7 个演示型 Playwright spec（fake-chat、kanban、lifecycle、pty、projects、acceptance-screenshots、kanban-acceptance-screenshots） | `"1"` 时禁用真实 claude，回落 Fake 演示模式 | launch env（非 skip 门禁） |
+| `KANBAN_REAL_E2E` | `apps/desktop/e2e/kanban-real.spec.ts`、`apps/desktop/e2e/memory-real.spec.ts` | `=== "1"` 才跑真实最小集（需本机 CLI 已装已认证） | C 类门禁 |
+| `KANBAN_DISABLE_CLAUDE` | 8 个演示型 Playwright spec（fake-chat、kanban、lifecycle、pty、projects、memory、acceptance-screenshots、kanban-acceptance-screenshots） | `"1"` 时禁用真实 claude，回落 Fake 演示模式 | launch env（非 skip 门禁） |
 | `KANBAN_DISABLE_OPENCODE` | 同上 | `"1"` 时禁用真实 opencode，回落 Fake 演示模式 | launch env（非 skip 门禁） |
 | `KANBAN_E2E_DEBUG` | cli-host 四件套内的调试日志 | 非空时向 stderr 输出调试日志 | 调试开关（非门禁） |
 
@@ -76,15 +77,15 @@ Playwright（`apps/desktop/playwright.config.ts`）：testDir `./e2e`，workers 
 
 | 级别 | 命令 | 实际展开 | 跑什么 |
 |---|---|---|---|
-| 根 | `pnpm test` | `pnpm -r test` | 4 包 vitest 全量：A 类执行，B 类显示 skipped |
-| 根 | `pnpm test:e2e` | `pnpm --filter @kanban/desktop test:e2e` | **C 类**：Playwright 9 spec（先 electron-vite build 再 playwright test） |
+| 根 | `pnpm test` | `pnpm -r test` | 5 包 vitest 全量：A 类执行，B 类显示 skipped |
+| 根 | `pnpm test:e2e` | `pnpm --filter @kanban/desktop test:e2e` | **C 类**：Playwright 11 spec（先 electron-vite build 再 playwright test） |
 | 根 | `pnpm typecheck` | `pnpm -r typecheck` | 各包 `tsc --noEmit`（含 tests/ 目录） |
 | 根 | `pnpm lint` | `oxlint apps packages` | oxlint（范围含新 tests/ 目录） |
 | 包（cli-host） | `pnpm --filter @kanban/cli-host test` | 包内 `vitest run` | cli-host A 类 + B 类 skipped |
-| 包（cli-host） | `KANBAN_E2E=1 pnpm --filter @kanban/cli-host exec vitest run tests/e2e` | vitest run tests/e2e | **B 类**：三 CLI 真实集成（花 token，可选细粒度 `KANBAN_PROTOCOL_PROBE=1`） |
+| 包（cli-host） | `KANBAN_E2E=1 pnpm --filter @kanban/cli-host exec vitest run tests/e2e` | vitest run tests/e2e | **B 类**：三 CLI 真实集成 + run-once（claude headless 冒烟 / Job Object 覆盖；花 token，可选细粒度 `KANBAN_PROTOCOL_PROBE=1`） |
 | desktop | `pnpm --filter @kanban/desktop test` | 包内 `vitest run` | renderer（jsdom）+ node 双 project；B 类 skipped |
 | desktop | `pnpm --filter @kanban/desktop test:e2e` | `electron-vite build && playwright test` | **C 类**：整机 Playwright |
-| desktop | `KANBAN_E2E=1 pnpm --filter @kanban/desktop exec vitest run tests/e2e` | vitest run tests/e2e | **B 类**：conpty 真实 ConPTY 冒烟（零 token） |
+| desktop | `KANBAN_E2E=1 pnpm --filter @kanban/desktop exec vitest run tests/e2e` | vitest run tests/e2e | **B 类**：conpty 真实 ConPTY 冒烟（零 token）+ memory 真实 claude headless 提取（花 token；claude exe 不可解析时跳过） |
 
 双 e2e 目录对照（`apps/desktop` 下两个 e2e 目录，不要混淆）：
 
@@ -109,7 +110,7 @@ include 均已通配（`packages/cli-host/vitest.config.ts`、`apps/desktop/vite
 1. 文件放所属包 `tests/e2e/`（cli-host → `packages/cli-host/tests/e2e/`，desktop → `apps/desktop/tests/e2e/`）；
 2. 命名 `*.e2e.test.ts`；
 3. 文件头门禁：`const E2E = process.env.KANBAN_E2E === "1";` + `describe.skipIf(!E2E)("套名", ...)`；
-4. 导入走包内相对路径：cli-host 侧 `../../src/...`，desktop 侧 `../../electron/main/...`（现有 5 个文件均为此形态）；
+4. 导入走包内相对路径：cli-host 侧 `../../src/...`，desktop 侧 `../../electron/main/...`（现有 8 个文件均为此形态；memory.e2e 经同包 `../memory-fixture` 共享装配间接引用，fixture 内即此形态）；
 5. 完成后 `pnpm test` 应看到该文件以 skipped 列出（验证被 include 收到）。
 
 ## poc/ 出界声明

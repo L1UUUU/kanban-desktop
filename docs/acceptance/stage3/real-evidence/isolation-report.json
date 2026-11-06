@@ -1,0 +1,62 @@
+{
+  "runAt": "2026-11-06T13:48:16.965Z",
+  "fixture": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-s3-real-user-FDwvwD",
+  "ignoredClaimHead": "",
+  "devHistories": [
+    {
+      "file": "C:\\Users\\liuy\\.claude\\projects\\C--Users-liuy-AppData-Local-Temp-kb-s3-real-repo-4eGwBL-kb-s3-real-proj\\0b69e049-28f7-43c7-8821-86074fb0c149.jsonl",
+      "cli": "claude"
+    },
+    {
+      "file": "C:\\Users\\liuy\\.codex\\sessions\\2026\\11\\06\\rollout-2026-11-06T21-25-09-01a1b108-c4f3-7c70-b503-1d5bc4305e84.jsonl",
+      "cli": "codex"
+    }
+  ],
+  "checks": [
+    {
+      "at": "重启前后（跨批次① 与两次应用生命周期） 2026-11-06T13:48:14.905Z",
+      "isolated": true,
+      "details": [
+        {
+          "file": "C:\\Users\\liuy\\.claude\\projects\\C--Users-liuy-AppData-Local-Temp-kb-s3-real-repo-4eGwBL-kb-s3-real-proj\\0b69e049-28f7-43c7-8821-86074fb0c149.jsonl",
+          "unchanged": true
+        },
+        {
+          "file": "C:\\Users\\liuy\\.codex\\sessions\\2026\\11\\06\\rollout-2026-11-06T21-25-09-01a1b108-c4f3-7c70-b503-1d5bc4305e84.jsonl",
+          "unchanged": true
+        }
+      ]
+    },
+    {
+      "at": "批次② 后 2026-11-06T13:48:16.955Z",
+      "isolated": true,
+      "details": [
+        {
+          "file": "C:\\Users\\liuy\\.claude\\projects\\C--Users-liuy-AppData-Local-Temp-kb-s3-real-repo-4eGwBL-kb-s3-real-proj\\0b69e049-28f7-43c7-8821-86074fb0c149.jsonl",
+          "unchanged": true
+        },
+        {
+          "file": "C:\\Users\\liuy\\.codex\\sessions\\2026\\11\\06\\rollout-2026-11-06T21-25-09-01a1b108-c4f3-7c70-b503-1d5bc4305e84.jsonl",
+          "unchanged": true
+        }
+      ]
+    }
+  ],
+  "extractionTranscripts": [
+    {
+      "file": "C:\\Users\\liuy\\.claude\\projects\\C--Users-liuy-AppData-Local-Temp-kb-s3-real-user-FDwvwD-memory-31a06c9e-e231-4df7-8e2f-12363dfacc63-extract-tmp-56be9945-17c5-49bc-9601-8e563fcd2f8b\\1fc90295-0ed5-409b-904f-893097b29a92.jsonl",
+      "sessionId": "1fc90295-0ed5-409b-904f-893097b29a92",
+      "cwdDir": "C--Users-liuy-AppData-Local-Temp-kb-s3-real-user-FDwvwD-memory-31a06c9e-e231-4df7-8e2f-12363dfacc63-extract-tmp-56be9945-17c5-49bc-9601-8e563fcd2f8b"
+    },
+    {
+      "file": "C:\\Users\\liuy\\.claude\\projects\\C--Users-liuy-AppData-Local-Temp-kb-s3-real-user-FDwvwD-memory-31a06c9e-e231-4df7-8e2f-12363dfacc63-extract-tmp-56be9945-17c5-49bc-9601-8e563fcd2f8b\\84d9a43b-b42b-4692-b46b-addef69f099b.jsonl",
+      "sessionId": "84d9a43b-b42b-4692-b46b-addef69f099b",
+      "cwdDir": "C--Users-liuy-AppData-Local-Temp-kb-s3-real-user-FDwvwD-memory-31a06c9e-e231-4df7-8e2f-12363dfacc63-extract-tmp-56be9945-17c5-49bc-9601-8e563fcd2f8b"
+    },
+    {
+      "file": "C:\\Users\\liuy\\.claude\\projects\\C--Users-liuy-AppData-Local-Temp-kb-s3-real-user-FDwvwD-memory-31a06c9e-e231-4df7-8e2f-12363dfacc63-extract-tmp-70ca86e5-3f7a-4eef-93a3-a0f04ab247a1\\9d11cd9d-043c-4ea3-a152-f8c22a07bf47.jsonl",
+      "sessionId": "9d11cd9d-043c-4ea3-a152-f8c22a07bf47",
+      "cwdDir": "C--Users-liuy-AppData-Local-Temp-kb-s3-real-user-FDwvwD-memory-31a06c9e-e231-4df7-8e2f-12363dfacc63-extract-tmp-70ca86e5-3f7a-4eef-93a3-a0f04ab247a1"
+    }
+  ]
+}
