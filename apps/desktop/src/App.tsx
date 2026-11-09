@@ -10,6 +10,9 @@ import { useKanban } from "./features/kanban/use-kanban";
 import { MemoryEntryButton, MemoryWorkspace } from "./features/memory/MemoryWorkspace";
 import { createWindowMemoryTransport, type MemoryTransport } from "./features/memory/memory-transport";
 import { useMemory } from "./features/memory/use-memory";
+import { DiffEntryButton, DiffWorkspace } from "./features/diff/DiffWorkspace";
+import { createWindowDiffTransport, type DiffTransport } from "./features/diff/diff-transport";
+import { useWorkspaceDiff } from "./features/diff/use-workspace-diff";
 import { useProjects } from "./features/projects/use-projects";
 import { createWindowTransport, type ChatTransport } from "./lib/kanban-api";
 
@@ -49,6 +52,7 @@ export function AppShell({
   sidebarFooter,
   onChatController,
   memoryTransport = null,
+  diffTransport = null,
 }: {
   transport: ChatTransport | null;
   demoCwd?: string | null;
@@ -60,14 +64,19 @@ export function AppShell({
   onChatController?: (controller: ChatController) => void;
   /** memory 传输 seam（#34；缺省经 window.api 桥接，测试注入 fake） */
   memoryTransport?: MemoryTransport | null;
+  /** diff 传输 seam（#43；缺省经 window.api 桥接，测试注入 fake） */
+  diffTransport?: DiffTransport | null;
 }) {
-  // 视图状态（#18 spec D 节 + #34 记忆视图）：chat|kanban|memory，三视图共享侧栏
-  const [view, setView] = useState<"chat" | "kanban" | "memory">("chat");
+  // 视图状态（#18 spec D 节 + #34 记忆视图 + #43 Diff 视图）：chat|kanban|memory|diff，四视图共享侧栏
+  const [view, setView] = useState<"chat" | "kanban" | "memory" | "diff">("chat");
   const projects = useProjects(transport);
   const kanban = useKanban(transport);
   // #34：memory transport 缺省走 preload 桥接（window.api 缺失时为 null → 视图降级）；useState 初始化器保证实例稳定
   const [memoryTransport_] = useState(() => memoryTransport ?? createWindowMemoryTransport());
   const memory = useMemory(memoryTransport_, projects.currentProjectId);
+  // #43：diff transport 同款缺省桥接；控制器常挂（视图切换不卸载），读取由视图挂载触发
+  const [diffTransport_] = useState(() => diffTransport ?? createWindowDiffTransport());
+  const diff = useWorkspaceDiff(diffTransport_, projects.currentProjectId);
 
   return (
     <div className="grid h-screen grid-rows-[42px_auto_1fr] overflow-hidden bg-background text-foreground">
@@ -95,6 +104,7 @@ export function AppShell({
             </section>
           )
         }
+        diff={<DiffWorkspace controller={diff} />}
         sidebarFooter={
           <>
             {/* 侧栏底部「看板」入口（原型一致项 1）：带当前项目指示，点击在看板/其余视图间切换 */}
@@ -108,6 +118,13 @@ export function AppShell({
               active={view === "memory"}
               projectName={projects.currentProject?.name ?? null}
               onToggle={() => setView((v) => (v === "memory" ? "chat" : "memory"))}
+            />
+            {/* 侧栏底部「Diff」入口（#43 第四态，原型 d1 一致项 5）：无当前项目禁用（US7/F9） */}
+            <DiffEntryButton
+              active={view === "diff"}
+              disabled={projects.currentProjectId == null}
+              projectName={projects.currentProject?.name ?? null}
+              onToggle={() => setView((v) => (v === "diff" ? "chat" : "diff"))}
             />
             {sidebarFooter}
           </>
