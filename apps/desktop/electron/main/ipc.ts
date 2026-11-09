@@ -544,7 +544,7 @@ export async function handleDiffIpc(deps: DiffIpcDeps, raw: unknown): Promise<Di
     return { ok: false, error: { code: "E_SCHEMA", message: summarizeIssues(parsed.error.issues) } };
   }
   if (deps.isShuttingDown?.()) {
-    return { ok: false, error: { code: "E_INTERNAL", message: "应用正在退出，已停止接收新请求" };
+    return { ok: false, error: { code: "E_INTERNAL", message: "应用正在退出，已停止接收新请求" } };
   }
   switch (parsed.data.channel) {
     case "diff:get": {
