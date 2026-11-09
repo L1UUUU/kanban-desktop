@@ -18,7 +18,7 @@ export { findTranscriptFile } from "./claude/transcript";
 export { OpenCodeAdapter, type OpenCodeAdapterOptions, splitModelId } from "./opencode-adapter";
 export { resolveOpenCodeExe, listOpenCodeExeCandidates } from "./opencode/exe";
 export { OpenCodeHttpServerClient, type OpenCodeServerClientLike, type OpenCodeSseEvent, type OpenCodeApiResponse } from "./opencode/client";
-export { OpenCodeServerHost, OPENCODE_PERM_CONFIG, verifyRegistryEntry, type OpenCodeServerHostLike, type OpenCodeServerHostOptions, type RegistryEntry } from "./opencode/server-host";
+export { OpenCodeServerHost, OPENCODE_PERM_CONFIG, verifyRegistryEntry, readServerRegistry, pathCompareKey, type OpenCodeServerHostLike, type OpenCodeServerHostOptions, type RegistryEntry } from "./opencode/server-host";
 export { AdapterRouter, type AdapterFactory } from "./router-adapter";
 export { CliHost, type HostCommand, type HostCommandResult, type ShutdownOptions } from "./host/cli-host";
 export { createDesktopAdapterFactory, type DesktopAdapterFactoryOptions } from "./host/desktop-adapters";

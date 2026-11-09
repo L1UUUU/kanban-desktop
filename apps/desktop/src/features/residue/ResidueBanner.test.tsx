@@ -5,10 +5,16 @@ import type { ResidueKillResult, ResidueProcess } from "@kanban/ipc-schema";
 import { AppShell } from "../../App";
 import { ResidueBanner } from "./ResidueBanner";
 
-/** 样本残留清单：一条有会话记录、一条无（防误杀默认不勾） */
+/** 样本残留清单：一条有精确会话记录、一条无（防误杀默认不勾） */
 const SAMPLE: ResidueProcess[] = [
   { pid: 18432, exePath: "C:\\npm\\@openai\\codex\\codex.exe", startedAt: "2026-11-09T01:12:00.000Z", sessionTitle: "实现 Diff 解析" },
   { pid: 19004, exePath: "C:\\npm\\opencode-ai\\opencode.exe", startedAt: null, sessionTitle: null },
+];
+
+/** 含疑似回落行的清单（P2：suspectedSessionTitle 仅展示「疑似」提示，不参与默认勾选） */
+const SAMPLE_WITH_SUSPECT: ResidueProcess[] = [
+  ...SAMPLE,
+  { pid: 19256, exePath: "C:\\npm\\@openai\\codex\\codex.exe", startedAt: null, sessionTitle: null, suspectedSessionTitle: "修复启动崩溃" },
 ];
 
 function row(pid: number): HTMLElement {
@@ -20,10 +26,10 @@ function checkbox(pid: number): HTMLInputElement {
 }
 
 describe("ResidueBanner（残留通知条）", () => {
-  it("警示条 + 进程表五列与行内容（原型 d4 必须一致项：勾选/PID/进程/启动时间/关联记录）", () => {
-    render(<ResidueBanner processes={SAMPLE} onKill={vi.fn()} onDismiss={vi.fn()} />);
+  it("警示条 + 进程表五列与行内容（原型 d4 必须一致项：勾选/PID/进程/启动时间/关联记录）；疑似回落行显示「疑似」提示且不称会话记录", () => {
+    render(<ResidueBanner processes={SAMPLE_WITH_SUSPECT} onKill={vi.fn()} onDismiss={vi.fn()} />);
     const banner = screen.getByTestId("residue-banner");
-    expect(banner.textContent).toContain("检测到 2 个疑似残留 CLI 进程");
+    expect(banner.textContent).toContain("检测到 3 个疑似残留 CLI 进程");
     expect(banner.textContent).toContain("清理前请确认它们不是你自己打开的");
     expect(screen.getByTestId("residue-table")).toBeTruthy();
     const tableHead = within(screen.getByTestId("residue-table")).getAllByRole("columnheader");
@@ -32,14 +38,16 @@ describe("ResidueBanner（残留通知条）", () => {
     expect(row(18432).textContent).toContain("codex.exe");
     expect(row(18432).textContent).toContain("会话「实现 Diff 解析」");
     expect(row(19004).textContent).toContain("无会话记录");
+    expect(row(19256).textContent).toContain("疑似上次会话「修复启动崩溃」"); // P2：回落仅「疑似」展示
     expect(screen.getByRole("button", { name: "清理选中" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "忽略本次" })).toBeTruthy();
   });
 
-  it("「无会话记录」默认不勾选（防误杀）；有会话记录默认勾选", () => {
-    render(<ResidueBanner processes={SAMPLE} onKill={vi.fn()} onDismiss={vi.fn()} />);
+  it("「无会话记录」默认不勾选（防误杀）；有会话记录默认勾选；疑似回落行默认同样不勾选（P2：同 CLI 有历史会话不等于本进程属于它）", () => {
+    render(<ResidueBanner processes={SAMPLE_WITH_SUSPECT} onKill={vi.fn()} onDismiss={vi.fn()} />);
     expect(checkbox(18432).checked).toBe(true);
     expect(checkbox(19004).checked).toBe(false);
+    expect(checkbox(19256).checked).toBe(false);
   });
 
   it("空清单不渲染任何 UI（无残留不打扰）", () => {

@@ -26,6 +26,14 @@ function collectJsonPathValues(v: unknown, out: string[]): void {
 /** 裸文本中的路径 token：Windows 绝对路径（含 UNC）与 POSIX 绝对路径；引号包裹时连引号一起匹配后剥离 */
 const RAW_PATH_RE = /(?:\\\\[A-Za-z0-9_.-]+\\[^\s"'<>|]+)|(?:"((?:[A-Za-z]:)?[\\/][^\s"<>|]+)")|((?:[A-Za-z]:)?[\\/][^\s"'<>|]+)/g;
 
+/** URL 剥除模式（scheme://... 形态；避免 //host/path 被误当 POSIX/UNC 路径，三处扫描入口共用） */
+const URL_RE = /[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'<>|]+/g;
+
+/** 剥除文本中的 URL（替换为空格） */
+function stripUrls(text: string): string {
+  return text.replace(URL_RE, " ");
+}
+
 /** 单段 token 是否算文件路径候选：含分隔符，或带扩展名（package.json、seed.txt） */
 function looksLikeFilePath(token: string): boolean {
   if (/^[A-Za-z]:$/.test(token)) return false; // 盘符裸字母（PowerShell 提示符等噪声）
@@ -36,8 +44,8 @@ function looksLikeFilePath(token: string): boolean {
 /** 从任意文本（JSON 字符串形态或命令行/输出原文）收集路径 token */
 function collectRawPathTokens(text: string, out: string[]): void {
   if (!text) return;
-  // 先剥除 URL（scheme://...），避免 //host/path 形态被误当 POSIX/UNC 路径
-  const stripped = text.replace(/[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'<>|]+/g, " ");
+  // 先剥除 URL，避免 //host/path 形态被误当 POSIX/UNC 路径
+  const stripped = stripUrls(text);
   // JSON.stringify 形态（Claude/OpenCode 摘要）里反斜杠加倍：先尝试解析回原文再扫描
   const targets: string[] = [stripped];
   if (/^[\s]*[{[]/.test(text)) {
@@ -48,7 +56,7 @@ function collectRawPathTokens(text: string, out: string[]): void {
       out.push(...jsonPaths); // 语义键值优先（无噪声）
       const restringified: string[] = [];
       collectDeepStrings(parsed, restringified); // 字符串值（含 command）再作命令扫描
-      targets.push(...restringified.map((s) => s.replace(/[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'<>|]+/g, " ")));
+      targets.push(...restringified.map(stripUrls));
     } catch {
       /* 非 JSON 走原文扫描 */
     }
@@ -107,7 +115,7 @@ export function extractToolFilePaths(event: ToolEventForExtract): string[] {
   // 相对路径补充：摘要/输出整体无绝对路径时，从原文补相对路径 token（src/foo.ts、package.json）
   if (!out.some((p) => /^[a-z]:|^\/\//.test(normalizePathForCompare(p)))) {
     for (const text of [event.argsSummary, event.output]) {
-      const stripped = text.replace(/[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'<>|]+/g, " "); // 相对兜底同样剥 URL
+      const stripped = stripUrls(text); // 相对兜底同样剥 URL
       for (const m of stripped.matchAll(RELATIVE_PATH_RE)) {
         const clean = m[0].replace(/^["']+|["',;:)]+$/g, "");
         if (clean && looksLikeFilePath(clean)) out.push(clean);
