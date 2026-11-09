@@ -1,9 +1,10 @@
-// 用途：解析真实 vendored codex.exe 路径与版本（spawn 直连目标，不经 .cmd shim；spec G 通用决策 + t0-01 实证链路）
+// 用途：解析真实 vendored codex.exe 路径与版本（spawn 直连目标，不经 .cmd shim；spec G 通用决策 + t0-01 实证链路）+ 解析链候选并集（#49 残留检测）
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { ExeNotFoundError } from "../adapter";
+import { dedupePaths, type ExeCandidateProbes } from "../exe-probes";
 
 /** 解析优先级：手动覆盖（config）→ env KANBAN_CODEX_BIN → npm 全局 vendored exe → 本地 node_modules */
 export interface CodexExeOptions {
@@ -82,4 +83,36 @@ export function readCodexVersion(exe: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** 本地 node_modules vendored exe 探测（解析链第 4 步；独立成函数供候选并集复用，失败返回 null） */
+function localVendoredExePath(): string | null {
+  try {
+    const req = createRequire(import.meta.url);
+    return vendoredExe(path.dirname(req.resolve("@openai/codex/package.json")));
+  } catch {
+    return null; // 无本地安装
+  }
+}
+
+/**
+ * codex 解析链全量候选路径并集（#49 残留检测的 exe 匹配粒度；与 resolveCodexExe 采纳条件一致：存在才收）。
+ * 顺序即解析链优先级：manualOverride → KANBAN_CODEX_BIN → npm 全局 vendored → 本地 node_modules vendored；去重。
+ */
+export function listCodexExeCandidates(
+  options: CodexExeOptions & ExeCandidateProbes & { localVendoredExe?: () => string | null } = {},
+): string[] {
+  const paths: string[] = [];
+  if (options.manualOverride && existsSync(options.manualOverride)) paths.push(options.manualOverride);
+  if (process.env.KANBAN_CODEX_BIN && existsSync(process.env.KANBAN_CODEX_BIN)) paths.push(process.env.KANBAN_CODEX_BIN);
+  try {
+    const root = (options.npmRoot ?? npmRootGlobal)();
+    const exe = vendoredExe(path.join(root, "@openai", "codex"));
+    if (exe) paths.push(exe);
+  } catch {
+    /* npm root -g 探测失败：无全局候选 */
+  }
+  const local = (options.localVendoredExe ?? localVendoredExePath)();
+  if (local) paths.push(local);
+  return dedupePaths(paths);
 }

@@ -5,5 +5,6 @@ export * from "./diff";
 export * from "./ipc";
 export * from "./kanban";
 export * from "./memory";
+export * from "./residue";
 export * from "./terminal";
 export * from "./transcript";

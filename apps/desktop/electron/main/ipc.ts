@@ -5,10 +5,14 @@ import {
   diffRequestSchema,
   ipcRequestSchema,
   memoryRequestSchema,
+  residueRequestSchema,
   type DiffResult,
   type IpcRequest,
   type IpcResult,
   type MemoryResult,
+  type ResidueProcess,
+  type ResidueResult,
+  type ResidueKillResult,
   type SessionRow,
 } from "@kanban/ipc-schema";
 import { AdapterError, detectSkillConflicts, resolveUserClaudeDir, type CliAdapter } from "@kanban/cli-host";
@@ -493,6 +497,18 @@ export async function handleMemoryIpc(deps: MemoryIpcDeps, raw: unknown): Promis
   }
 }
 
+// ============ #49 residue:ipc 通道（spec #40 D 节，对齐 memory:ipc 模式：单通道 + Main 入站 zod 强制校验 + 业务拒绝 ok:false+reason） ============
+
+/** residue:ipc 路由依赖（检测与终止由 index.ts 装配注入：检测为本次启动缓存的一次性结果，不重复探测） */
+export interface ResidueIpcDeps {
+  /** 残留检测（返回缓存清单；spec：每次启动只检测一次，不轮询） */
+  detect(): Promise<ResidueProcess[]>;
+  /** 确认式逐 pid 终止（用户显式触发；无自动清理路径） */
+  kill(pids: number[]): Promise<ResidueKillResult[]>;
+  /** 退出序列门闸（true=正在退出，拒绝新请求；缺省恒 false 供测试） */
+  isShuttingDown?(): boolean;
+}
+
 // ============ #43 diff:ipc 通道（spec #40 D 节，对齐 memory:ipc 独立单通道先例：入站 zod 强制校验 + 退出门闸 + 经 project store 解析 cwd） ============
 
 /** diff:ipc 路由依赖：project store（projectId → canonicalPath）+ git-diff-service 单函数（测试注入 fixture） */
@@ -502,6 +518,23 @@ export interface DiffIpcDeps {
   readWorkspaceDiff(cwd: string): Promise<WorkspaceDiff>;
   /** 退出序列门闸（true=正在退出，拒绝新请求；缺省恒 false 供测试） */
   isShuttingDown?(): boolean;
+}
+
+/** 处理一条 residue:ipc 入站请求：zod 强制校验 → 退出门闸 → 二通道路由（业务拒绝直达调用方，不新增全局错误码） */
+export async function handleResidueIpc(deps: ResidueIpcDeps, raw: unknown): Promise<ResidueResult> {
+  const parsed = residueRequestSchema.safeParse(raw);
+  if (!parsed.success) {
+    return { ok: false, reason: "invalid-request", detail: summarizeIssues(parsed.error.issues) };
+  }
+  if (deps.isShuttingDown?.()) {
+    return { ok: false, reason: "shutting-down", detail: "应用正在退出，已停止接收新请求" };
+  }
+  switch (parsed.data.channel) {
+    case "residue:detect":
+      return { ok: true, processes: await deps.detect() };
+    case "residue:kill":
+      return { ok: true, results: await deps.kill(parsed.data.pids) };
+  }
 }
 
 /** 处理一条 diff:ipc 入站请求：zod 强制校验 → 退出门闸 → diff:get 经 project store 解析 cwd 后透传服务结果 */

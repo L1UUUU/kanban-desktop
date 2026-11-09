@@ -1,5 +1,5 @@
-// 用途：Diff 视图控制器 hook（#43，spec #40 G 节）—— transport → diff:get 一次读；进入视图（组件挂载）或切项目自动读取一次 + 手动刷新；结果归一为六态（不可用/空闲/读取中/成功/非 git 空态/错误档），视图零解析知识
-import { useCallback, useEffect, useState } from "react";
+// 用途：Diff 视图控制器 hook（#43/#47，spec #40 G/E 节）—— transport → diff:get 一次读；进入视图（组件挂载）或切项目自动读取一次 + 手动刷新；结果归一为六态（不可用/空闲/读取中/成功/非 git 空态/错误档），视图零解析知识；latest-wins（#47/F13）：请求序号守卫，并发/连续刷新与切项目后的过期响应一律丢弃，总是渲染最新一次结果
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { DiffFileRow, DiffResult } from "@kanban/ipc-schema";
 import type { DiffTransport } from "./diff-transport";
 
@@ -33,23 +33,27 @@ export function useWorkspaceDiff(transport: DiffTransport | null, projectId: str
   const [state, setState] = useState<WorkspaceDiffState>(() =>
     transport == null ? { status: "unavailable" } : projectId == null ? { status: "idle" } : { status: "loading" },
   );
+  // latest-wins 请求序号：每次发起自增，仅最新序号的响应允许落状态；依赖变化/卸载时自增使全部在途响应过期
+  const seqRef = useRef(0);
 
   const refresh = useCallback(async (): Promise<void> => {
     if (transport == null || projectId == null) return;
+    const mySeq = (seqRef.current += 1);
     setState({ status: "loading" });
     const res = await transport.invoke({ channel: "diff:get", projectId });
-    setState(toState(res));
+    if (seqRef.current === mySeq) setState(toState(res));
   }, [transport, projectId]);
 
-  // 进入视图（组件挂载）或切项目自动读取一次（spec US5）；setState 均在异步回调，use-projects/use-memory 同款形态
+  // 进入视图（组件挂载）或切项目自动读取一次（spec US5；不置 loading，沿用初始 loading 态/上一状态，#43 同款）；
+  // cleanup 自增序号使旧项目在途响应过期（latest-wins）
   useEffect(() => {
     if (transport == null || projectId == null) return;
-    let cancelled = false;
+    const mySeq = (seqRef.current += 1);
     void transport.invoke({ channel: "diff:get", projectId }).then((res) => {
-      if (!cancelled) setState(toState(res));
+      if (seqRef.current === mySeq) setState(toState(res));
     });
     return () => {
-      cancelled = true;
+      seqRef.current += 1;
     };
   }, [transport, projectId]);
 
