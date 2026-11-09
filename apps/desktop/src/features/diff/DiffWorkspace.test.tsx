@@ -156,6 +156,61 @@ describe("DiffWorkspace（视图内容）", () => {
     mountView(transport, "p-1");
     await waitFor(() => expect(screen.getByTestId("diff-empty").textContent).toContain("无未提交变更"));
   });
+
+  // ============ #47：untracked 全文 / 二进制只列名 / 已截断提示 ============
+
+  it("untracked 新文件全文展开：hunk 头 + 全新增行（绿），对齐 tracked 行级渲染", async () => {
+    const result: DiffResult = {
+      ok: true,
+      truncated: false,
+      files: [
+        {
+          path: "notes/generated.md",
+          changeType: "untracked",
+          binary: false,
+          oldPath: null,
+          additions: 2,
+          deletions: 0,
+          hunks: [{ header: "@@ -0,0 +1,2 @@", lines: [{ kind: "add", text: "# 新文件" }, { kind: "add", text: "全文第二行" }] }],
+        },
+      ],
+    };
+    const { transport } = makeTransport(() => result);
+    mountView(transport, "p-1");
+    await waitFor(() => expect(screen.getAllByTestId("diff-file-head")).toHaveLength(1));
+    expect(screen.queryByTestId("diff-line-add")).toBeNull(); // 默认收起
+    fireEvent.click(fileRow("notes/generated.md"));
+    expect(screen.getByTestId("diff-line-hunk").textContent).toBe("@@ -0,0 +1,2 @@");
+    const adds = screen.getAllByTestId("diff-line-add");
+    expect(adds[0].textContent).toBe("+# 新文件");
+    expect(adds[0].className).toContain("bg-diff-add");
+    expect(adds[1].textContent).toBe("+全文第二行");
+  });
+
+  it("untracked 二进制：标「二进制文件」不渲染内容（binary 标注优先于新文件标注）", async () => {
+    const result: DiffResult = {
+      ok: true,
+      truncated: false,
+      files: [{ path: "assets/logo.png", changeType: "untracked", binary: true, oldPath: null, hunks: null, additions: 0, deletions: 0 }],
+    };
+    const { transport } = makeTransport(() => result);
+    mountView(transport, "p-1");
+    await waitFor(() => expect(screen.getAllByTestId("diff-file-head")).toHaveLength(1));
+    const row = fileRow("assets/logo.png");
+    expect(within(row).getByTestId("diff-badge-U")).toBeTruthy();
+    expect(within(row).getByText("二进制文件")).toBeTruthy();
+    expect(within(row).queryByText("新文件（未跟踪）")).toBeNull();
+    fireEvent.click(row);
+    expect(screen.queryByTestId("diff-line-add")).toBeNull(); // 无内容渲染
+  });
+
+  it("truncated=true → 明确「已截断」提示（含配置项指引），false → 无提示", async () => {
+    const { transport } = makeTransport(() => ({ ok: true, truncated: true, files: [{ path: "a.ts", changeType: "modified", binary: false, oldPath: null, hunks: null, additions: 0, deletions: 0 }] }));
+    mountView(transport, "p-1");
+    await waitFor(() => expect(screen.getByTestId("diff-truncated")).toBeTruthy());
+    expect(screen.getByTestId("diff-truncated").textContent).toContain("已截断");
+    expect(screen.getByTestId("diff-truncated").textContent).toContain("diff.maxBytes");
+  });
 });
 
 // ============ 入口按钮（AppShell 层） ============
