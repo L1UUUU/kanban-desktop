@@ -1,6 +1,6 @@
 // 用途：ChatEvent 全成员 zod 往返测试 —— 13 成员（spec B 冻结清单）逐个合法样例等值 parse、非法形状被拒（spec Testing seam 3）
 import { describe, expect, it } from "vitest";
-import { adapterEventSchema, chatEventSchema, skillObservationSchema } from "./chat";
+import { adapterEventSchema, chatEventSchema, sessionErrorCodeSchema, skillObservationSchema } from "./chat";
 
 // 独立于实现的期望来源：spec B 的成员清单与合并键语义（itemId/partId/seq）
 const base = { sessionId: "s-1", seq: 3, at: "2026-11-05T10:00:00.000Z" };
@@ -38,7 +38,7 @@ const validSamples: Record<string, Record<string, unknown>> = {
   session_status_waiting: { ...base, type: "session_status", status: "waiting" },
   session_status_interrupted: { ...base, type: "session_status", status: "interrupted" },
   session_status_disconnected: { ...base, type: "session_status", status: "disconnected" },
-  session_error: { ...base, type: "session_error", code: "E_INTERNAL", message: "进程意外退出" },
+  session_error: { ...base, type: "session_error", code: "INTERNAL", message: "turn 失败" },
   session_exit: { ...base, type: "session_exit", exitCode: 1 },
   session_exit_with_reason: { ...base, type: "session_exit", exitCode: 0, reason: "正常退出" },
 };
@@ -67,6 +67,20 @@ describe("chatEventSchema 全成员往返（spec B 13 成员）", () => {
 
   it("session_status 枚举外取值被拒", () => {
     expect(() => chatEventSchema.parse({ ...validSamples.session_status_running, status: "paused" })).toThrow();
+  });
+
+  // #41 C1 演进：code 收紧为六成员闭枚举（AUTH_EXPIRED/SPAWN_NOT_FOUND/PROTOCOL_DISCONNECT/CLI_EXIT/INTERNAL/UNKNOWN）
+  it("session_error.code 六成员闭枚举逐个合法（round-trip 等值）", () => {
+    for (const code of sessionErrorCodeSchema.options) {
+      const sample = { ...base, type: "session_error", code, message: "m" };
+      expect(chatEventSchema.parse(sample)).toEqual(sample);
+    }
+  });
+
+  it("session_error.code 枚举外取值被拒（旧 E_* 前缀值不再合法）", () => {
+    expect(() => chatEventSchema.parse({ ...validSamples.session_error, code: "E_INTERNAL" })).toThrow();
+    expect(() => chatEventSchema.parse({ ...validSamples.session_error, code: "E_FAKE_CRASH" })).toThrow();
+    expect(() => chatEventSchema.parse({ ...validSamples.session_error, code: "" })).toThrow();
   });
 
   it("tool_completed 状态枚举外取值被拒", () => {

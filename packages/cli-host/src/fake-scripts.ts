@@ -1,5 +1,5 @@
 // 用途：FakeAdapter 演示脚本 —— 数据化 ScriptStep（可 JSON 化），行为规格对照原型 TURN_SCRIPT/APPROVAL_SCRIPT/decide()（交互文案为硬约束）
-import type { ApprovalSuggestion, SkillObservation } from "@kanban/ipc-schema";
+import type { ApprovalSuggestion, SessionErrorCode, SkillObservation } from "@kanban/ipc-schema";
 
 /** 单步脚本：driver 解释执行；approval 步暂停等待用户决定（或过期） */
 export type ScriptStep =
@@ -19,7 +19,8 @@ export type ScriptStep =
   /** SkillObservation 观察信号步（#9）：向订阅者发归一化 skill 事件（不入 chat 日志，C2 语义独立于消息流） */
   | { t: "skill"; skill: string; cli: SkillObservation["cli"]; evidenceLevel: SkillObservation["evidenceLevel"] }
   | { t: "wait"; ms: number }
-  | { t: "error"; code: string; message: string }
+  /** 错误步（#41）：code 收紧为 session_error 六成员闭枚举，直通发出（S4 错误演示的确定性入口） */
+  | { t: "error"; code: SessionErrorCode; message: string }
   | { t: "turnEnd" };
 
 /** 默认 turn：流式 → 工具运行/输出/完成 → 总结（原型 TURN_SCRIPT） */
@@ -84,10 +85,10 @@ export const EXPIRY_SCRIPT: ScriptStep[] = [
   },
 ];
 
-/** 错误分支：CLI 进程意外退出演示（明确报错、不崩溃、不重放，spec H） */
+/** 错误分支：CLI 进程意外退出演示（明确报错、不崩溃、不重放，spec H；#41 起 code 用闭枚举 CLI_EXIT） */
 export const ERROR_SCRIPT: ScriptStep[] = [
   { t: "assistant", text: "我来演示异常场景：Fake CLI 进程即将退出。" },
-  { t: "error", code: "E_FAKE_CRASH", message: "Fake CLI 进程意外退出（演示）" },
+  { t: "error", code: "CLI_EXIT", message: "Fake CLI 进程意外退出（演示）" },
 ];
 
 // C2 有效阶段 skill 集合（token 精确匹配用；硬编码于 fake 层，真实识别归各 Adapter）

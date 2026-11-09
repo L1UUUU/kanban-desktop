@@ -16,6 +16,8 @@ class FakeRpc implements CodexRpcClientLike {
   private threadN = 0;
   /** 测试钩子：thread/start 前置失败（模拟 rpc error） */
   failThreadStart: string | null = null;
+  /** 测试钩子：turn/start 前置失败（模拟 rpc error，认证失效归类的提交路径） */
+  failTurnStart: string | null = null;
   /** 测试钩子：按 method 预置响应（thread/read、thread/resume 等，adoptSession 恢复链路） */
   readonly responses: Record<string, unknown> = {};
   /** 测试钩子：thread/read includeTurns 抛错（模拟未 materialized，t0-01 发现 5） */
@@ -39,6 +41,7 @@ class FakeRpc implements CodexRpcClientLike {
       this.threadN += 1;
       return { thread: { id: `th-${this.threadN}` }, model: (params as { model?: string })?.model ?? "m0" };
     }
+    if (method === "turn/start" && this.failTurnStart) throw new Error(this.failTurnStart);
     return {}; // turn/start、turn/interrupt 等提交即回
   }
   onServerRequest(method: string, handler: (p: unknown, id: number | string) => unknown): void {
@@ -201,6 +204,50 @@ describe("CodexAdapter：turn 与流式映射", () => {
     // willRetry=true 的 error 不报（服务端重试中）
     rpc.emit("error", { threadId: "th-1", turnId: "t1", error: { message: "transient" }, willRetry: true });
     expect(chat(sessionId).filter((e) => e.type === "session_error").length).toBe(1);
+  });
+
+  it("session_error 枚举映射（#41）：error 通知认证类文本 → AUTH_EXPIRED；非认证 → INTERNAL", async () => {
+    const a = makeAdapter();
+    const { sessionId: sidA } = await a.adapter.createSession({ cwd: CWD });
+    await a.adapter.sendTurn({ sessionId: sidA, text: "x" });
+    a.rpc.emit("turn/started", { threadId: "th-1", turn: { id: "t1", status: "inProgress" } });
+    a.rpc.emit("error", { threadId: "th-1", turnId: "t1", error: { message: "Please log in with ChatGPT to continue" }, willRetry: false });
+    const errA = a.chat(sidA).find((e): e is Extract<ChatEvent, { type: "session_error" }> => e.type === "session_error");
+    expect(errA?.code).toBe("AUTH_EXPIRED");
+
+    const b = makeAdapter();
+    const { sessionId: sidB } = await b.adapter.createSession({ cwd: CWD });
+    await b.adapter.sendTurn({ sessionId: sidB, text: "x" });
+    b.rpc.emit("turn/started", { threadId: "th-1", turn: { id: "t1", status: "inProgress" } });
+    b.rpc.emit("error", { threadId: "th-1", turnId: "t1", error: { message: "model_not_found" }, willRetry: false });
+    const errB = b.chat(sidB).find((e): e is Extract<ChatEvent, { type: "session_error" }> => e.type === "session_error");
+    expect(errB?.code).toBe("INTERNAL");
+  });
+
+  it("session_error 枚举映射（#41）：failed 终态 error.message 认证类 → AUTH_EXPIRED", async () => {
+    const { rpc, adapter, chat } = makeAdapter();
+    const { sessionId } = await adapter.createSession({ cwd: CWD });
+    await adapter.sendTurn({ sessionId, text: "x" });
+    rpc.emit("turn/started", { threadId: "th-1", turn: { id: "t1", status: "inProgress" } });
+    rpc.emit("turn/completed", { threadId: "th-1", turn: { id: "t1", status: "failed", error: { message: "401 Unauthorized: ChatGPT login expired" } } });
+    const err = chat(sessionId).find((e): e is Extract<ChatEvent, { type: "session_error" }> => e.type === "session_error");
+    expect(err?.code).toBe("AUTH_EXPIRED");
+  });
+
+  it("session_error 枚举映射（#41）：turn/start 提交失败 rpc 401 → AUTH_EXPIRED；普通失败 → INTERNAL", async () => {
+    const a = makeAdapter();
+    const { sessionId: sidA } = await a.adapter.createSession({ cwd: CWD });
+    a.rpc.failTurnStart = "rpc 401: Not logged in. Please log in with ChatGPT.";
+    await a.adapter.sendTurn({ sessionId: sidA, text: "x" }).catch(() => {});
+    const errA = a.chat(sidA).find((e): e is Extract<ChatEvent, { type: "session_error" }> => e.type === "session_error");
+    expect(errA?.code).toBe("AUTH_EXPIRED");
+
+    const b = makeAdapter();
+    const { sessionId: sidB } = await b.adapter.createSession({ cwd: CWD });
+    b.rpc.failTurnStart = "rpc -32602: invalid turn input";
+    await b.adapter.sendTurn({ sessionId: sidB, text: "x" }).catch(() => {});
+    const errB = b.chat(sidB).find((e): e is Extract<ChatEvent, { type: "session_error" }> => e.type === "session_error");
+    expect(errB?.code).toBe("INTERNAL");
   });
 
   it("readHistory 返回本进程事件日志（快照=已发事件，同键同 seq）", async () => {

@@ -240,6 +240,46 @@ describe("ClaudeAdapter：turn 与流式映射", () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(ctx.stream().sentUsers).toEqual(["x"]); // 排队消息被丢弃
   });
+
+  it("认证失效协议级检测（#41）：subtype=success + is_error + api_error_status=401 → AUTH_EXPIRED（claude 2.1.317 真实 wire 形态）", async () => {
+    const ctx = makeAdapter();
+    hookRoots.push(ctx.hookDir);
+    const { sessionId } = await ctx.adapter.createSession({ cwd: CWD });
+    await ctx.adapter.sendTurn({ sessionId, text: "x" });
+    // 真实捕获：重试耗尽后 subtype 仍是 "success"，靠 is_error/api_error_status 区分（auth-samples.md）
+    ctx.stream().emit({
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      api_error_status: 401,
+      terminal_reason: "api_error",
+      result: "Failed to authenticate. API Error: 401 无效的令牌 (request id: 202611090807431834704041NFEVlSp)",
+      session_id: "native-1",
+    });
+    const err = ctx.chat(sessionId).find((e): e is Extract<ChatEvent, { type: "session_error" }> => e.type === "session_error");
+    expect(err?.code).toBe("AUTH_EXPIRED");
+    expect(err?.message).toContain("Failed to authenticate");
+    expect(ctx.chat(sessionId).some((e) => e.type === "turn_completed")).toBe(false); // 不宣称成功
+    expect(ctx.chat(sessionId).at(-1)).toMatchObject({ type: "session_status", status: "idle" });
+  });
+
+  it("session_error 枚举映射（#41）：result 非 success 认证文本 → AUTH_EXPIRED；非认证 → INTERNAL", async () => {
+    const a = makeAdapter();
+    hookRoots.push(a.hookDir);
+    const { sessionId: sidA } = await a.adapter.createSession({ cwd: CWD });
+    await a.adapter.sendTurn({ sessionId: sidA, text: "x" });
+    a.stream().emit({ type: "result", subtype: "error_during_execution", is_error: true, result: "Failed to authenticate. API Error: 401 无效的令牌", session_id: "native-1" });
+    const errA = a.chat(sidA).find((e): e is Extract<ChatEvent, { type: "session_error" }> => e.type === "session_error");
+    expect(errA?.code).toBe("AUTH_EXPIRED");
+
+    const b = makeAdapter();
+    hookRoots.push(b.hookDir);
+    const { sessionId: sidB } = await b.adapter.createSession({ cwd: CWD });
+    await b.adapter.sendTurn({ sessionId: sidB, text: "x" });
+    b.stream().emit({ type: "result", subtype: "error_max_turns", is_error: true, result: "超出轮次上限", session_id: "native-1" });
+    const errB = b.chat(sidB).find((e): e is Extract<ChatEvent, { type: "session_error" }> => e.type === "session_error");
+    expect(errB?.code).toBe("INTERNAL");
+  });
 });
 
 describe("ClaudeAdapter：stdio 审批映射", () => {

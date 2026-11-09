@@ -923,6 +923,96 @@ function makeContractAdapter() {
   return { adapter, driveIdle, chat };
 }
 
+describe("OpenCodeAdapter：session_error 枚举映射与认证失效检测（#41）", () => {
+  it("prompt_async HTTP 401 → AUTH_EXPIRED；HTTP 500 → INTERNAL", async () => {
+    const a = makeAdapter();
+    const { sessionId: sidA } = await a.adapter.createSession({ cwd: CWD });
+    a.server(CWD).apiOverride = (method, path) =>
+      method === "POST" && path.endsWith("/prompt_async") ? { status: 401, ok: false, json: { message: "invalid x-api-key" }, text: "invalid x-api-key" } : null;
+    await a.adapter.sendTurn({ sessionId: sidA, text: "x" }).catch(() => {});
+    const errA = a.chat(sidA).find((e): e is Extract<ChatEvent, { type: "session_error" }> => e.type === "session_error");
+    expect(errA?.code).toBe("AUTH_EXPIRED");
+
+    const b = makeAdapter();
+    const { sessionId: sidB } = await b.adapter.createSession({ cwd: CWD });
+    b.server(CWD).apiOverride = (method, path) =>
+      method === "POST" && path.endsWith("/prompt_async") ? { status: 500, ok: false, json: null, text: "boom" } : null;
+    await b.adapter.sendTurn({ sessionId: sidB, text: "x" }).catch(() => {});
+    const errB = b.chat(sidB).find((e): e is Extract<ChatEvent, { type: "session_error" }> => e.type === "session_error");
+    expect(errB?.code).toBe("INTERNAL");
+  });
+
+  it("prompt_async 传输不可达（server 请求失败/fetch failed）→ PROTOCOL_DISCONNECT", async () => {
+    const ctx = makeAdapter();
+    const { sessionId } = await ctx.adapter.createSession({ cwd: CWD });
+    ctx.server(CWD).apiOverride = (method, path) => {
+      if (method === "POST" && path.endsWith("/prompt_async")) {
+        throw new Error("opencode server 请求失败（POST /session/ses_1/prompt_async）：fetch failed");
+      }
+      return null;
+    };
+    await ctx.adapter.sendTurn({ sessionId, text: "x" }).catch(() => {});
+    const err = ctx.chat(sessionId).find((e): e is Extract<ChatEvent, { type: "session_error" }> => e.type === "session_error");
+    expect(err?.code).toBe("PROTOCOL_DISCONNECT");
+  });
+
+  it("command API HTTP 403 → AUTH_EXPIRED；传输异常 → PROTOCOL_DISCONNECT", async () => {
+    const a = makeAdapter();
+    const { sessionId: sidA } = await a.adapter.createSession({ cwd: CWD });
+    a.server(CWD).commands = [{ name: "deploy" }];
+    a.server(CWD).apiOverride = (method, path) =>
+      method === "POST" && path.endsWith("/command") ? { status: 403, ok: false, json: { message: "forbidden" }, text: "forbidden" } : null;
+    await a.adapter.sendTurn({ sessionId: sidA, text: "/deploy prod" });
+    const errA = await vi.waitFor(() => {
+      const e = a.chat(sidA).find((ev): ev is Extract<ChatEvent, { type: "session_error" }> => ev.type === "session_error");
+      if (!e) throw new Error("未发出 session_error");
+      return e;
+    });
+    expect(errA.code).toBe("AUTH_EXPIRED");
+
+    const b = makeAdapter();
+    const { sessionId: sidB } = await b.adapter.createSession({ cwd: CWD });
+    b.server(CWD).commands = [{ name: "deploy" }];
+    b.server(CWD).apiOverride = (method, path) => {
+      if (method === "POST" && path.endsWith("/command")) throw new Error("opencode server 请求失败（POST /session/ses_1/command）：fetch failed");
+      return null;
+    };
+    await b.adapter.sendTurn({ sessionId: sidB, text: "/deploy prod" });
+    const errB = await vi.waitFor(() => {
+      const e = b.chat(sidB).find((ev): ev is Extract<ChatEvent, { type: "session_error" }> => ev.type === "session_error");
+      if (!e) throw new Error("未发出 session_error");
+      return e;
+    });
+    expect(errB.code).toBe("PROTOCOL_DISCONNECT");
+  });
+
+  it("session.error 认证类文本 → AUTH_EXPIRED；网关类错误 → INTERNAL", async () => {
+    const a = makeAdapter();
+    const { sessionId: sidA, nativeSessionId: nativeA } = await a.adapter.createSession({ cwd: CWD });
+    await a.adapter.sendTurn({ sessionId: sidA, text: "跑" });
+    a.server(CWD).emit("session.error", { sessionID: nativeA, error: { name: "AiSdkError", message: "401 Unauthorized: API key invalid" } });
+    a.server(CWD).emit("session.idle", { sessionID: nativeA });
+    const errA = await vi.waitFor(() => {
+      const e = a.chat(sidA).find((ev): ev is Extract<ChatEvent, { type: "session_error" }> => ev.type === "session_error");
+      if (!e) throw new Error("未发出 session_error");
+      return e;
+    });
+    expect(errA.code).toBe("AUTH_EXPIRED");
+
+    const b = makeAdapter();
+    const { sessionId: sidB, nativeSessionId: nativeB } = await b.adapter.createSession({ cwd: CWD });
+    await b.adapter.sendTurn({ sessionId: sidB, text: "跑" });
+    b.server(CWD).emit("session.error", { sessionID: nativeB, error: { name: "AiSdkError", message: "gateway 500" } });
+    b.server(CWD).emit("session.idle", { sessionID: nativeB });
+    const errB = await vi.waitFor(() => {
+      const e = b.chat(sidB).find((ev): ev is Extract<ChatEvent, { type: "session_error" }> => ev.type === "session_error");
+      if (!e) throw new Error("未发出 session_error");
+      return e;
+    });
+    expect(errB.code).toBe("INTERNAL");
+  });
+});
+
 defineAdapterContractTests(
   async () => makeContractAdapter(),
   {
