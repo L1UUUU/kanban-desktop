@@ -273,3 +273,29 @@ describe("FakeAdapter 专属场景", () => {
     col.off();
   });
 });
+
+describe("FakeAdapter：S4 错误演示脚本分支与 spawn 注入（#46）", () => {
+  it.each([
+    ["认证演示", "AUTH_EXPIRED"],
+    ["找不到 CLI", "SPAWN_NOT_FOUND"],
+    ["断连演示", "PROTOCOL_DISCONNECT"],
+    ["未知错误演示", "UNKNOWN"],
+  ])("关键词「%s」→ session_error code=%s（pickScript 演示分支）", async (text, code) => {
+    const clock = new VirtualClock();
+    const adapter = new FakeAdapter({ clock });
+    const col = createCollector(adapter);
+    const { sessionId } = await adapter.createSession({ cwd: "C:\\demo" });
+    await adapter.sendTurn({ sessionId, text });
+    clock.runToIdle();
+    const err = col.chat(sessionId).find((e): e is Extract<ChatEvent, { type: "session_error" }> => e.type === "session_error");
+    expect(err?.code).toBe(code);
+    col.off();
+  });
+
+  it("failCreateFirst：前 N 次 createSession 抛 E_SPAWN_NOT_FOUND（整机 e2e 驱动侧栏 spawn 卡），其后成功", async () => {
+    const adapter = new FakeAdapter({ clock: new VirtualClock(), failCreateFirst: 1 });
+    await expect(adapter.createSession({ cwd: "C:\\demo" })).rejects.toMatchObject({ code: "E_SPAWN_NOT_FOUND" });
+    const ok = await adapter.createSession({ cwd: "C:\\demo" });
+    expect(ok.sessionId.length).toBeGreaterThan(0);
+  });
+});

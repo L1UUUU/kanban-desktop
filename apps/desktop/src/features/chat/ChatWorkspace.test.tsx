@@ -152,7 +152,7 @@ function makeTransport(
 const DEMO_CWD = join(tmpdir(), "kb-fake-demo");
 
 /** 挂载工作区（含真实 useProjects host）并暴露 controller（供测试直接驱动动作） */
-function mount(transport?: ChatTransport) {
+function mount(transport?: ChatTransport, opts?: { configPath?: string | null }) {
   const clock = new VirtualClock();
   const adapter = new FakeAdapter({ clock });
   const tr = transport ?? makeTransport(adapter);
@@ -162,7 +162,15 @@ function mount(transport?: ChatTransport) {
   };
   function Host() {
     const projects = useProjects(tr);
-    return <ChatWorkspace transport={tr} projects={projects} demoCwd={DEMO_CWD} onController={onController} />;
+    return (
+      <ChatWorkspace
+        transport={tr}
+        projects={projects}
+        demoCwd={DEMO_CWD}
+        onController={onController}
+        configPath={opts?.configPath ?? null}
+      />
+    );
   }
   render(<Host />);
   const ctl = (): ChatController => {
@@ -330,15 +338,24 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     expect(screen.getByText("已拒绝")).toBeTruthy();
   });
 
-  it("错误演示：⚠ 错误提示可见、不崩溃、可继续", async () => {
+  it("错误演示（升级 #46）：ErrorBanner 卡呈现 CLI 进程异常退出（标题+原因+动作），不崩溃、可继续", async () => {
     const t = mount();
     await t.flush();
     await act(async () => {
       send("错误演示");
     });
     t.advance();
-    expect(screen.getByText(/Fake CLI 进程意外退出/)).toBeTruthy();
+    const card = screen.getByTestId("error-card");
+    expect(card.textContent).toContain("CLI 进程异常退出");
+    expect(card.textContent).toContain("Fake CLI 进程意外退出");
+    expect(card.textContent).toContain("已产生的对话与文件修改不受影响");
+    // 旧红字一行形态（居中 ⚠ 一行）不再存在：动作按钮在卡内
+    expect(screen.getByRole("button", { name: "读取原生历史并恢复" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "知道了" })).toBeTruthy();
     expect(screen.getByText("空闲")).toBeTruthy();
+    // 「知道了」关闭错误卡（仅隐藏，不影响会话）
+    fireEvent.click(screen.getByRole("button", { name: "知道了" }));
+    expect(screen.queryByTestId("error-card")).toBeNull();
   });
 
   it("composer（一致项 6）：权限 chip 三档切换（菜单含说明文案）+ 模型选择", async () => {
@@ -880,5 +897,129 @@ describe("「＋」新建 cwd 解析（resolveSessionCwd：项目查不到不回
   it("项目查不到 + Fake：回落注入的演示 cwd；未注入则 null", () => {
     expect(resolveSessionCwd([proj], "ghost", "fake", "C:\\demo")).toBe("C:\\demo");
     expect(resolveSessionCwd([proj], "ghost", "fake", null)).toBeNull();
+  });
+});
+
+describe("会话创建失败卡（#46：session:create 失败在侧栏创建入口呈现，spec #40 F1）", () => {
+  it("spawn 失败（E_SPAWN_NOT_FOUND）：卡 3 信息结构（标题/指引/配置路径）+「重试创建」+「复制配置路径」+「知道了」", async () => {
+    const t = mount(undefined, { configPath: "C:\\UserData\\config.json" });
+    await t.flush();
+    await act(async () => {
+      t.ctl().store.setCreateFailure({
+        cli: "claude",
+        code: "E_SPAWN_NOT_FOUND",
+        message: "未找到 claude 可执行文件（已尝试：npm 全局；where）",
+        cwd: DEMO_CWD,
+        projectId: null,
+      });
+    });
+    const card = screen.getByTestId("create-error-card");
+    expect(card.textContent).toContain("找不到 CLI 程序（Claude）");
+    expect(card.textContent).toContain("确认已安装并在 PATH 中");
+    expect(card.textContent).toContain("C:\\UserData\\config.json");
+    expect(screen.getByRole("button", { name: "重试创建" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "复制配置路径" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "知道了" })).toBeTruthy();
+    // 「知道了」关闭（仅隐藏）
+    fireEvent.click(screen.getByRole("button", { name: "知道了" }));
+    expect(screen.queryByTestId("create-error-card")).toBeNull();
+  });
+
+  it("「重试创建」：以原参数重发 session:create，成功后卡消失 + 会话登记", async () => {
+    const t = mount(undefined, { configPath: "C:\\UserData\\config.json" });
+    await t.flush();
+    await act(async () => {
+      t.ctl().store.setCreateFailure({
+        cli: "claude",
+        code: "E_SPAWN_NOT_FOUND",
+        message: "未找到 claude 可执行文件（已尝试：npm 全局；where）",
+        cwd: DEMO_CWD,
+        projectId: null,
+        title: "重试的会话",
+      });
+    });
+    expect(screen.getByTestId("create-error-card")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "重试创建" }));
+    await t.flush();
+    // Fake 链路重试成功：卡消失（registerSession 清除）+ 新会话登记
+    expect(screen.queryByTestId("create-error-card")).toBeNull();
+    expect(screen.getByText("重试的会话")).toBeTruthy();
+  });
+
+  it("非 spawn 创建失败：未知卡保留 code 与 message 原文 +「复制错误详情」", async () => {
+    const t = mount();
+    await t.flush();
+    await act(async () => {
+      t.ctl().store.setCreateFailure({
+        cli: "codex",
+        code: "E_INTERNAL",
+        message: "thread/start 未返回 thread id（协议异常）",
+        cwd: DEMO_CWD,
+        projectId: null,
+      });
+    });
+    const card = screen.getByTestId("create-error-card");
+    expect(card.textContent).toContain("E_INTERNAL");
+    expect(card.textContent).toContain("thread/start 未返回 thread id（协议异常）");
+    expect(screen.getByRole("button", { name: "重试创建" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "复制错误详情" })).toBeTruthy();
+  });
+});
+
+describe("会话内错误卡五类（#46：fake 脚本分支驱动 ChatPane → ErrorBanner）", () => {
+  it("认证失效：claude 会话按 CLI 显示指引命令块 +「重试」重发最近消息 +「打开 PTY 终端」新建终端并切到终端视图", async () => {
+    const t = mount(undefined, { configPath: "C:\\UserData\\config.json" });
+    await t.flush();
+    // 建 claude（Fake 链路）会话：cli 记录为 claude → 指引命令按 claude 定制
+    await act(async () => {
+      await t.ctl().createSession("claude", { cwd: DEMO_CWD, title: "认证演示会话" });
+    });
+    await t.flush();
+    await act(async () => {
+      send("认证演示");
+    });
+    t.advance();
+    const card = screen.getByTestId("error-card");
+    expect(card.textContent).toContain("登录已失效（Claude）");
+    expect(screen.getByTestId("auth-cmd").textContent).toContain("/login");
+    // 「重试」= 重发最近一条用户消息（消息流出现第二条同文回显）
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    await t.flush();
+    t.advance();
+    expect(screen.getAllByText("认证演示").length).toBeGreaterThanOrEqual(2);
+    // 「打开 PTY 终端」= 在会话 cwd 新建终端（登录指引命令在终端内运行）
+    fireEvent.click(screen.getByRole("button", { name: "打开 PTY 终端" }));
+    await t.flush();
+    expect(screen.getAllByText(/终端 · /).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("协议断连：原因说明 + 按需重拉 server 说明 +「恢复会话」触发与恢复条同一 resumeSession 动作（D4）", async () => {
+    const t = mount();
+    await t.flush();
+    await act(async () => {
+      send("断连演示");
+    });
+    t.advance();
+    const card = screen.getByTestId("error-card");
+    expect(card.textContent).toContain("连接中断");
+    expect(card.textContent).toContain("恢复时将按需重新拉起 server");
+    // 「恢复会话」= 同一 resume 动作：readHistory 快照重建（fake 事件溯源回放）→ lastError 清除 → 卡消失
+    fireEvent.click(screen.getByRole("button", { name: "恢复会话" }));
+    await t.flush();
+    expect(screen.queryByTestId("error-card")).toBeNull();
+  });
+
+  it("未知错误：保留原始 code 与 message 原文 +「复制错误详情」", async () => {
+    const t = mount();
+    await t.flush();
+    await act(async () => {
+      send("未知错误演示");
+    });
+    t.advance();
+    const card = screen.getByTestId("error-card");
+    expect(card.textContent).toContain("未知错误");
+    expect(card.textContent).toContain("UNKNOWN");
+    expect(card.textContent).toContain("某种未覆盖的错误形态（演示）");
+    expect(screen.getByRole("button", { name: "复制错误详情" })).toBeTruthy();
   });
 });

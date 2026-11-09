@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
 import { transformHookEvents } from "@kanban/tracker";
-import { AdapterError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
+import { AdapterError, ExeNotFoundError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
 import { resolveClaudeExe } from "./claude/exe";
 import { ClaudeStreamClient, type ClaudeStreamOptions } from "./claude/client";
 import { prepareSessionHookDir, resolveHookNodeBin, tailJsonl, writeSessionSettings, type SessionHookFiles } from "./claude/hook-inject";
@@ -148,6 +148,9 @@ export class ClaudeAdapter implements CliAdapter {
       }
       this.emit(s, { type: "session_status", status: "idle" });
     } catch (e) {
+      // #46：exe 解析失败协议级映射（E_SPAWN_NOT_FOUND → renderer spawn 卡）；其余包装为创建失败
+      if (e instanceof ExeNotFoundError) throw new AdapterError("E_SPAWN_NOT_FOUND", e.message);
+      if (e instanceof AdapterError) throw e;
       throw new AdapterError("E_INTERNAL", `创建 Claude 会话失败：${e instanceof Error ? e.message : String(e)}`);
     }
     return { sessionId, nativeSessionId };

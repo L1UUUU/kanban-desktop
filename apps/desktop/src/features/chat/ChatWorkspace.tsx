@@ -5,6 +5,7 @@ import { Sidebar } from "../../components/Sidebar";
 import type { ProjectsController } from "../projects/use-projects";
 import type { ChatTransport } from "../../lib/kanban-api";
 import { ChatPane } from "./ChatPane";
+import { CreateErrorCard } from "./components/CreateErrorCard";
 import { detectMainRepoConflict } from "./conflict";
 import { resolveSessionCwd, useChatController, type ChatController } from "./use-chat";
 import { KanbanWorkspace } from "../kanban/KanbanWorkspace";
@@ -18,6 +19,7 @@ export function ChatWorkspace({
   demoCwd,
   onController,
   sidebarFooter,
+  configPath = null,
   view = "chat",
   kanban,
   onOpenRequirement,
@@ -33,6 +35,8 @@ export function ChatWorkspace({
   /** 暴露 controller（测试驱动用；生产不传） */
   onController?: (controller: ChatController) => void;
   sidebarFooter?: ReactNode;
+  /** #46：配置文件绝对路径（AppInfo 注入；spawn 失败卡「复制配置路径」数据源） */
+  configPath?: string | null;
   /** 当前视图（#18：chat=聊天区，kanban=看板；#34 增 memory=记忆视图；#43 增 diff=Diff 视图；组件常挂，切换不卸载会话/终端控制器） */
   view?: "chat" | "kanban" | "memory" | "diff";
   /** 看板控制器（App 层创建常驻；view=kanban 时中央渲染看板） */
@@ -110,6 +114,24 @@ export function ChatWorkspace({
         }}
         info={
           <>
+            {/* #46 会话创建失败卡（session:create 失败无会话视图可挂——创建入口/侧栏反馈，spec #40 F1） */}
+            {controller.createFailure ? (
+              <CreateErrorCard
+                failure={controller.createFailure}
+                configPath={configPath}
+                onRetry={() => {
+                  const f = controller.createFailure;
+                  if (!f) return;
+                  void controller.createSession(f.cli, {
+                    cwd: f.cwd,
+                    projectId: f.projectId ?? undefined,
+                    title: f.title,
+                    requirementId: f.requirementId,
+                  });
+                }}
+                onDismiss={controller.dismissCreateFailure}
+              />
+            ) : null}
             {projects.notice ? <p className="mb-1 text-warn">{projects.notice}</p> : null}
             {sidebarFooter}
           </>
@@ -148,6 +170,7 @@ export function ChatWorkspace({
           session={controller.activeSession}
           version={controller.version}
           conflictTitles={conflictTitles}
+          configPath={configPath}
           actions={{
             onSend: controller.send,
             onInterrupt: controller.interrupt,
@@ -156,6 +179,13 @@ export function ChatWorkspace({
             onResolveApproval: controller.resolveApproval,
             onResume: (sessionId) => void controller.resumeSession(sessionId),
             onDismissSkillConflict: controller.dismissSkillConflict,
+            onDismissError: (sessionId) => controller.store.clearError(sessionId),
+            // 认证失效卡「打开 PTY 终端」：在会话 cwd 新建终端（登录指引命令在终端内运行）
+            onOpenPtyTerminal: (sessionId) => {
+              const s = controller.store.getSession(sessionId);
+              if (!s?.cwd) return;
+              void terminals.create({ projectId: s.projectId, cwd: s.cwd });
+            },
           }}
         />
       )}

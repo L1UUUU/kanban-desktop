@@ -1,5 +1,5 @@
 // 用途：聊天会话视图 store —— ChatEvent 按合并键归并成每会话 items（不变量 3/4 的 renderer 侧），useSyncExternalStore 兼容（快照引用稳定）
-import type { ApprovalSuggestion, ChatEvent, PermMode, SessionRow, SessionStatus } from "@kanban/ipc-schema";
+import type { ApprovalSuggestion, ChatEvent, CliKind, PermMode, SessionRow, SessionStatus } from "@kanban/ipc-schema";
 
 /** 用户消息条目（ChatEvent 无 user 成员：renderer 发送时本地回显） */
 export interface UserItem {
@@ -38,6 +38,17 @@ export interface PendingApproval {
 
 /** #42 恢复引导条三态：idle=待恢复（无恢复进行）；resuming=恢复中（不可中断，D1）；failed=上次尝试失败（附 IPC 错误） */
 export type ResumeState = { phase: "idle" } | { phase: "resuming" } | { phase: "failed"; code: string; message: string };
+
+/** #46 会话创建失败记录（session:create 失败无会话视图可挂——挂侧栏创建入口卡；携带原参数供「重试创建」，spec #40 F1） */
+export interface CreateFailure {
+  cli: CliKind;
+  code: string;
+  message: string;
+  cwd: string;
+  projectId: string | null;
+  title?: string;
+  requirementId?: string;
+}
 
 export interface SessionView {
   sessionId: string;
@@ -84,6 +95,8 @@ export interface ChatSnapshot {
   sessions: SessionView[];
   activeId: string | null;
   version: number;
+  /** #46：最近一次会话创建失败（null=无；侧栏创建入口错误卡数据源） */
+  createFailure: CreateFailure | null;
 }
 
 let userItemSeq = 0;
@@ -91,6 +104,8 @@ let userItemSeq = 0;
 export class ChatStore {
   private sessions = new Map<string, SessionView>();
   private activeId: string | null = null;
+  /** #46：最近一次会话创建失败（无会话视图可挂） */
+  private createFailure: CreateFailure | null = null;
   private listeners = new Set<() => void>();
   private version = 0;
   private snapshot: ChatSnapshot | null = null;
@@ -98,7 +113,12 @@ export class ChatStore {
   /** useSyncExternalStore 数据源：变更间引用稳定（箭头属性保证 this 绑定） */
   getSnapshot = (): ChatSnapshot => {
     if (!this.snapshot) {
-      this.snapshot = { sessions: [...this.sessions.values()], activeId: this.activeId, version: this.version };
+      this.snapshot = {
+        sessions: [...this.sessions.values()],
+        activeId: this.activeId,
+        version: this.version,
+        createFailure: this.createFailure,
+      };
     }
     return this.snapshot;
   };
@@ -135,6 +155,8 @@ export class ChatStore {
       resumeState: { phase: "idle" },
     });
     this.activeId = meta.sessionId;
+    // #46：创建成功清除旧的创建失败卡（不残留）
+    if (this.createFailure) this.createFailure = null;
     this.changed();
   }
 
@@ -216,6 +238,27 @@ export class ChatStore {
     const s = this.sessions.get(id);
     if (!s) return;
     s.lastError = { code, message };
+    this.changed();
+  }
+
+  /** #46：清除会话错误（错误卡「知道了」动作：仅隐藏不影响会话） */
+  clearError(id: string): void {
+    const s = this.sessions.get(id);
+    if (!s || !s.lastError) return;
+    s.lastError = null;
+    this.changed();
+  }
+
+  /** #46：记录会话创建失败（session:create IPC 错误；无会话视图可挂——侧栏创建入口错误卡数据源） */
+  setCreateFailure(f: CreateFailure): void {
+    this.createFailure = f;
+    this.changed();
+  }
+
+  /** #46：清除创建失败记录（「知道了」或下次创建成功时） */
+  clearCreateFailure(): void {
+    if (!this.createFailure) return;
+    this.createFailure = null;
     this.changed();
   }
 

@@ -53,6 +53,7 @@ export function App() {
     <AppShell
       transport={transport}
       demoCwd={info?.fakeDemoCwd ?? null}
+      configPath={info?.configPath ?? null}
       shutdownNotice={shutdownNotice}
       residue={residue}
       onKillResidue={async (pids) => {
@@ -72,6 +73,7 @@ export function App() {
 export function AppShell({
   transport,
   demoCwd,
+  configPath = null,
   shutdownNotice = null,
   residue = null,
   onKillResidue,
@@ -83,6 +85,8 @@ export function AppShell({
 }: {
   transport: ChatTransport | null;
   demoCwd?: string | null;
+  /** #46：配置文件绝对路径（AppInfo 注入；spawn 失败卡「复制配置路径」数据源） */
+  configPath?: string | null;
   /** 退出序列提示文案（null=不渲染提示条） */
   shutdownNotice?: string | null;
   /** #49：残留检测结果（null=不渲染通知条） */
@@ -127,6 +131,7 @@ export function AppShell({
         transport={transport}
         projects={projects}
         demoCwd={demoCwd}
+        configPath={configPath}
         onController={onChatController}
         view={view}
         kanban={kanban}

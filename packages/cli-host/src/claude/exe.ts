@@ -2,6 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { ExeNotFoundError } from "../adapter";
 import { dedupePaths, lookupAllPathLines, type ExeCandidateProbes } from "../exe-probes";
 
 /** 解析优先级：手动覆盖（config cliExe.claude）→ env KANBAN_CLAUDE_BIN → npm 全局 bin/claude.exe → where/which 显式解析 */
@@ -65,7 +66,7 @@ export function resolveClaudeExe(options: ClaudeExeOptions = {}): string {
   const looked = fromPathLookup();
   if (looked) return looked;
   tried.push("where/which 未解析到 claude 可执行文件（.cmd shim 不采用）")
-  throw new Error(
+  throw new ExeNotFoundError(
     `未找到 claude 可执行文件（已尝试：${tried.join("；")}）。请在设置中手动指定 claude.exe 路径或设置 KANBAN_CLAUDE_BIN。`,
   );
 }

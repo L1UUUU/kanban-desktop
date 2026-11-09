@@ -323,3 +323,34 @@ describe("chat-store CLI 异常退出终态化（#13/spec H：不崩溃、不自
     expect(s.lastError).toBeNull();
   });
 });
+
+describe("chat-store 会话创建失败与错误卡数据源（#46）", () => {
+  it("setCreateFailure：记录失败（含原参数供重试创建）并进快照；clearCreateFailure 清除", () => {
+    const store = makeStore();
+    store.setCreateFailure({
+      cli: "claude",
+      code: "E_SPAWN_NOT_FOUND",
+      message: "未找到 claude 可执行文件（已尝试：where）",
+      cwd: "C:\repo",
+      projectId: "p-1",
+    });
+    expect(store.getSnapshot().createFailure).toMatchObject({ cli: "claude", code: "E_SPAWN_NOT_FOUND", projectId: "p-1" });
+    store.clearCreateFailure();
+    expect(store.getSnapshot().createFailure).toBeNull();
+  });
+
+  it("registerSession 成功登记时清除创建失败记录（新卡不残留旧失败）", () => {
+    const store = makeStore();
+    store.setCreateFailure({ cli: "claude", code: "E_SPAWN_NOT_FOUND", message: "m", cwd: "C:\repo", projectId: "p-1" });
+    store.registerSession({ sessionId: "s-2", cli: "claude", title: "新会话 · Claude", permMode: "auto", model: "默认模型" });
+    expect(store.getSnapshot().createFailure).toBeNull();
+  });
+
+  it("clearError：清除会话 lastError（错误卡「知道了」动作数据源）", () => {
+    const store = makeStore();
+    store.setError("s-1", "E_INTERNAL", "x");
+    expect(store.getSession("s-1")!.lastError).not.toBeNull();
+    store.clearError("s-1");
+    expect(store.getSession("s-1")!.lastError).toBeNull();
+  });
+});

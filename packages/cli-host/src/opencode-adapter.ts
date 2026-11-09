@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AdapterEvent, ApprovalDecision, ApprovalSuggestion, ChatEvent, ChatEventSeed, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
-import { AdapterError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
+import { AdapterError, ExeNotFoundError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
 import type { OpenCodeSseEvent, OpenCodeServerClientLike } from "./opencode/client";
 import { OpenCodeServerHost, type OpenCodeServerHostLike, type OpenCodeServerHostOptions } from "./opencode/server-host";
 import { isAuthFailureStatus, isAuthFailureText, isProtocolDisconnectText } from "./session-error";
@@ -146,6 +146,9 @@ export class OpenCodeAdapter implements CliAdapter {
     try {
       client = await this.host.acquire(init.cwd, mode, sessionId);
     } catch (e) {
+      // #46：exe 解析失败协议级映射（E_SPAWN_NOT_FOUND → renderer spawn 卡）；其余包装为创建失败
+      if (e instanceof ExeNotFoundError) throw new AdapterError("E_SPAWN_NOT_FOUND", e.message);
+      if (e instanceof AdapterError) throw e;
       throw new AdapterError("E_INTERNAL", e instanceof Error ? e.message : String(e));
     }
     let nativeId: string;

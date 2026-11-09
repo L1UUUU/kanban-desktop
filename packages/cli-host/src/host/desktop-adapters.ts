@@ -28,7 +28,10 @@ export function createDesktopAdapterFactory(options: DesktopAdapterFactoryOption
   // #42 e2e 支撑：Fake 的 resume 注入开关（延迟观察「恢复中」态 / 前 N 次失败驱动重试态）；env 逐级继承到 worker，生产不设即关闭
   const fakeResumeDelayMs = Number(process.env.KANBAN_FAKE_RESUME_DELAY_MS ?? "") || 0;
   const fakeFailResumeFirst = Number(process.env.KANBAN_FAKE_RESUME_FAIL_FIRST ?? "") || 0;
-  const makeFake = (): FakeAdapter => new FakeAdapter({ resumeDelayMs: fakeResumeDelayMs, failResumeFirst: fakeFailResumeFirst });
+  // #46 e2e 支撑：前 N 次创建抛 E_SPAWN_NOT_FOUND（整机 Playwright 驱动侧栏 spawn 失败卡；env 逐级继承到 worker，生产不设即关闭）
+  const fakeFailCreateFirst = Number(process.env.KANBAN_FAKE_CREATE_FAIL_FIRST ?? "") || 0;
+  const makeFake = (): FakeAdapter =>
+    new FakeAdapter({ resumeDelayMs: fakeResumeDelayMs, failResumeFirst: fakeFailResumeFirst, failCreateFirst: fakeFailCreateFirst });
   return (cli: string): CliAdapter => {
     if (cli === "codex") {
       if (disableCodex) return makeFake();

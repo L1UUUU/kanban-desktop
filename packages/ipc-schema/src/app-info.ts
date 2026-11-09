@@ -11,6 +11,8 @@ export const appInfoSchema = z.object({
   sqliteEntry: z.string(),
   /** Fake 演示会话 cwd（Main 注入：env KANBAN_FAKE_DEMO_CWD 覆盖、缺省用户主目录；renderer 不内置任何路径） */
   fakeDemoCwd: z.string(),
+  /** 配置文件绝对路径（#46：Main 注入 <userData>/config.json；spawn 失败卡「复制配置路径」动作数据源） */
+  configPath: z.string(),
 });
 
 export type AppInfo = z.infer<typeof appInfoSchema>;

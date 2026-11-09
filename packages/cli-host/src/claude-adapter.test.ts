@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ClaudeAdapter, type ClaudeStreamClientLike } from "./claude-adapter";
+import { ExeNotFoundError } from "./adapter";
 import { assertApprovalFlag, CLAUDE_BASE_ARGS, type ClaudeStreamOptions } from "./claude/client";
 import { skillObservationSchema, type AdapterEvent, type ChatEvent, type SkillObservation } from "@kanban/ipc-schema";
 
@@ -729,5 +730,23 @@ describe("ClaudeAdapter：listChildPids（#44 C5 演进）", () => {
     await adapter.resume(sessionId); // spawn 新进程 --resume
     streams[1].pid = 7301;
     expect(await adapter.listChildPids!()).toEqual([7301]);
+  });
+});
+
+describe("ClaudeAdapter：spawn 失败协议级映射（#46）", () => {
+  it("exe 解析失败（ExeNotFoundError）→ createSession 拒绝 E_SPAWN_NOT_FOUND（renderer 归 spawn_not_found 卡）", async () => {
+    const hookDir = mkdtempSync(path.join(tmpdir(), "kb-claude-spawn-"));
+    hookRoots.push(hookDir);
+    const adapter = new ClaudeAdapter({
+      hookDir,
+      clientFactory: () => {
+        // 模拟真实 resolveClaudeExe 全链落空时抛出的类型化错误（exe.ts #46 起 throw ExeNotFoundError）
+        throw new ExeNotFoundError("未找到 claude 可执行文件（已尝试：npm 全局；where）");
+      },
+    });
+    await expect(adapter.createSession({ cwd: CWD })).rejects.toMatchObject({
+      code: "E_SPAWN_NOT_FOUND",
+      message: expect.stringContaining("未找到 claude 可执行文件"),
+    });
   });
 });

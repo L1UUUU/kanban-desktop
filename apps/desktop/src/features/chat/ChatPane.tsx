@@ -1,9 +1,10 @@
-// 用途：中央聊天区 —— 会话级 banner 栈（冲突条 spec I-4 / 同名 skill 条 #21 / 恢复引导条 #42，自上而下）+ 消息流 + 审批卡 + 取消/错误提示 + composer（flex 列：banner + 1fr 消息 + auto composer；无会话时降级占位）
+// 用途：中央聊天区 —— 会话级 banner 栈（冲突条 spec I-4 / 同名 skill 条 #21 / 恢复引导条 #42，自上而下）+ 消息流 + 审批卡 + 取消/错误卡（#46 ErrorBanner 五卡）+ composer（flex 列：banner + 1fr 消息 + auto composer；无会话时降级占位）
 import { useEffect, useRef } from "react";
 import type { ApprovalDecision } from "@kanban/ipc-schema";
 import type { SessionView } from "./chat-store";
 import { ApprovalCard } from "./components/ApprovalCard";
 import { Composer, type ComposerActions } from "./components/Composer";
+import { ErrorBanner } from "./components/ErrorBanner";
 import { MessageList } from "./components/MessageList";
 import { ResumeBanner } from "./components/ResumeBanner";
 
@@ -13,18 +14,25 @@ export interface ChatPaneActions extends ComposerActions {
   onResume(sessionId: string): void;
   /** #21：关闭同名 skill 冲突提示条（仅隐藏不影响会话） */
   onDismissSkillConflict(sessionId: string): void;
+  /** #46：错误卡「知道了」清除会话 lastError（仅隐藏） */
+  onDismissError(sessionId: string): void;
+  /** #46：认证失效卡「打开 PTY 终端」——在会话 cwd 新建 PTY 终端（在终端内运行登录指引命令） */
+  onOpenPtyTerminal(sessionId: string): void;
 }
 
 export function ChatPane({
   session,
   version,
   conflictTitles,
+  configPath = null,
   actions,
 }: {
   session: SessionView | null;
   version: number;
   /** 主仓库并行冲突会话名（≥2 活跃时非空；仅提示不阻止，spec I-4） */
   conflictTitles: string[] | null;
+  /** #46：配置文件绝对路径（spawn 失败卡「复制配置路径」；AppInfo 注入） */
+  configPath?: string | null;
   actions: ChatPaneActions;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -105,9 +113,24 @@ export function ChatPane({
           </div>
         ) : null}
         {session.lastError ? (
-          <div className="mx-auto mb-3.5 max-w-[860px] text-center text-xs text-destructive">
-            ⚠ {session.lastError.message}
-          </div>
+          // #46 错误卡（原型 d2 五卡信息结构）：替换旧红字一行；重试=重发最近一条用户消息，
+          // 恢复=与恢复引导条同一动作（D4），打开 PTY 终端=在会话 cwd 新建终端（认证指引）
+          <ErrorBanner
+            code={session.lastError.code}
+            message={session.lastError.message}
+            cli={session.cli}
+            title={session.title}
+            configPath={configPath}
+            canRetry={session.items.some((i) => i.kind === "user")}
+            canOpenPtyTerminal={session.cwd !== null}
+            onResume={() => actions.onResume(session.sessionId)}
+            onRetry={() => {
+              const lastUser = [...session.items].reverse().find((i) => i.kind === "user");
+              if (lastUser && lastUser.kind === "user") actions.onSend(lastUser.text);
+            }}
+            onOpenPtyTerminal={() => actions.onOpenPtyTerminal(session.sessionId)}
+            onDismiss={() => actions.onDismissError(session.sessionId)}
+          />
         ) : null}
       </div>
       <Composer session={session} actions={actions} />

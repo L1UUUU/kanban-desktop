@@ -53,6 +53,8 @@ export interface FakeAdapterOptions {
   resumeDelayMs?: number;
   /** #42 e2e 支撑：前 N 次 resume 抛 AdapterError（整机 Playwright 驱动失败/重试态；缺省 0 不注入） */
   failResumeFirst?: number;
+  /** #46 e2e 支撑：前 N 次 createSession 抛 E_SPAWN_NOT_FOUND（整机 Playwright 驱动侧栏 spawn 失败卡；缺省 0 不注入） */
+  failCreateFirst?: number;
 }
 
 /** 全能力 Fake：UI 不隐藏任何控件（spec B capabilities 语义） */
@@ -71,7 +73,9 @@ export class FakeAdapter implements CliAdapter {
   private readonly pickTurnScript: (text: string) => ScriptStep[];
   private readonly resumeDelayMs: number;
   private readonly failResumeFirst: number;
+  private readonly failCreateFirst: number;
   private resumeCalls = 0;
+  private createCalls = 0;
   private readonly sessions = new Map<string, SessionState>();
   private readonly handlers = new Set<(event: AdapterEvent) => void>();
 
@@ -81,9 +85,15 @@ export class FakeAdapter implements CliAdapter {
     this.clock = options.clock ?? new SystemClock();
     this.resumeDelayMs = options.resumeDelayMs ?? 0;
     this.failResumeFirst = options.failResumeFirst ?? 0;
+    this.failCreateFirst = options.failCreateFirst ?? 0;
   }
 
   async createSession(init: CreateSessionInput): Promise<{ sessionId: string }> {
+    // #46 e2e 注入：前 N 次创建抛 spawn 失败（协议级 E_SPAWN_NOT_FOUND，与真实 exe 解析失败同码）
+    this.createCalls += 1;
+    if (this.createCalls <= this.failCreateFirst) {
+      throw new AdapterError("E_SPAWN_NOT_FOUND", `未找到 CLI 可执行文件（FakeAdapter 注入：failCreateFirst=${this.failCreateFirst}，演示 spawn 失败）`);
+    }
     const sessionId = randomId("s");
     const s: SessionState = {
       sessionId,

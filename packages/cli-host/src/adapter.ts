@@ -55,6 +55,18 @@ export interface AdoptSessionInput {
   cli?: string;
 }
 
+/**
+ * CLI exe 解析失败（#46）：三 exe resolver 全链落空时抛出；各 Adapter createSession 捕获后映射为
+ * AdapterError("E_SPAWN_NOT_FOUND")（协议级，renderer classify 归 spawn_not_found 卡）。
+ * 独立于 AdapterError（run-once 等既有 catch 继续按普通 Error 包装 E_INTERNAL，行为不变）。
+ */
+export class ExeNotFoundError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ExeNotFoundError";
+  }
+}
+
 /** Adapter 异常：code 形状由 ipc-schema 定义（不变量 6），宿主据此映射 IPC 错误 */
 export class AdapterError extends Error {
   constructor(

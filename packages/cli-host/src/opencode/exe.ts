@@ -2,6 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { ExeNotFoundError } from "../adapter";
 import { dedupePaths, lookupAllPathLines, type ExeCandidateProbes } from "../exe-probes";
 
 /** 解析优先级：手动覆盖（config cliExe.opencode）→ env KANBAN_OPENCODE_BIN → npm 全局 → 原生安装目录 → where/which 显式解析 */
@@ -78,7 +79,7 @@ export function resolveOpenCodeExe(options: OpenCodeExeOptions = {}): string {
   const looked = fromPathLookup();
   if (looked) return looked;
   tried.push("where/which 未解析到 opencode 可执行文件（.cmd shim 不采用）");
-  throw new Error(
+  throw new ExeNotFoundError(
     `未找到 opencode 可执行文件（已尝试：${tried.join("；")}）。请在设置中手动指定 opencode.exe 路径或设置 KANBAN_OPENCODE_BIN。`,
   );
 }
