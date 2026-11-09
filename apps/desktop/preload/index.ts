@@ -3,6 +3,8 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   AdapterEvent,
   AppInfo,
+  DiffRequest,
+  DiffResult,
   IpcRequest,
   IpcResult,
   MemoryEventWire,
@@ -20,6 +22,8 @@ const api = {
   invoke: (req: IpcRequest) => ipcRenderer.invoke("kanban:ipc", req) as Promise<IpcResult>,
   /** #31：发送一条 memory:ipc 请求（提取/取消/审核/总结处置/需求一次读/项目检索/知识再编辑，schema 见 memoryRequestSchema） */
   invokeMemory: (req: MemoryRequest) => ipcRenderer.invoke("memory:ipc", req) as Promise<MemoryResult>,
+  /** #43：发送一条 diff:ipc 请求（工作区未提交变更一次读，schema 见 diffRequestSchema） */
+  invokeDiff: (req: DiffRequest) => ipcRenderer.invoke("diff:ipc", req) as Promise<DiffResult>,
   /** 订阅 Adapter 事件流（ChatEvent ∪ SkillObservation），返回注销函数 */
   onChatEvent: (handler: (event: AdapterEvent) => void): (() => void) => {
     const listener = (_e: unknown, event: AdapterEvent): void => handler(event);
