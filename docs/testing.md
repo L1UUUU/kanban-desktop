@@ -66,10 +66,13 @@ Playwright（`apps/desktop/playwright.config.ts`）：testDir `./e2e`，workers 
 | `KANBAN_DISABLE_CLAUDE` | 8 个演示型 Playwright spec（fake-chat、kanban、lifecycle、pty、projects、memory、acceptance-screenshots、kanban-acceptance-screenshots） | `"1"` 时禁用真实 claude，回落 Fake 演示模式 | launch env（非 skip 门禁） |
 | `KANBAN_DISABLE_OPENCODE` | 同上 | `"1"` 时禁用真实 opencode，回落 Fake 演示模式 | launch env（非 skip 门禁） |
 | `KANBAN_E2E_DEBUG` | cli-host 四件套内的调试日志 | 非空时向 stderr 输出调试日志 | 调试开关（非门禁） |
+| `KANBAN_CODEX_MODEL` | cli-host codex 模型解析链（`packages/cli-host/src/codex/model-probe.ts`） | 逗号分隔模型白名单，按序真实试探，首个可用即用；全败报错**不回退**（跳过磁盘缓存/rollout/model/list；命中不落盘缓存） | 成本开关（非门禁） |
 
 注意 `KANBAN_E2E` 是严格等于 `"1"`：`KANBAN_E2E=0` 或任意其它非空值**不会**触发 B 类（杜绝非空值误触真实 PTY/CLI 测试）。
 
 命令中的环境变量写法以 bash 形式为准（`KANBAN_E2E=1 pnpm ...`）；PowerShell 等价写法：`$env:KANBAN_E2E="1"; pnpm ...`。
+
+**真实测试模型成本约束**：任何会真实调用 codex 模型的测试（B 类 codex 相关、C 类 `kanban-real` / `memory-real` 真实集）**必须**设 `KANBAN_CODEX_MODEL=gpt-6-luna,gpt-5.6-luna`（优先 gpt-6-luna，回退 gpt-5.6-luna）。不设时解析链沿用「磁盘缓存 → 最近 rollout」，会跟着日常交互最后用的模型走（如 sol/terra），造成成本浪费。该变量经 Playwright → Electron → utilityProcess worker 逐级继承 env 生效；会话内显式选定的模型仍最优先；白名单全败直接报错而非回退，宁可测试失败也不烧昂贵模型。
 
 ## 命令矩阵（根 / 包 / desktop 三级）
 

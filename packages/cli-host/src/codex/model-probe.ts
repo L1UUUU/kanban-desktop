@@ -1,4 +1,4 @@
-// 用途：Codex 模型可用性探测与回退 —— model/list 不可信（poc-1 发现 2），用 ephemeral thread + 最小 turn 真试探，候选链：显式→缓存→最近 rollout→model/list；探测结果落盘缓存
+// 用途：Codex 模型可用性探测与回退 —— model/list 不可信（poc-1 发现 2），用 ephemeral thread + 最小 turn 真试探，候选链：显式→env 偏好白名单→缓存→最近 rollout→model/list；探测结果落盘缓存（env 偏好命中除外）
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
@@ -24,22 +24,49 @@ const PROBE_CACHE_FILE = "codex-model-probe.json";
 const PROBE_TURN_TIMEOUT_MS = 60_000;
 /** model/list 兜底候选最多试探数（控制真实调用成本） */
 const MAX_LIST_CANDIDATES = 3;
+/** env 偏好白名单变量名：逗号分隔模型 id，按序真实试探（测试/CI 成本控制，用法见 docs/testing.md） */
+const ENV_MODEL_PREFERENCE = "KANBAN_CODEX_MODEL";
 
-/** 创建默认解析器（探测链 + 内存/磁盘缓存；options.exe/version 用于缓存键；rolloutModel 测试注入隔离本机环境） */
-export function createDefaultModelResolver(options: { exe?: string | null; version?: string | null; cacheDir?: string; rolloutModel?: string | null }): ModelResolver {
+/** 解析 env 偏好候选：逗号分隔、去空格、去重保序 */
+function preferredModelsFromEnv(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return [...new Set(raw.split(",").map((s) => s.trim()).filter(Boolean))];
+}
+
+/** 创建默认解析器（探测链 + 内存/磁盘缓存；options.exe/version 用于缓存键；rolloutModel/preferredModels 测试注入隔离本机环境） */
+export function createDefaultModelResolver(options: { exe?: string | null; version?: string | null; cacheDir?: string; rolloutModel?: string | null; preferredModels?: string[] }): ModelResolver {
   let cachedModel: string | null = null;
   const cachePath = options.cacheDir ? path.join(options.cacheDir, PROBE_CACHE_FILE) : null;
+  // 偏好白名单创建时读一次（进程内不变；utilityProcess worker 继承父 env）
+  const preferred = options.preferredModels ?? preferredModelsFromEnv(process.env[ENV_MODEL_PREFERENCE]);
 
   return async (requested, client) => {
     // 0) 内存缓存
     if (cachedModel) return cachedModel;
-    // 1) 磁盘缓存
+    // 1) env 偏好白名单：候选 = 显式 + 偏好链，不读磁盘缓存/rollout/model-list（历史缓存里的昂贵模型不得劫持白名单）；
+    //    命中只进内存缓存、不落盘（不设 env 的进程行为完全不变）；全败直接报错——宁可失败不回退昂贵模型（成本控制）
+    if (preferred.length) {
+      const whitelist: string[] = [];
+      for (const m of [requested, ...preferred]) {
+        if (typeof m === "string" && m && !whitelist.includes(m)) whitelist.push(m);
+      }
+      const failed: string[] = [];
+      for (const model of whitelist) {
+        if (await probeModelWithMinimalTurn(client, model).catch(() => false)) {
+          cachedModel = model;
+          return model;
+        }
+        failed.push(model);
+      }
+      throw new Error(`${ENV_MODEL_PREFERENCE} 偏好模型均不可用（已尝试：${failed.join("、")}）；为控制成本已拒绝回退到缓存/最近使用/账号默认模型。请确认模型 id 可用，或去掉该环境变量。`);
+    }
+    // 2) 磁盘缓存
     const disk = readCache(cachePath);
     if (disk) {
       cachedModel = disk.model;
       return disk.model;
     }
-    // 2) 候选链（去重保序）：显式 → 最近 rollout → model/list 前 N
+    // 3) 候选链（去重保序）：显式 → 最近 rollout → model/list 前 N
     const candidates: string[] = [];
     const push = (m: string | undefined | null) => {
       if (typeof m === "string" && m && !candidates.includes(m)) candidates.push(m);
@@ -48,7 +75,7 @@ export function createDefaultModelResolver(options: { exe?: string | null; versi
     push(options.rolloutModel !== undefined ? options.rolloutModel : latestRolloutModel());
     for (const m of await listModels(client).catch(() => [])) push(m);
     const limited = candidates.slice(0, Math.max(candidates.indexOf(requested ?? "\0") + 1, MAX_LIST_CANDIDATES) || MAX_LIST_CANDIDATES);
-    // 3) 逐个试探（真 turn：400 拒绝不产生推理成本，poc-1 实证）
+    // 4) 逐个试探（真 turn：400 拒绝不产生推理成本，poc-1 实证）
     const failures: string[] = [];
     for (const model of limited.length ? limited : candidates) {
       const ok = await probeModelWithMinimalTurn(client, model).catch(() => false);
