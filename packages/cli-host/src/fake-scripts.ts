@@ -107,6 +107,27 @@ export function skillTurnScript(skill: string, verified = false): ScriptStep[] {
   ];
 }
 
+/** S4 错误演示分支（#46）：认证失效 / spawn 失败 / 协议断连 / 未知兜底（文案对照 auth-samples.md 与真实报错形态） */
+export const AUTH_ERROR_SCRIPT: ScriptStep[] = [
+  { t: "assistant", text: "我来演示认证失效场景：CLI 报告登录已失效。" },
+  { t: "error", code: "AUTH_EXPIRED", message: "Failed to authenticate. API Error: 401 无效的令牌（演示）" },
+];
+
+export const SPAWN_ERROR_SCRIPT: ScriptStep[] = [
+  { t: "assistant", text: "我来演示找不到 CLI 的场景：exe 解析全链落空。" },
+  { t: "error", code: "SPAWN_NOT_FOUND", message: "未找到 CLI 可执行文件（已尝试：npm 全局；where/which）（演示）" },
+];
+
+export const DISCONNECT_ERROR_SCRIPT: ScriptStep[] = [
+  { t: "assistant", text: "我来演示协议断连场景：与 server 的连接中断。" },
+  { t: "error", code: "PROTOCOL_DISCONNECT", message: "opencode server 请求失败（POST /session/s_x/prompt_async）：fetch failed（演示）" },
+];
+
+export const UNKNOWN_ERROR_SCRIPT: ScriptStep[] = [
+  { t: "assistant", text: "我来演示未识别错误场景：保留原始 code 与 message。" },
+  { t: "error", code: "UNKNOWN", message: "某种未覆盖的错误形态（演示）" },
+];
+
 /** 按发送文本选择脚本：命中关键词走对应演示分支（E2E/手动演示的确定性入口）；/skill 名精确命中走 skill 分支，未命中按普通 prompt 发送 */
 export function pickScript(text: string): ScriptStep[] {
   const tokens = text.split(/\s+/);
@@ -114,6 +135,11 @@ export function pickScript(text: string): ScriptStep[] {
   if (token.startsWith("/") && STAGE_SKILLS.has(token.slice(1))) return cloneScript(skillTurnScript(token.slice(1), tokens[1] === "verified"));
   if (text.includes("审批")) return cloneScript(APPROVAL_SCRIPT);
   if (text.includes("过期")) return cloneScript(EXPIRY_SCRIPT);
+  // #46 四条错误分支（「未知错误」含「错误」，须先于通用分支判定）
+  if (text.includes("认证")) return cloneScript(AUTH_ERROR_SCRIPT);
+  if (text.includes("找不到")) return cloneScript(SPAWN_ERROR_SCRIPT);
+  if (text.includes("断连")) return cloneScript(DISCONNECT_ERROR_SCRIPT);
+  if (text.includes("未知错误")) return cloneScript(UNKNOWN_ERROR_SCRIPT);
   if (text.includes("错误") || text.includes("异常")) return cloneScript(ERROR_SCRIPT);
   return cloneScript(DEFAULT_TURN_SCRIPT);
 }

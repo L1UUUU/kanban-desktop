@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { OpenCodeAdapter, splitModelId } from "./opencode-adapter";
 import type { OpenCodeApiResponse, OpenCodeSseEvent, OpenCodeServerClientLike } from "./opencode/client";
 import type { OpenCodeServerHostLike } from "./opencode/server-host";
+import { ExeNotFoundError } from "./adapter";
 import type { PermMode } from "@kanban/ipc-schema";
 import { createCollector, defineAdapterContractTests } from "./adapter.contract";
 import type { AdapterEvent, ChatEvent, SkillObservation } from "@kanban/ipc-schema";
@@ -1069,5 +1070,22 @@ describe("OpenCodeAdapter：listChildPids（#44 C5 演进）", () => {
     const only = await b.adapter.createSession({ cwd: CWD });
     await b.adapter.dispose({ sessionId: only.sessionId }); // 唯一会话释放 → server 停
     expect(await b.adapter.listChildPids!()).toEqual([]);
+  });
+});
+
+describe("OpenCodeAdapter：spawn 失败协议级映射（#46）", () => {
+  it("server 获取阶段 exe 解析失败（ExeNotFoundError）→ createSession 拒绝 E_SPAWN_NOT_FOUND", async () => {
+    const host: OpenCodeServerHostLike = {
+      acquire: async () => {
+        // 模拟真实 spawnServer 内 resolveOpenCodeExe 落空抛出的类型化错误（exe.ts #46 起 throw ExeNotFoundError）
+        throw new ExeNotFoundError("未找到 opencode 可执行文件（已尝试：npm 全局；原生安装目录）");
+      },
+      release: async () => undefined,
+    };
+    const adapter = new OpenCodeAdapter({ host, pollIntervalMs: 15 });
+    await expect(adapter.createSession({ cwd: CWD })).rejects.toMatchObject({
+      code: "E_SPAWN_NOT_FOUND",
+      message: expect.stringContaining("未找到 opencode 可执行文件"),
+    });
   });
 });

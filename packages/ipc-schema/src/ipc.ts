@@ -5,6 +5,7 @@ import { kanbanStageInputSchema, requirementCardRowSchema } from "./kanban";
 import { terminalCreatePayloadSchema, terminalIdSchema } from "./terminal";
 
 // 首版错误码：E_SCHEMA 入站不合契约 / E_SESSION_NOT_FOUND 未知会话 / E_APPROVAL_EXPIRED 过期或已决审批 / E_PROJECT_NOT_FOUND 未知项目 / E_INTERNAL 兜底；#17 加 E_REQUIREMENT_NOT_FOUND 未知需求 id
+// #46 加 E_SPAWN_NOT_FOUND：CLI exe 解析失败（spawn 失败）的协议级映射——Adapter 侧以 AdapterError 此码回传，renderer classify 归 spawn_not_found 卡（spec #40 B 节「SPAWN_NOT_FOUND（IPC 侧映射）」）
 export const ERROR_CODES = [
   "E_SCHEMA",
   "E_SESSION_NOT_FOUND",
@@ -12,6 +13,7 @@ export const ERROR_CODES = [
   "E_PROJECT_NOT_FOUND",
   "E_REQUIREMENT_NOT_FOUND",
   "E_INTERNAL",
+  "E_SPAWN_NOT_FOUND",
 ] as const;
 export const errorCodeSchema = z.enum(ERROR_CODES);
 export type ErrorCode = z.infer<typeof errorCodeSchema>;

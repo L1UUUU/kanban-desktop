@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, PermMode, SessionStatus, TranscriptEvent } from "@kanban/ipc-schema";
-import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
+import { AdapterError, ExeNotFoundError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
 import { resolveCodexExe } from "./codex/exe";
 import { CodexRpcClient } from "./codex/rpc";
 import { parseRolloutTranscript } from "./codex/rollout";
@@ -368,7 +368,14 @@ export class CodexAdapter implements CliAdapter {
 
   private ensureStarted(): void {
     if (this.client && !this.client.dead) return;
-    const client = this.clientFactory();
+    let client: CodexRpcClientLike;
+    try {
+      client = this.clientFactory();
+    } catch (e) {
+      // #46：exe 解析失败协议级映射（E_SPAWN_NOT_FOUND → renderer spawn 卡）；其余原样抛出
+      if (e instanceof ExeNotFoundError) throw new AdapterError("E_SPAWN_NOT_FOUND", e.message);
+      throw e;
+    }
     client.onDead((err) => this.handleProcessDeath(err));
     client.start();
     this.wireNotifications(client);

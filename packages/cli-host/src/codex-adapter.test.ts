@@ -4,6 +4,7 @@ import path from "node:path";
 import { rmSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { CodexAdapter, type CodexRpcClientLike } from "./codex-adapter";
+import { ExeNotFoundError } from "./adapter";
 import type { AdapterEvent, ChatEvent } from "@kanban/ipc-schema";
 
 /** 记录型 Fake app-server：request 响应 + 测试手动 emit 通知/服务端请求/进程退出 */
@@ -633,5 +634,20 @@ describe("CodexAdapter：listChildPids（#44 C5 演进）", () => {
     expect(await adapter.listChildPids!()).toEqual([4242]); // 会话清空但进程按设计保留
     await adapter.dispose(); // 全量：受控终止共享进程
     expect(await adapter.listChildPids!()).toEqual([]);
+  });
+});
+
+describe("CodexAdapter：spawn 失败协议级映射（#46）", () => {
+  it("exe 解析失败（ExeNotFoundError）→ createSession 拒绝 E_SPAWN_NOT_FOUND", async () => {
+    const adapter = new CodexAdapter({
+      clientFactory: () => {
+        // 模拟真实 resolveCodexExe 落空时抛出的类型化错误（exe.ts #46 起 throw ExeNotFoundError）
+        throw new ExeNotFoundError("未找到 codex 可执行文件（已尝试：npm 全局 vendored）");
+      },
+    });
+    await expect(adapter.createSession({ cwd: "C:\\demo" })).rejects.toMatchObject({
+      code: "E_SPAWN_NOT_FOUND",
+      message: expect.stringContaining("未找到 codex 可执行文件"),
+    });
   });
 });

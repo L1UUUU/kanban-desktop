@@ -11,6 +11,8 @@ const validInput = {
   platform: "win32",
   sqliteEntry: "DatabaseSync",
   fakeDemoCwd: "C:\\Users\\demo",
+  // #46：配置文件绝对路径（spawn 失败卡「复制配置路径」动作数据源；Main 注入 <userData>/config.json）
+  configPath: "C:\\Users\\demo\\AppData\\Roaming\\kanban-desktop\\config.json",
 };
 
 describe("appInfoSchema 往返", () => {

@@ -270,6 +270,8 @@ app.whenReady().then(async () => {
       sqliteEntry: SQLITE_ENTRY,
       // Fake 演示会话 cwd：e2e/部署经 KANBAN_FAKE_DEMO_CWD 固定；缺省用户主目录（不内置开发机路径）
       fakeDemoCwd: process.env.KANBAN_FAKE_DEMO_CWD || homedir(),
+      // #46：配置文件绝对路径（spawn 失败卡「复制配置路径」数据源；与配置初始化同一路径）
+      configPath,
     }),
   );
   ipcMain.handle("kanban:ipc", (_event, raw: unknown) => handleIpc(deps, raw));

@@ -35,6 +35,7 @@ export function App() {
     <AppShell
       transport={transport}
       demoCwd={info?.fakeDemoCwd ?? null}
+      configPath={info?.configPath ?? null}
       shutdownNotice={shutdownNotice}
       sidebarFooter={<AppInfoLine info={info} />}
     />
@@ -48,6 +49,7 @@ export function App() {
 export function AppShell({
   transport,
   demoCwd,
+  configPath = null,
   shutdownNotice = null,
   sidebarFooter,
   onChatController,
@@ -56,6 +58,8 @@ export function AppShell({
 }: {
   transport: ChatTransport | null;
   demoCwd?: string | null;
+  /** #46：配置文件绝对路径（AppInfo 注入；spawn 失败卡「复制配置路径」数据源） */
+  configPath?: string | null;
   /** 退出序列提示文案（null=不渲染提示条） */
   shutdownNotice?: string | null;
   /** 侧栏底部附加槽（App 传运行信息行） */
@@ -90,6 +94,7 @@ export function AppShell({
         transport={transport}
         projects={projects}
         demoCwd={demoCwd}
+        configPath={configPath}
         onController={onChatController}
         view={view}
         kanban={kanban}

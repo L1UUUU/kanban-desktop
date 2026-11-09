@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { ExeNotFoundError } from "../adapter";
 
 /** 解析优先级：手动覆盖（config）→ env KANBAN_CODEX_BIN → npm 全局 vendored exe → 本地 node_modules */
 export interface CodexExeOptions {
@@ -69,7 +70,7 @@ export function resolveCodexExe(options: CodexExeOptions = {}): string {
   } catch {
     /* 无本地安装，落入报错 */
   }
-  throw new Error(
+  throw new ExeNotFoundError(
     `未找到 codex 可执行文件（已尝试：${tried.join("；") || "无"}）。请在设置中手动指定 codex.exe 路径或设置 KANBAN_CODEX_BIN。`,
   );
 }
