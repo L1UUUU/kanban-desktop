@@ -1,4 +1,5 @@
 // 用途：Main 入站 IPC 路由 —— 单通道 kanban:ipc 强制 zod 校验 + 分发到 CliAdapter 与 projects/sessions store + PTY 宿主（纯函数无 Electron 依赖：dialog 与 config 经 deps 注入）
+// 行数评估（~560 行，超 500 行阈值）：app:getInfo + 四个 :ipc 通道（kanban/memory/diff/residue）的 handler 聚合是既有装配模式（共享单通道校验、deps 注入与 store 装配，拆开只搬文件不减耦合），本次不拆；触发条件：第六个 IPC 通道（或任一通道 handler 独立逻辑显著膨胀）加入时按通道拆分为独立模块。
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import {

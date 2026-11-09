@@ -22,8 +22,7 @@ export const OPENCODE_PERM_CONFIG: Record<Exclude<PermMode, "full">, Record<stri
   auto: { bash: "ask", edit: "ask" },
 };
 
-/** spawn 注册表条目：宿主崩溃后重启的孤儿核对依据（t0-01 四要素：pid/exe/命令行签名/创建时间） */
-/** Exported registration entry shape and verification (#49 residue detection reuses adoptability determination: registry-verified orphan servers are excluded from the residue list) */
+/** spawn 注册表条目：宿主崩溃后重启的孤儿核对依据（t0-01 四要素：pid/exe/命令行签名/创建时间）；导出供残留检测复用（#49：核对通过的孤儿 server 不列残留） */
 export interface RegistryEntry {
   cwd: string;
   exe: string;
@@ -62,9 +61,25 @@ export interface OpenCodeServerHostOptions {
   log?: (kind: string, detail: string) => void;
 }
 
-/** 归一化 cwd 为注册表/复用键（大小写与斜杠方向归一） */
+/** 路径比较键（win32 大小写不敏感 + 斜杠方向归一；宿主 cwd/exe 比对与残留检测候选比对共用，S3 归一） */
+export function pathCompareKey(p: string): string {
+  return p.toLowerCase().replace(/\//g, "\\");
+}
+
+/** 归一化 cwd 为注册表/复用键（在路径比较键基础上去尾部斜杠） */
 function cwdKey(cwd: string): string {
-  return cwd.toLowerCase().replace(/\//g, "\\").replace(/\\+$/, "");
+  return pathCompareKey(cwd).replace(/\\+$/, "");
+}
+
+/** 注册表文件读取（文件缺失/损坏时空表；宿主生命周期与残留检测共用同一语义，S3 归一） */
+export function readServerRegistry(registryPath: string): RegistryEntry[] {
+  if (!existsSync(registryPath)) return [];
+  try {
+    const raw = JSON.parse(readFileSync(registryPath, "utf8")) as { entries?: RegistryEntry[] };
+    return Array.isArray(raw.entries) ? raw.entries : [];
+  } catch {
+    return [];
+  }
 }
 
 /** 找一个空闲端口（listen(0) 即时释放；存在被抢占竞态，由 spawn 后健康检查+重试兜底） */
@@ -117,10 +132,9 @@ function pidAlive(pid: number): boolean {
 export function verifyRegistryEntry(entry: RegistryEntry): { match: boolean; reason?: string } {
   if (!pidAlive(entry.pid)) return { match: false, reason: "pid 已退出" };
   if (process.platform !== "win32") return { match: true };
-  const norm = (p: string | null) => (p ?? "").toLowerCase().replace(/\//g, "\\");
   for (const proc of queryCimByName(entry.exe)) {
     if (Number(proc.ProcessId) !== Number(entry.pid)) continue;
-    if (norm(proc.ExecutablePath) !== norm(entry.exe)) continue;
+    if (pathCompareKey(proc.ExecutablePath ?? "") !== pathCompareKey(entry.exe)) continue;
     const cmdline = proc.CommandLine ?? "";
     if (!entry.cmdSignature.every((s) => cmdline.includes(s))) continue;
     const created = proc.CreationDate ? new Date(proc.CreationDate).getTime() : NaN;
@@ -245,15 +259,9 @@ export class OpenCodeServerHost implements OpenCodeServerHostLike {
 
   /* ---------------- 内部：孤儿接管与 spawn ---------------- */
 
-  /** 注册表读取（文件缺失/损坏时空表） */
+  /** 注册表读取（文件缺失/损坏时空表；委托共享实现，残留检测同语义复用，S3 归一） */
   private readRegistry(): RegistryEntry[] {
-    if (!existsSync(this.registryPath)) return [];
-    try {
-      const raw = JSON.parse(readFileSync(this.registryPath, "utf8")) as { entries?: RegistryEntry[] };
-      return Array.isArray(raw.entries) ? raw.entries : [];
-    } catch {
-      return [];
-    }
+    return readServerRegistry(this.registryPath);
   }
 
   private writeRegistry(entries: RegistryEntry[]): void {

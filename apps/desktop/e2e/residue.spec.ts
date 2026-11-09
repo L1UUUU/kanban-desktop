@@ -4,10 +4,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-/** fake 残留清单（与 jsdom 密封测试样本同形；pid 取独立值避免与真实进程混淆） */
+/** fake 残留清单（与 jsdom 密封测试样本同形；pid 取独立值避免与真实进程混淆；第三条为「疑似」回落行——不精确匹配、默认不勾选） */
 const SEED_PROCESSES = [
   { pid: 28432, exePath: "C:\\fake-npm\\@openai\\codex\\codex.exe", startedAt: "2026-11-09T01:12:00.000Z", sessionTitle: "实现 Diff 解析" },
   { pid: 29004, exePath: "C:\\fake-npm\\opencode-ai\\bin\\opencode.exe", startedAt: null, sessionTitle: null },
+  { pid: 29512, exePath: "C:\\fake-npm\\@openai\\codex\\codex.exe", startedAt: null, sessionTitle: null, suspectedSessionTitle: "修复启动崩溃" },
 ];
 
 /** 建隔离 fixture：独立 userData + 残留种子 JSON 文件（缺省无种子） */
@@ -59,7 +60,7 @@ test("预置检测结果：通知条 + 进程表呈现，「无会话记录」�
     const { app, win } = await launchApp(userData, seedPath);
     const banner = win.getByTestId("residue-banner");
     await expect(banner).toBeVisible({ timeout: 15_000 });
-    await expect(banner).toContainText("检测到 2 个疑似残留 CLI 进程");
+    await expect(banner).toContainText("检测到 3 个疑似残留 CLI 进程");
     await expect(banner).toContainText("清理前请确认它们不是你自己打开的");
 
     // 进程表行内容（原型 d4：勾选/PID/进程/启动时间/关联记录）
@@ -69,9 +70,12 @@ test("预置检测结果：通知条 + 进程表呈现，「无会话记录」�
     await expect(row1).toContainText("会话「实现 Diff 解析」");
     const row2 = win.getByTestId("residue-row-29004");
     await expect(row2).toContainText("无会话记录");
-    // 默认勾选：有会话记录勾、无会话记录不勾（防误杀）
+    const row3 = win.getByTestId("residue-row-29512");
+    await expect(row3).toContainText("疑似上次会话「修复启动崩溃」");
+    // 默认勾选：仅精确匹配勾、无会话记录与疑似回落均不勾（防误杀，P2）
     await expect(win.getByLabel("勾选 PID 28432")).toBeChecked();
     await expect(win.getByLabel("勾选 PID 29004")).not.toBeChecked();
+    await expect(win.getByLabel("勾选 PID 29512")).not.toBeChecked();
 
     // 忽略本次：条消失（下次启动重新检测）
     await win.getByRole("button", { name: "忽略本次" }).click();
@@ -89,13 +93,15 @@ test("确认式清理：补勾无记录行 → 清理选中 → 逐 pid 终止�
     const banner = win.getByTestId("residue-banner");
     await expect(banner).toBeVisible({ timeout: 15_000 });
 
-    // 补勾「无会话记录」行一起清理（确认式：仅勾选 pid 被终止）
+    // 补勾「无会话记录」与「疑似回落」行一起清理（确认式：仅勾选 pid 被终止）
     await win.getByLabel("勾选 PID 29004").check();
+    await win.getByLabel("勾选 PID 29512").check();
     await win.getByRole("button", { name: "清理选中" }).click();
     // fake kill 逐 pid 全 killed：表清空 → 条消失
     await expect(banner).toBeHidden({ timeout: 15_000 });
     await expect(win.getByTestId("residue-row-28432")).toHaveCount(0);
     await expect(win.getByTestId("residue-row-29004")).toHaveCount(0);
+    await expect(win.getByTestId("residue-row-29512")).toHaveCount(0);
     await app.close();
   } finally {
     for (const r of roots) await rmBestEffort(r);

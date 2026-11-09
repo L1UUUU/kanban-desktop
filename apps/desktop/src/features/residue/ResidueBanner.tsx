@@ -1,4 +1,4 @@
-// 用途：残留进程通知条（#49 spec #40 F/G 节 + 原型 d4 必须一致项）—— 警示色顶部条（检测计数 + 确认提示）+ 进程表（勾选/PID/进程路径/启动时间/关联会话记录）+「清理选中」（逐 pid killed/failed 回报）+「忽略本次」；「无会话记录」默认不勾选防误杀，全程确认式无自动清理
+// 用途：残留进程通知条（#49 spec #40 F/G 节 + 原型 d4 必须一致项）—— 警示色顶部条（检测计数 + 确认提示）+ 进程表（勾选/PID/进程路径/启动时间/关联会话记录）+「清理选中」（逐 pid killed/failed 回报）+「忽略本次」；默认勾选仅精确匹配的 sessionTitle，「无会话记录」与「疑似上次会话」回落均不勾（防误杀），全程确认式无自动清理
 import { useState } from "react";
 import type { ResidueKillResult, ResidueProcess } from "@kanban/ipc-schema";
 
@@ -11,7 +11,7 @@ function formatStartedAt(iso: string | null): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-/** 默认勾选集合：有会话记录的进程；「无会话记录」不勾（可能是用户自己打开的，防误杀） */
+/** 默认勾选集合：仅精确匹配（sessionTitle 非空）的进程；「无会话记录」与「疑似上次会话」回落（suspectedSessionTitle）均不勾（可能是用户自己打开的，防误杀，P2） */
 function defaultChecked(processes: ResidueProcess[]): Set<number> {
   return new Set(processes.filter((p) => p.sessionTitle != null).map((p) => p.pid));
 }
@@ -124,7 +124,11 @@ export function ResidueBanner({
                 </td>
                 <td className="py-1 pr-3">{formatStartedAt(p.startedAt)}</td>
                 <td className="py-1">
-                  {p.sessionTitle ? `会话「${p.sessionTitle}」（上次运行遗留）` : "无会话记录（可能是你手动打开的）"}
+                  {p.sessionTitle
+                    ? `会话「${p.sessionTitle}」（上次运行遗留）`
+                    : p.suspectedSessionTitle
+                      ? `疑似上次会话「${p.suspectedSessionTitle}」（非精确匹配，默认不勾选）`
+                      : "无会话记录（可能是你手动打开的）"}
                   {state.failures.has(p.pid) ? <span className="ml-2 text-destructive">终止失败：{state.failures.get(p.pid)}</span> : null}
                 </td>
               </tr>

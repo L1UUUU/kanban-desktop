@@ -66,6 +66,9 @@ Playwright（`apps/desktop/playwright.config.ts`）：testDir `./e2e`，workers 
 | `KANBAN_REAL_E2E` | `apps/desktop/e2e/kanban-real.spec.ts`、`apps/desktop/e2e/memory-real.spec.ts` | `=== "1"` 才跑真实最小集（需本机 CLI 已装已认证） | C 类门禁 |
 | `KANBAN_DISABLE_CLAUDE` | 8 个演示型 Playwright spec（fake-chat、kanban、lifecycle、pty、projects、memory、acceptance-screenshots、kanban-acceptance-screenshots） | `"1"` 时禁用真实 claude，回落 Fake 演示模式 | launch env（非 skip 门禁） |
 | `KANBAN_DISABLE_OPENCODE` | 同上 | `"1"` 时禁用真实 opencode，回落 Fake 演示模式 | launch env（非 skip 门禁） |
+| `KANBAN_FAKE_RESUME_DELAY_MS` | `apps/desktop/e2e/resume-banner.spec.ts`、`apps/desktop/e2e/stage4-acceptance-screenshots.spec.ts` | Fake resume 延迟毫秒数（整机 Playwright 观察「恢复中」态）；经 `packages/cli-host/src/host/desktop-adapters.ts` 消费，env 逐级继承到 utilityProcess worker | launch env（非 skip 门禁） |
+| `KANBAN_FAKE_RESUME_FAIL_FIRST` | `apps/desktop/e2e/resume-banner.spec.ts`、`apps/desktop/e2e/stage4-acceptance-screenshots.spec.ts` | Fake 前 N 次 resume 注入失败（驱动恢复失败态与重试流转）；消费位置同上 | launch env（非 skip 门禁） |
+| `KANBAN_FAKE_CREATE_FAIL_FIRST` | `apps/desktop/e2e/error-cards.spec.ts`、`apps/desktop/e2e/stage4-acceptance-screenshots.spec.ts` | Fake 前 N 次创建抛 E_SPAWN_NOT_FOUND（驱动侧栏 spawn 失败卡与「重试创建」收敛）；消费位置同上 | launch env（非 skip 门禁） |
 | `KANBAN_TEST_RESIDUE_JSON` | `apps/desktop/e2e/residue.spec.ts`（残留通知条演示流程） | 指向残留清单 JSON（逐条过 `residueProcessSchema` 校验）：Main 检测直接返回种子、`residue:kill` 不真实终止统一回报 killed；另 `KANBAN_USER_DATA` 隔离环境下无种子时跳过机器级残留枚举（整机 e2e 密封性，见 `docs/acceptance/stage4/residue-known-limits.md`） | launch env（非 skip 门禁） |
 | `KANBAN_E2E_DEBUG` | cli-host 四件套内的调试日志 | 非空时向 stderr 输出调试日志 | 调试开关（非门禁） |
 | `KANBAN_CODEX_MODEL` | cli-host codex 模型解析链（`packages/cli-host/src/codex/model-probe.ts`） | 逗号分隔模型白名单，按序真实试探，首个可用即用；全败报错**不回退**（跳过磁盘缓存/rollout/model/list；命中不落盘缓存） | 成本开关（非门禁） |

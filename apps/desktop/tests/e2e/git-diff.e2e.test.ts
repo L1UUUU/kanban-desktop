@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { defaultGitDiffDeps, readWorkspaceDiff, resolveGitExeDefault, type DiffLimits } from "../../electron/main/git-diff-service";
+import { defaultConfig } from "../../electron/main/config";
 
 const E2E = process.env.KANBAN_E2E === "1";
 let gitExe: string | null = null;
@@ -25,8 +26,8 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-// 生产同款默认上限（与 config.ts defaultConfig().diff 保持一致）
-const DEFAULT_LIMITS: DiffLimits = { maxBytes: 2_000_000, maxFiles: 200, maxUntrackedLines: 2000 };
+// 生产同款默认上限（直接取 config.ts defaultConfig().diff，杜绝两处复制漂移）
+const DEFAULT_LIMITS: DiffLimits = defaultConfig().diff;
 
 /** 真实执行一条 git 命令（仓库装配用；stdio pipe 吸收 hint 噪声） */
 function git(cwd: string, ...args: string[]): void {

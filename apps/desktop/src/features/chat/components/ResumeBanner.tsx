@@ -1,14 +1,6 @@
 // 用途：断开会话恢复引导条（#42 / spec I 一致项 3）—— 聊天区顶部常驻三态 banner（与冲突条同位同形）：待恢复 / 恢复中（不可中断，D1）/ 失败（IPC 错误 + 重试 + 复制详情）
+import { copyText } from "../../../lib/copy-text";
 import type { ResumeState } from "../chat-store";
-
-/** 写剪贴板（错误详情）；失败记日志不抛出（Electron 剪贴板稳定可用，降级不阻塞重试主路径） */
-async function copyText(text: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch (e) {
-    console.error("[kanban] 复制错误详情失败", e);
-  }
-}
 
 export function ResumeBanner({
   title,

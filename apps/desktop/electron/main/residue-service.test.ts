@@ -92,6 +92,21 @@ describe("detectResidue 判定（fake 进程清单）", () => {
     expect(got.map((r) => r.pid)).toEqual([444]);
   });
 
+  it("默认核对分支（不注入 verifyRegistry）：核对不通过（match:false）的孤儿 server 不被排除，仍列残留（P1 回归：默认适配须取 verifyRegistryEntry().match，返回对象恒 truthy）", async () => {
+    const regPath = join(tmpdir(), `kb-residue-reg-default-${Date.now()}.json`);
+    tmpFiles.push(regPath);
+    // pid 0 → 真实 verifyRegistryEntry 的 pidAlive 恒 false（确定性构造 match:false，不依赖真实进程状态、无 CIM 查询副作用）
+    const entry: RegistryEntry = { cwd: "C:\\repo", exe: "C:\\npm\\opencode\\opencode.exe", pid: 0, port: 4111, spawnAt: "2026-11-09T01:00:00.000Z", cmdSignature: ["serve"] };
+    writeFileSync(regPath, JSON.stringify({ entries: [entry] }), "utf8");
+    const deps = makeDeps({
+      registryPath: regPath,
+      // 关键：不注入 verifyRegistry，走生产默认适配
+      queryProcesses: () => [proc(0, "C:\\npm\\opencode\\opencode.exe", { commandLine: '"C:\\npm\\opencode\\opencode.exe" serve --port 4111' })],
+    });
+    const got = await detectResidue(deps);
+    expect(got.map((r) => r.pid)).toEqual([0]); // 核对不通过 → 不进 verifiedPids → 列残留
+  });
+
   it("注册表文件缺失或损坏按空表处理（不抛错）", async () => {
     const badPath = join(tmpdir(), `kb-residue-bad-${Date.now()}.json`);
     tmpFiles.push(badPath);
@@ -101,7 +116,7 @@ describe("detectResidue 判定（fake 进程清单）", () => {
     expect(got.map((r) => r.pid)).toEqual([555]);
   });
 
-  it("关联会话记录：claude 按命令行 nativeSessionId 精确归属；codex 回落同 CLI 最近会话；无记录为 null", async () => {
+  it("关联会话记录：仅精确匹配（claude 命令行 / opencode 注册表）进 sessionTitle；codex 回落同 CLI 最近会话只作 suspectedSessionTitle 疑似提示（P2：不得进 sessionTitle 触发默认勾选）；均无 → 双 null", async () => {
     const sessions: SessionRecord[] = [
       session({ id: "s-claude", cli: "claude", nativeSessionId: "native-abc", title: "实现 Diff 解析" }),
       session({ id: "s-codex", cli: "codex", title: "修复启动崩溃" }),
@@ -115,9 +130,9 @@ describe("detectResidue 判定（fake 进程清单）", () => {
       ],
     });
     const got = await detectResidue(deps);
-    expect(got.find((r) => r.pid === 666)?.sessionTitle).toBe("实现 Diff 解析");
-    expect(got.find((r) => r.pid === 777)?.sessionTitle).toBe("修复启动崩溃");
-    expect(got.find((r) => r.pid === 888)?.sessionTitle).toBeNull(); // 无会话记录
+    expect(got.find((r) => r.pid === 666)).toMatchObject({ sessionTitle: "实现 Diff 解析" }); // 精确匹配：进 sessionTitle（默认勾选依据）
+    expect(got.find((r) => r.pid === 777)).toMatchObject({ sessionTitle: null, suspectedSessionTitle: "修复启动崩溃" }); // 回落仅疑似提示：不进 sessionTitle
+    expect(got.find((r) => r.pid === 888)).toMatchObject({ sessionTitle: null, suspectedSessionTitle: null }); // 无会话记录
   });
 
   it("opencode 按注册表 pid→cwd 归属会话（核对不通过仍可关联）", async () => {

@@ -7,8 +7,10 @@ export const residueProcessSchema = z.object({
   exePath: z.string().min(1),
   /** 进程启动时间（ISO；CIM CreationDate 缺失时为 null） */
   startedAt: z.string().nullable(),
-  /** 关联会话记录标题（best-effort 归属：命令行/注册表/同 CLI 最近会话；null=无会话记录，UI 默认不勾选防误杀） */
+  /** 关联会话记录标题（仅精确匹配：claude 命令行 nativeSessionId / opencode 注册表 pid→cwd；null=无精确记录，UI 默认不勾选防误杀） */
   sessionTitle: z.string().nullable(),
+  /** 疑似上次会话标题（best-effort 回落：同 CLI 最近一条会话，非精确匹配；仅展示「疑似」提示，不参与默认勾选；可选兼容无该字段的种子 JSON） */
+  suspectedSessionTitle: z.string().nullable().optional(),
 });
 export type ResidueProcess = z.infer<typeof residueProcessSchema>;
 

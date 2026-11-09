@@ -8,7 +8,7 @@
 - exe 匹配粒度 = 三 CLI 解析链**全量候选路径并集**（config manualOverride / `KANBAN_*_BIN` / npm 全局 / `where` 多结果 / codex vendored 深路径 / opencode 原生安装位），不只匹配本次解析出的单一路径；
 - 排除本应用活跃集合（#44 `CliHostClient.listChildPids` 上报）；
 - 排除注册表核对通过、可无损接管的 OpenCode 孤儿 server（复用 `server-host` `verifyRegistryEntry` 四要素语义；恢复会话时 `tryAdopt` 自动接管）；
-- 「无会话记录」默认不勾选（可能是用户手动打开的，防误杀）；清理全程确认式，无任何自动清理路径。
+- 默认勾选仅精确匹配的会话记录（sessionTitle）；「无会话记录」与「疑似上次会话」回落均默认不勾选（可能是用户手动打开的，防误杀）；清理全程确认式，无任何自动清理路径。
 
 ## 已知漏检面
 
@@ -18,7 +18,7 @@
 
 ## 已知误检/误归属面
 
-4. **会话归属是 best-effort**：claude 按命令行 `--session-id`/`--resume` 精确匹配；opencode 按注册表 pid→cwd 匹配；codex（命令行无会话标识）与匹配失败时**回落同 CLI 最近一条会话记录**（「上次运行遗留」语义）。用户手动打开的 CLI 进程在同 CLI 存在历史会话记录时会被标上关联记录——这不影响安全性（勾选状态才是清理依据），但「关联记录」列不构成精确的进程↔会话映射。
+4. **会话归属是 best-effort**：claude 按命令行 `--session-id`/`--resume` 精确匹配；opencode 按注册表 pid→cwd 匹配；仅精确匹配进「关联记录」列（sessionTitle，默认勾选依据）。codex（命令行无会话标识）与匹配失败时**回落同 CLI 最近一条会话记录**，仅作「疑似上次会话」提示展示（suspectedSessionTitle 独立字段，默认不勾选）。用户手动打开的 CLI 进程在同 CLI 存在历史会话记录时不会被默认勾选（默认勾选仅精确匹配），但「疑似」提示仍不构成精确的进程↔会话映射。
 5. **注册表核对通过但 HTTP 不可达的 OpenCode 孤儿同样被排除**：排除条件对齐 `verifyRegistryEntry`（pid 存活 + exe/命令行/创建时间四要素），不做 HTTP 探活。若该 server 实际已不可接管，恢复会话时会走新 spawn，旧进程不被列为残留（宁可漏列不误杀；该进程可在下次核对失败后被检出）。
 
 ## 明确非目标（spec #40 D3 / Out of Scope）

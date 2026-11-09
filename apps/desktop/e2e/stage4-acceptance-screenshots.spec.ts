@@ -61,10 +61,11 @@ function makeChatFixture(name: string): { userData: string; repoDir: string; roo
   return { userData, repoDir, roots: [userData, root] };
 }
 
-/** 残留种子 JSON（与 residue.spec.ts 同形；pid 独立值避免与真实进程混淆） */
+/** 残留种子 JSON（与 residue.spec.ts 同形；pid 独立值避免与真实进程混淆；第三条为「疑似」回落行——不精确匹配、默认不勾选） */
 const SEED_PROCESSES = [
   { pid: 31432, exePath: "C:\\fake-npm\\@openai\\codex\\codex.exe", startedAt: "2026-11-09T01:12:00.000Z", sessionTitle: "实现 Diff 解析" },
   { pid: 32004, exePath: "C:\\fake-npm\\opencode-ai\\bin\\opencode.exe", startedAt: null, sessionTitle: null },
+  { pid: 32512, exePath: "C:\\fake-npm\\@openai\\codex\\codex.exe", startedAt: null, sessionTitle: null, suspectedSessionTitle: "修复启动崩溃" },
 ];
 
 /** 建残留种子 fixture：种子 JSON 落独立临时目录 */
@@ -367,27 +368,32 @@ test("I-4 残留通知条 + 进程表：警示条 + 五列表 + 默认勾选 + �
     const { app, win } = await launchApp(userData, undefined, { KANBAN_TEST_RESIDUE_JSON: seedPath });
     const banner = win.getByTestId("residue-banner");
     await expect(banner).toBeVisible({ timeout: 15_000 });
-    await expect(banner).toContainText("检测到 2 个疑似残留 CLI 进程");
+    await expect(banner).toContainText("检测到 3 个疑似残留 CLI 进程");
     await expect(banner).toContainText("清理前请确认它们不是你自己打开的");
 
-    // 进程表（原型 d4 pid-table：勾选/PID/进程/启动时间/关联记录）+ 默认勾选规则（有记录勾、无记录不勾）
+    // 进程表（原型 d4 pid-table：勾选/PID/进程/启动时间/关联记录）+ 默认勾选规则（仅精确匹配勾、无记录与疑似回落不勾）
     const row1 = win.getByTestId("residue-row-31432");
     await expect(row1).toContainText("31432");
     await expect(row1).toContainText("codex.exe");
     await expect(row1).toContainText("会话「实现 Diff 解析」");
     const row2 = win.getByTestId("residue-row-32004");
     await expect(row2).toContainText("无会话记录");
+    const row3 = win.getByTestId("residue-row-32512");
+    await expect(row3).toContainText("疑似上次会话「修复启动崩溃」");
     await expect(win.getByLabel("勾选 PID 31432")).toBeChecked();
     await expect(win.getByLabel("勾选 PID 32004")).not.toBeChecked();
+    await expect(win.getByLabel("勾选 PID 32512")).not.toBeChecked();
     await shot(win, "14-residue-banner-table.png");
 
-    // 清理实测：补勾无记录行 → 「清理选中」→ fake kill 全 killed → 表清空、条消失
+    // 清理实测：补勾无记录与疑似回落行 → 「清理选中」→ fake kill 全 killed → 表清空、条消失
     // （「忽略本次」交互由 residue.spec.ts 用例 1 覆盖，此处不重复）
     await win.getByLabel("勾选 PID 32004").check();
+    await win.getByLabel("勾选 PID 32512").check();
     await win.getByRole("button", { name: "清理选中" }).click();
     await expect(banner).toBeHidden({ timeout: 15_000 });
     await expect(win.getByTestId("residue-row-31432")).toHaveCount(0);
     await expect(win.getByTestId("residue-row-32004")).toHaveCount(0);
+    await expect(win.getByTestId("residue-row-32512")).toHaveCount(0);
     await app.close();
   } finally {
     for (const r of roots) await rmBestEffort(r);

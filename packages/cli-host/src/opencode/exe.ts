@@ -86,7 +86,7 @@ export function resolveOpenCodeExe(options: OpenCodeExeOptions = {}): string {
 
 /**
  * opencode 解析链全量候选路径并集（#49 残留检测的 exe 匹配粒度；采纳条件与 resolveOpenCodeExe 一致）。
- * 顺序：manualOverride → KANBAN_OPENCODE_BIN → npm 全局 bin/opencode.exe → 原生安装位 → where/ich 全部非 shim 可执行；去重。
+ * 顺序：manualOverride → KANBAN_OPENCODE_BIN → npm 全局 bin/opencode.exe → 原生安装位 → where/which 全部非 shim 可执行；去重。
  */
 export function listOpenCodeExeCandidates(options: OpenCodeExeOptions & ExeCandidateProbes = {}): string[] {
   const paths: string[] = [];
