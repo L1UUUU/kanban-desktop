@@ -278,11 +278,12 @@ app.whenReady().then(async () => {
     handleMemoryIpc({ memory: memoryService, isShuttingDown: () => shutdown.isShuttingDown() }, raw),
   );
   // #43：diff:ipc 单通道（spec #40 D 节；git exe 解析 = config gitExe 覆盖 → env → where，解析失败归 git-missing）
+  // #47：三类截断上限来自 config.diff（采集字节/文件数/untracked 行数，超限置 truncated）
   ipcMain.handle("diff:ipc", (_event, raw: unknown) =>
     handleDiffIpc(
       {
         projects,
-        readWorkspaceDiff: (cwd) => readWorkspaceDiff(cwd, defaultGitDiffDeps(appConfig.gitExe)),
+        readWorkspaceDiff: (cwd) => readWorkspaceDiff(cwd, defaultGitDiffDeps(appConfig.gitExe, appConfig.diff), appConfig.diff),
         isShuttingDown: () => shutdown.isShuttingDown(),
       },
       raw,
