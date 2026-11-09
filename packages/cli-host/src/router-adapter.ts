@@ -95,6 +95,15 @@ export class AdapterRouter implements CliAdapter {
     this.routing.clear();
   }
 
+  /** C5 演进（#44）：聚合各 Adapter 活跃子进程 pid（去重升序；未实现可选成员或无进程的 Adapter 贡献空集） */
+  async listChildPids(): Promise<number[]> {
+    const pids = new Set<number>();
+    for (const adapter of this.adapters.values()) {
+      for (const pid of (await adapter.listChildPids?.()) ?? []) pids.add(pid);
+    }
+    return [...pids].sort((a, b) => a - b);
+  }
+
   subscribe(handler: (event: AdapterEvent) => void): () => void {
     this.handlers.add(handler);
     return () => {

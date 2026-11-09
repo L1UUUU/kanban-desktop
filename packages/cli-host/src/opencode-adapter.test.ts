@@ -132,6 +132,12 @@ class FakeHost implements OpenCodeServerHostLike {
   refCount(cwd: string): number {
     return this.refs.get(cwd)?.size ?? 0;
   }
+  /** 镜像真实 host 的 C5 演进（#44）：运行中 server 的 pid 去重集合（per-cwd 一份） */
+  listChildPids(): number[] {
+    const pids = new Set<number>();
+    for (const server of this.servers.values()) if (server.pid) pids.add(server.pid);
+    return [...pids];
+  }
 }
 
 /** 构造被测 adapter（注入 FakeHost；轮询间隔缩到 15ms；extra 透传卡死探测阈值等） */
@@ -943,3 +949,35 @@ defineAdapterContractTests(
 
 // 保持 createCollector 引用（契约收集器一致性由其自身保证）
 void createCollector;
+
+describe("OpenCodeAdapter：listChildPids（#44 C5 演进）", () => {
+  it("server-per-project 共享计数：同 cwd 两会话只报一份 pid；多 cwd 多份", async () => {
+    const ctx = makeAdapter();
+    expect(await ctx.adapter.listChildPids!()).toEqual([]); // 无会话无 server
+    await ctx.adapter.createSession({ cwd: CWD });
+    await ctx.adapter.createSession({ cwd: CWD }); // 同 cwd 复用同一 server
+    const one = await ctx.adapter.listChildPids!();
+    expect(one.length).toBe(1);
+    expect(one[0]).toBe(ctx.server(CWD).pid);
+    const OTHER_CWD = "D:\\other-project";
+    await ctx.adapter.createSession({ cwd: OTHER_CWD }); // 新 project 新 server
+    const two = await ctx.adapter.listChildPids!();
+    expect(two.length).toBe(2);
+    expect(new Set(two)).toEqual(new Set([ctx.server(CWD).pid, ctx.server(OTHER_CWD).pid]));
+  });
+
+  it("会话 dispose：引用未归零 server 保留 pid；最后一个释放 → pid 离开集合；全量 dispose 清空", async () => {
+    const a = makeAdapter();
+    const s1 = await a.adapter.createSession({ cwd: CWD });
+    await a.adapter.createSession({ cwd: CWD });
+    await a.adapter.dispose({ sessionId: s1.sessionId }); // 引用 2→1：server 保留
+    expect(await a.adapter.listChildPids!()).toEqual([a.server(CWD).pid]);
+    await a.adapter.dispose(); // 全量：引用归零停 server
+    expect(await a.adapter.listChildPids!()).toEqual([]);
+
+    const b = makeAdapter();
+    const only = await b.adapter.createSession({ cwd: CWD });
+    await b.adapter.dispose({ sessionId: only.sessionId }); // 唯一会话释放 → server 停
+    expect(await b.adapter.listChildPids!()).toEqual([]);
+  });
+});

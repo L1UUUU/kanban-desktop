@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CliHost, type HostCommand } from "./cli-host";
 import { FakeAdapter } from "../fake-adapter";
 import type { AdapterEvent } from "@kanban/ipc-schema";
-import type { CliAdapter } from "../adapter";
+import type { CliAdapter, DisposeInput } from "../adapter";
 
 function makeHost() {
   const adapters: FakeAdapter[] = [];
@@ -149,6 +149,86 @@ describe("CliHost run-once 命令（C5 演进，#29）", () => {
     await host.shutdown({ reason: "test" });
     expect((await p).runOnce).toMatchObject({ status: "cancelled" });
     await expect(host.command({ kind: "run-once", runId: "h-4", cli: "claude", args: [FAKE_CLI, "ok"], cwd })).rejects.toMatchObject({ code: "E_INTERNAL" });
+  });
+});
+
+/** 最小桩 adapter（不含可选成员 listChildPids——聚合方须按空集处理） */
+class BaseStubAdapter implements CliAdapter {
+  readonly capabilities = { approval: false, interrupt: false, resume: false, readHistory: false, skillSignal: false };
+  private n = 0;
+  private readonly handlers = new Set<(event: AdapterEvent) => void>();
+  async createSession(): Promise<{ sessionId: string; nativeSessionId?: string | null }> {
+    this.n += 1;
+    return { sessionId: `s-pid-${this.n}`, nativeSessionId: null };
+  }
+  async sendTurn(): Promise<void> {}
+  async interruptTurn(): Promise<void> {}
+  async resolveApproval(): Promise<void> {}
+  async readHistory(): Promise<never[]> {
+    return [];
+  }
+  async readTranscript(): Promise<never[]> {
+    return [];
+  }
+  async resume(): Promise<void> {}
+  async dispose(input?: DisposeInput): Promise<void> {
+    void input;
+  }
+  subscribe(handler: (event: AdapterEvent) => void): () => void {
+    this.handlers.add(handler);
+    return () => {
+      this.handlers.delete(handler);
+    };
+  }
+}
+
+/** pid 桩 adapter：listChildPids 受控；全量 dispose 清空（镜像进程终止语义） */
+class PidStubAdapter extends BaseStubAdapter {
+  pids: number[] = [];
+  override async dispose(input?: DisposeInput): Promise<void> {
+    if (!input?.sessionId) this.pids = [];
+  }
+  async listChildPids(): Promise<number[]> {
+    return [...this.pids];
+  }
+}
+
+describe("CliHost listChildPids 命令（C5 演进，#44）", () => {
+  /** 工厂按 cli 记录桩实例（Router 构造器还会预热探测 fake/codex/claude/opencode 四个实例，索引不可靠） */
+  function makePidHost() {
+    const created = new Map<string, BaseStubAdapter>();
+    const host = new CliHost((cli) => {
+      const a = cli === "bare" ? new BaseStubAdapter() : new PidStubAdapter();
+      created.set(cli, a);
+      return a as CliAdapter;
+    });
+    return { host, stubOf: (cli: string) => created.get(cli) as PidStubAdapter };
+  }
+
+  it("聚合全部 Adapter 的 pid：去重升序；未实现可选成员的 Adapter 贡献空集；空 host 为空集", async () => {
+    const { host, stubOf } = makePidHost();
+    expect(await host.command({ kind: "listChildPids" })).toEqual({ pids: [] }); // 空集合
+    await host.command({ kind: "createSession", init: { cwd: "C:\\demo", cli: "a" } });
+    await host.command({ kind: "createSession", init: { cwd: "C:\\demo", cli: "b" } });
+    await host.command({ kind: "createSession", init: { cwd: "C:\\demo", cli: "bare" } }); // 未实现可选成员
+    stubOf("a").pids = [300, 100];
+    stubOf("b").pids = [100, 200];
+    expect(await host.command({ kind: "listChildPids" })).toEqual({ pids: [100, 200, 300] });
+  });
+
+  it("全量 dispose 后集合清空；worker 重启（新 host）后集合重建 —— 新会话建立 pid 重新出现", async () => {
+    const { host, stubOf } = makePidHost();
+    await host.command({ kind: "createSession", init: { cwd: "C:\\demo", cli: "a" } });
+    stubOf("a").pids = [111];
+    expect(await host.command({ kind: "listChildPids" })).toEqual({ pids: [111] });
+    await host.command({ kind: "dispose" }); // 全量退出：各 adapter 受控终止
+    expect(await host.command({ kind: "listChildPids" })).toEqual({ pids: [] });
+    // worker 重启：新 CliHost（新 Router/新 Adapter 实例）初始空集
+    const restarted = makePidHost();
+    expect(await restarted.host.command({ kind: "listChildPids" })).toEqual({ pids: [] });
+    await restarted.host.command({ kind: "createSession", init: { cwd: "C:\\demo", cli: "a" } });
+    restarted.stubOf("a").pids = [222]; // 新会话建立后（进程拉起）pid 重新出现
+    expect(await restarted.host.command({ kind: "listChildPids" })).toEqual({ pids: [222] });
   });
 });
 
