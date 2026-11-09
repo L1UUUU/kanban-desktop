@@ -22,6 +22,8 @@ export interface ClaudeStreamClientLike {
   stop(): void;
   dead: boolean;
   exitInfo?: { code: number | null; signal: NodeJS.Signals | null } | null;
+  /** 子进程 pid（listChildPids 用；无进程/已退出的实现为 null） */
+  pid?: number | null;
 }
 
 export interface ClaudeAdapterOptions {
@@ -279,6 +281,16 @@ export class ClaudeAdapter implements CliAdapter {
     return () => {
       this.handlers.delete(handler);
     };
+  }
+
+  /** C5 演进（#44）：单进程单会话模型 —— 每个存活会话的客户端各报一份 pid；死亡/断开不报陈旧 pid（防 pid 复用误判） */
+  async listChildPids(): Promise<number[]> {
+    const pids = new Set<number>();
+    for (const s of this.sessions.values()) {
+      const pid = s.client && !s.client.dead ? s.client.pid : null;
+      if (pid) pids.add(pid);
+    }
+    return [...pids];
   }
 
   /* ---------------- 内部：进程与协议挂接 ---------------- */

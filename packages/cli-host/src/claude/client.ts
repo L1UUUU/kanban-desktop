@@ -161,6 +161,11 @@ export class ClaudeStreamClient {
     this.send({ type: "control_response", response: { subtype: "success", request_id: requestId, response } });
   }
 
+  /** 子进程 pid（C5 演进 #44 listChildPids 用；未 spawn/已退出为 null） */
+  get pid(): number | null {
+    return this.proc?.pid ?? null;
+  }
+
   /** 订阅 stdout 全部已解析消息（system/assistant/user/stream_event/result/control_request/control_response） */
   onMessage(fn: (msg: Record<string, unknown>) => void): () => void {
     this.messageListeners.add(fn);

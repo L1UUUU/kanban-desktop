@@ -222,6 +222,11 @@ export class FakeAdapter implements CliAdapter {
     if (this.ownsClock && this.clock instanceof SystemClock) this.clock.dispose();
   }
 
+  /** C5 演进（#44）：脚本化 mock 无真实子进程 —— 恒空集 */
+  async listChildPids(): Promise<number[]> {
+    return [];
+  }
+
   subscribe(handler: (event: AdapterEvent) => void): () => void {
     this.handlers.add(handler);
     return () => {
