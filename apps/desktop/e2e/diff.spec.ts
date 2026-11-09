@@ -23,7 +23,7 @@ function git(dir: string, ...args: string[]): void {
   execFileSync("git", ["-C", dir, ...args], { stdio: "pipe" });
 }
 
-/** 预置 git 仓库：基线三文件 commit 后做 M/D/R/binary/U 五类未提交变更（统计恒 +2 -2） */
+/** 预置 git 仓库：基线三文件 commit 后做 M/D/R/binary/U 五类未提交变更（统计 +3 -2：tracked +2/-2 + untracked 全文 1 行计入，#47） */
 function makeRepoWithChanges(): { repoDir: string; root: string } {
   const root = mkdtempSync(join(tmpdir(), "kb-diff-repo-"));
   const repoDir = join(root, "demo-repo");
@@ -79,7 +79,7 @@ test("git 仓库全流程：进入读取/统计/徽标/展开折叠/刷新/返�
     const entry = win.getByTestId("diff-entry");
     await expect(entry).toBeEnabled();
     await entry.click();
-    await expect(win.getByTestId("diff-stat")).toHaveText("5 个文件 · +2 -2 · 未提交（HEAD 对比）", { timeout: 15_000 });
+    await expect(win.getByTestId("diff-stat")).toHaveText("5 个文件 · +3 -2 · 未提交（HEAD 对比）", { timeout: 15_000 });
 
     // 文件行：五类行（M/R/D/U/binary）与标注
     const row = (path: string) => win.locator('[data-testid="diff-file-head"]', { hasText: path });
@@ -100,7 +100,7 @@ test("git 仓库全流程：进入读取/统计/徽标/展开折叠/刷新/返�
 
     // 手动刷新：结果保持
     await win.getByTestId("diff-refresh").click();
-    await expect(win.getByTestId("diff-stat")).toHaveText("5 个文件 · +2 -2 · 未提交（HEAD 对比）");
+    await expect(win.getByTestId("diff-stat")).toHaveText("5 个文件 · +3 -2 · 未提交（HEAD 对比）");
 
     // 再次点击入口返回聊天视图
     await entry.click();

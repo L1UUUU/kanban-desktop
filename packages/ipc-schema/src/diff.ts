@@ -1,4 +1,4 @@
-// 用途：diff wire 契约（issue #43，spec #40 A/D/E 节）—— diff:ipc 独立单通道（对齐 memory:ipc 先例，不并入 ipcOkSchema 可选字段大杂烩）+ 工作区 diff 结果三级行状（文件/hunk/行）+ 四档错误闭枚举 + 全局 truncated 标志（#47 落实上限语义，本票恒 false 占位）
+// 用途：diff wire 契约（issue #43/#47，spec #40 A/D/E 节）—— diff:ipc 独立单通道（对齐 memory:ipc 先例，不并入 ipcOkSchema 可选字段大杂烩）+ 工作区 diff 结果三级行状（文件/hunk/行）+ 四档错误闭枚举 + 全局 truncated 标志（三类上限任一超限即 true：采集总字节/文件数/untracked 行数，剩余文件仅列名）
 import { z } from "zod";
 import { errorCodeSchema } from "./ipc";
 
@@ -21,7 +21,7 @@ export const diffHunkSchema = z.object({
 });
 export type DiffHunk = z.infer<typeof diffHunkSchema>;
 
-// 文件行（additions/deletions 供行级 +N/-N 统计；binary=true 时 hunks 为 null；untracked 本票 hunks=null，全文 #47）
+// 文件行（additions/deletions 供行级 +N/-N 统计；binary=true 时 hunks 为 null；untracked 全文承载于 hunks（#47），截断窗口外/读取失败/二进制为 null）
 export const diffFileRowSchema = z.object({
   path: z.string().min(1),
   changeType: diffChangeTypeSchema,
@@ -57,7 +57,7 @@ export const diffResultSchema = z.union([
   z.object({
     ok: z.literal(true),
     files: z.array(diffFileRowSchema),
-    /** 截断保护标志（#47 落实：总字节/文件数/untracked 行数超限置 true，剩余文件仅列名；本票恒 false） */
+    /** 截断保护标志（总字节/文件数/untracked 行数任一超限置 true，剩余文件仅列名） */
     truncated: z.boolean(),
   }),
   z.object({ ok: z.literal(false), kind: diffErrorKindSchema, message: z.string() }),

@@ -69,7 +69,7 @@ export function DiffWorkspace({ controller }: { controller: WorkspaceDiffControl
           ↻ 刷新
         </button>
       </header>
-      {/* 文件列表 / 空态 / 错误档 */}
+      {/* 文件列表 / 截断提示 / 空态 / 错误档 */}
       <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-4">
         {state.status === "loading" ? <p className="text-xs text-fg-faint">读取工作区变更中…</p> : null}
         {state.status === "idle" ? <p className="text-xs text-fg-faint">未选择项目</p> : null}
@@ -80,6 +80,12 @@ export function DiffWorkspace({ controller }: { controller: WorkspaceDiffControl
           </div>
         ) : null}
         {state.status === "ok" && state.files.length === 0 ? <DiffEmpty text="无未提交变更" /> : null}
+        {/* #47 截断保护提示：三类上限任一超限，超出部分仅列名（spec US6） */}
+        {state.status === "ok" && state.truncated ? (
+          <div data-testid="diff-truncated" className="rounded-[10px] border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn">
+            ⚠ 已截断：变更超出展示上限，超出部分仅显示文件名（可在配置文件调整 diff.maxBytes / diff.maxFiles / diff.maxUntrackedLines）
+          </div>
+        ) : null}
         {state.status === "ok" && state.files.length > 0 ? state.files.map((f) => <DiffFileCard key={`${f.changeType}:${f.path}`} file={f} />) : null}
       </div>
     </section>
@@ -129,10 +135,10 @@ function DiffFileCard({ file }: { file: DiffFileRow }) {
           {file.path}
         </span>
         <span className="ml-auto flex-none text-[11px]">
-          {file.changeType === "untracked" ? (
-            "新文件（未跟踪）"
-          ) : file.binary ? (
+          {file.binary ? (
             "二进制文件"
+          ) : file.changeType === "untracked" ? (
+            "新文件（未跟踪）"
           ) : (
             <>
               {file.additions > 0 ? <span className="text-ok">+{file.additions}</span> : null}
