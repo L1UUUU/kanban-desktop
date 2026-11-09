@@ -12,6 +12,8 @@ import { OpenCodeHttpServerClient, type OpenCodeServerClientLike } from "./clien
 export interface OpenCodeServerHostLike {
   acquire(cwd: string, mode: PermMode | null, ownerKey: string): Promise<OpenCodeServerClientLike>;
   release(cwd: string, ownerKey: string): Promise<void>;
+  /** C5 演进（#44）：运行中 server 的 pid 集合（server-per-project：同 project 一份；含接管的孤儿 server）；未实现的注入宿主按空集处理 */
+  listChildPids?(): number[];
 }
 
 /** 权限三档 → OPENCODE_CONFIG_CONTENT.permission 注入（spec B OpenCode 列；full=原生默认 *:*:allow 不注入；key 仅用 poc-3/默认权限表实证过的 read/bash/edit） */
@@ -231,6 +233,13 @@ export class OpenCodeServerHost implements OpenCodeServerHostLike {
   /** 内部观察口：运行中的 server 条目快照（e2e 断言复用/接管用） */
   inspect(): Array<{ cwd: string; port: number; pid: number | null; mode: PermMode | null; refs: number }> {
     return [...this.servers.values()].map((e) => ({ cwd: e.cwd, port: e.port, pid: e.pid, mode: e.mode, refs: e.refs.size }));
+  }
+
+  /** C5 演进（#44）：运行中 server 的 pid 去重集合（server-per-project：同 project 一份；含接管的孤儿 server——已受本应用管理不属残留） */
+  listChildPids(): number[] {
+    const pids = new Set<number>();
+    for (const e of this.servers.values()) if (e.pid) pids.add(e.pid);
+    return [...pids];
   }
 
   /* ---------------- 内部：孤儿接管与 spawn ---------------- */

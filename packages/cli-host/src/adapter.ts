@@ -94,6 +94,12 @@ export interface CliAdapter {
   dispose(input?: DisposeInput): Promise<void>;
   /** 应用重启后的会话收养（可选能力，#13）：登记断开会话供 readHistory/resume 恢复；未实现时恢复编排落库为断开并报错引导 */
   adoptSession?(input: AdoptSessionInput): Promise<void>;
+  /**
+   * C5 演进（#44 / spec #40 C 节）：上报本 Adapter 当前管理的全部活跃 CLI 子进程 pid（去重集合）。
+   * 可选成员：无子进程的实现（Fake 等）可省略（聚合方按空集处理）；
+   * 残留治理（#49）以此 worker/进程内形态上报的并集为「本应用活跃集合」判定基准。
+   */
+  listChildPids?(): Promise<number[]>;
   /** 订阅归一化事件流（ChatEvent ∪ SkillObservation），返回退订函数 */
   subscribe(handler: (event: AdapterEvent) => void): () => void;
 }

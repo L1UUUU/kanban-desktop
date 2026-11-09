@@ -12,6 +12,8 @@ class FakeStream implements ClaudeStreamClientLike {
   private static seq = 0;
   dead = false;
   exitInfo: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+  /** 模拟子进程 pid（listChildPids 用；null=未启动） */
+  pid: number | null = null;
   readonly options: ClaudeStreamOptions;
   readonly sentUsers: string[] = [];
   readonly sentControlResponses: Array<{ requestId: string; response: unknown }> = [];
@@ -650,5 +652,42 @@ describe("ClaudeAdapter：readTranscript 双视角（#28）", () => {
   it("未知会话 → E_SESSION_NOT_FOUND", async () => {
     const { adapter } = makeTrAdapter();
     await expect(adapter.readTranscript("nope")).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
+  });
+});
+
+describe("ClaudeAdapter：listChildPids（#44 C5 演进）", () => {
+  it("单进程单会话模型：每会话各报一份 pid；无会话为空集", async () => {
+    const { streams, adapter } = makeAdapter();
+    expect(await adapter.listChildPids!()).toEqual([]);
+    await adapter.createSession({ cwd: CWD });
+    await adapter.createSession({ cwd: CWD });
+    streams[0].pid = 7101;
+    streams[1].pid = 7102;
+    const pids = await adapter.listChildPids!();
+    expect(pids.length).toBe(2);
+    expect(new Set(pids)).toEqual(new Set([7101, 7102]));
+  });
+
+  it("会话 dispose → 该会话 pid 离开集合，其余会话保留；全量 dispose → 清空", async () => {
+    const { streams, adapter } = makeAdapter();
+    const a = await adapter.createSession({ cwd: CWD });
+    await adapter.createSession({ cwd: CWD });
+    streams[0].pid = 7101;
+    streams[1].pid = 7102;
+    await adapter.dispose({ sessionId: a.sessionId });
+    expect(await adapter.listChildPids!()).toEqual([7102]);
+    await adapter.dispose(); // 全量：受控终止全部进程
+    expect(await adapter.listChildPids!()).toEqual([]);
+  });
+
+  it("进程死亡 → 该 pid 离开集合（不报陈旧 pid）；resume 换新进程后新 pid 在场", async () => {
+    const { streams, adapter } = makeAdapter();
+    const { sessionId } = await adapter.createSession({ cwd: CWD });
+    streams[0].pid = 7101;
+    streams[0].simulateExit(1);
+    expect(await adapter.listChildPids!()).toEqual([]);
+    await adapter.resume(sessionId); // spawn 新进程 --resume
+    streams[1].pid = 7301;
+    expect(await adapter.listChildPids!()).toEqual([7301]);
   });
 });
