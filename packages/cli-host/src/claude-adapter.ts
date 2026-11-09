@@ -197,7 +197,8 @@ export class ClaudeAdapter implements CliAdapter {
     s.pendingApprovals.delete(input.requestId);
     entry.respond(approvalWire(input.decision, entry));
     if (input.decision === "deny") s.deniedToolIds.add(entry.itemId);
-    if (s.turnActive) this.emit(s, { type: "session_status", status: "running" });
+    // 仍有待决审批（CLI 并行工具调用多控制请求）时保持 waiting——回 running 会掩盖待决卡并误导空闲等待（issue #39）
+    if (s.turnActive && s.pendingApprovals.size === 0) this.emit(s, { type: "session_status", status: "running" });
   }
 
   async readHistory(sessionId: string): Promise<ChatEvent[]> {

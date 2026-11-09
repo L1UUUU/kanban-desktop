@@ -9,8 +9,16 @@ export interface ContractCtx {
   driveIdle: () => Promise<void>;
 }
 
+/** 事件收集器形状（createCollector 返回；契约钩子注入用） */
+export interface EventCollector {
+  readonly events: AdapterEvent[];
+  chat: (sessionId?: string) => ChatEvent[];
+  clear: () => void;
+  off: () => void;
+}
+
 /** 收集订阅事件，并提供按类型/会话过滤的工具 */
-export function createCollector(adapter: CliAdapter) {
+export function createCollector(adapter: CliAdapter): EventCollector {
   const events: AdapterEvent[] = [];
   const off = adapter.subscribe((e) => events.push(e));
   return {
@@ -43,6 +51,8 @@ export interface ContractOptions {
   secondTurnText?: string;
   /** 中断场景 turn 文本（真实 CLI 须用长任务确保可中断；默认同 secondTurnText） */
   interruptTurnText?: string;
+  /** 中断用例「等 turn 活跃」钩子：sendTurn 后先等本回调 resolve 再 interrupt（真实 CLI 等首个 message_delta，使中断时机与模型速度解耦；缺省不等待 = Fake/脚本原路径） */
+  interruptWaitTurnActive?: (col: EventCollector, sessionId: string) => Promise<void>;
   /** 助手消息条数断言：缺省精确 2（Fake 脚本）；真实 CLI 传 { atLeast: 1 } */
   assistantMessages?: { exactly?: number; atLeast?: number };
   /** 首段助手终文断言（缺省 Fake 终文；null 跳过——真实 CLI 输出不可控） */
@@ -191,9 +201,11 @@ export function defineAdapterContractTests(
     const { sessionId } = await adapter.createSession({ cwd: contractCwd });
     await adapter.sendTurn({ sessionId, text: turnText });
     await driveIdle();
-    // 第二个 turn 进行中打断：为可控中断，发送后立即打断（真实 CLI 用长任务 prompt 保证 turn 在跑）
+    // 第二个 turn 进行中打断：真实 CLI 先经钩子观察到 turn 进行中信号（首个 message_delta）再打断，
+    // 使中断时机与模型速度解耦（短任务先完成会让 turn_interrupted 断言落空，issue #39）；Fake 不传钩子走原路径
     col.clear();
     await adapter.sendTurn({ sessionId, text: interruptText });
+    if (opts?.interruptWaitTurnActive) await opts.interruptWaitTurnActive(col, sessionId);
     await adapter.interruptTurn(sessionId);
     await adapter.interruptTurn(sessionId); // 幂等：第二次为 no-op
     await driveIdle();

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { ClaudeAdapter } from "../../src/claude-adapter";
-import { createCollector, defineAdapterContractTests } from "../../src/adapter.contract";
+import { createCollector, defineAdapterContractTests, type EventCollector } from "../../src/adapter.contract";
 import type { AdapterEvent, ChatEvent, SkillObservation } from "@kanban/ipc-schema";
 import { transcriptEventSchema } from "@kanban/ipc-schema";
 
@@ -95,12 +95,22 @@ describe.skipIf(!E2E)("ClaudeAdapter 真实集成（env-gated）", () => {
   }
 
   /* ---------------- 契约套（Fake 同断言参数化复跑，spec Testing seam 1；T6 叠加语义随全部用例隐式回归：--settings 注入存在的会话认证正常出流） ---------------- */
+  /** 契约中断用例前置钩子：等该会话首个 message_delta（模型真实出流）再返回，由契约套立即 interrupt——中断时机与模型速度解耦（issue #39 flaky 1） */
+  async function waitTurnActive(col: EventCollector, sid: string): Promise<void> {
+    const deadline = Date.now() + 120_000;
+    while (!col.chat(sid).some((e) => e.type === "message_delta")) {
+      if (Date.now() > deadline) return; // 尽力等待：超时照常打断（turn 若已完成，断言显性失败）
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
   defineAdapterContractTests(
     async () => ({ adapter, driveIdle }),
     {
       turnText: "请用两三句话解释什么是单元测试。",
       secondTurnText: "只回复一句话：第二轮完成。",
-      interruptTurnText: "请从 1 慢慢数到 30，每行一个数字，不要跳过任何数字，也不要提前停止。",
+      // 长输出任务 + 首 delta 后打断（interruptWaitTurnActive）：保证被中断的 turn 真实长跑（issue #39）
+      interruptTurnText: "请从 1 慢慢数到 100，每行一个数字，不要跳过任何数字，也不要提前停止。",
+      interruptWaitTurnActive: waitTurnActive,
       approvalTurnText: approvalPrompt,
       approvalPermMode: "ask",
       cwd: workdir,

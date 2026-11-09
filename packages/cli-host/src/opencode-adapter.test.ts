@@ -134,10 +134,10 @@ class FakeHost implements OpenCodeServerHostLike {
   }
 }
 
-/** 构造被测 adapter（注入 FakeHost；轮询间隔缩到 15ms） */
-function makeAdapter() {
+/** 构造被测 adapter（注入 FakeHost；轮询间隔缩到 15ms；extra 透传卡死探测阈值等） */
+function makeAdapter(extra?: Partial<ConstructorParameters<typeof OpenCodeAdapter>[0]>) {
   const host = new FakeHost();
-  const adapter = new OpenCodeAdapter({ host, pollIntervalMs: 15 });
+  const adapter = new OpenCodeAdapter({ host, pollIntervalMs: 15, ...extra });
   const events: AdapterEvent[] = [];
   adapter.subscribe((e) => events.push(e));
   const chat = (sid: string) => events.filter((e): e is ChatEvent => "type" in e && e.sessionId === sid);
@@ -399,6 +399,209 @@ describe("OpenCodeAdapter：审批（轮询 + replied 兜底）", () => {
     await expect(
       ctx.adapter.resolveApproval({ sessionId, requestId: "per_bad", decision: "deny" }),
     ).rejects.toMatchObject({ code: "E_APPROVAL_EXPIRED" });
+  });
+});
+
+/** 有界轮询等待条件成立（异步收尾事件的确定性等待，不用定长 sleep） */
+async function waitFor(cond: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error("waitFor 超时");
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
+describe("OpenCodeAdapter：审批回执状态真相与丢帧自愈（issue #39 flaky 根因）", () => {
+  it("多审批并发 pending：resolve 其一后仍有待决 → 状态保持 waiting（不误报 running）", async () => {
+    const ctx = makeAdapter();
+    const { sessionId, nativeSessionId: nativeIdRaw } = await ctx.adapter.createSession({ cwd: CWD, permMode: "ask" });
+    const nativeId = nativeIdRaw!;
+    const server = ctx.server(CWD);
+    await ctx.adapter.sendTurn({ sessionId, text: "两条命令" });
+    // 模型一次性发出两个工具调用（真实 e2e 复现形态）：两个审批同时 pending
+    server.emit("message.part.updated", toolPartFrame(nativeId, "msg_1", "tool_1", { status: "pending", input: { command: "echo a" } }));
+    server.emit("message.part.updated", toolPartFrame(nativeId, "msg_1", "tool_2", { status: "pending", input: { command: "echo b" } }));
+    server.pendingPermissions = [
+      { id: "per_a", sessionID: nativeId, permission: "bash", patterns: ["echo a"], metadata: { command: "echo a" } },
+      { id: "per_b", sessionID: nativeId, permission: "bash", patterns: ["echo b"], metadata: { command: "echo b" } },
+    ];
+    await waitFor(() => ctx.chat(sessionId).filter((e) => e.type === "approval_requested").length === 2);
+    // 决第一个：第二个仍待决 → 会话必须仍呈 waiting（running 会误导 UI 徽标与空闲等待）
+    await ctx.adapter.resolveApproval({ sessionId, requestId: "per_a", decision: "allow-once" });
+    const lastStatus = () => {
+      const ss = ctx.chat(sessionId).filter((e): e is Extract<ChatEvent, { type: "session_status" }> => e.type === "session_status");
+      return ss.at(-1)?.status;
+    };
+    expect(lastStatus()).toBe("waiting");
+    // 第二个仍可决：全部决完才转 running（turn 继续）
+    await ctx.adapter.resolveApproval({ sessionId, requestId: "per_b", decision: "allow-once" });
+    expect(lastStatus()).toBe("running");
+  });
+
+  it("idle 终结前原生对账：tool completed 帧丢失（SSE 断线窗口）→ 从 message 快照自愈 tool_completed（先于 turn 终态）", async () => {
+    const ctx = makeAdapter();
+    const { sessionId, nativeSessionId: nativeIdRaw } = await ctx.adapter.createSession({ cwd: CWD });
+    const nativeId = nativeIdRaw!;
+    const server = ctx.server(CWD);
+    await ctx.adapter.sendTurn({ sessionId, text: "跑" });
+    server.emit("message.part.updated", toolPartFrame(nativeId, "msg_1", "tool_1", { status: "running", input: { command: "echo x" }, time: { start: 1 } }));
+    // SSE 丢帧：completed 的 part.updated 永不到达；原生权威源已落账终态
+    server.history = [
+      {
+        info: { id: "msg_1", role: "assistant", parentID: "u1", time: { created: Date.now() } },
+        parts: [{ id: "tool_1", type: "tool", tool: "bash", state: { status: "completed", input: { command: "echo x" }, output: "x", time: { start: 1, end: 2 } } }],
+      },
+    ];
+    server.emit("session.idle", { sessionID: nativeId });
+    await waitFor(() => ctx.chat(sessionId).some((e) => e.type === "turn_completed"));
+    const chat = ctx.chat(sessionId);
+    const done = chat.find((e): e is Extract<ChatEvent, { type: "tool_completed" }> => e.type === "tool_completed" && e.itemId === "tool_1");
+    expect(done).toMatchObject({ status: "completed", output: "x" }); // 丢帧自愈
+    // 自愈的终态必须先于 turn 终态（对账发生在 finishTurn 之前）
+    expect(chat.findIndex((e) => e.type === "tool_completed" && e.itemId === "tool_1")).toBeLessThan(
+      chat.findIndex((e) => e.type === "turn_completed"),
+    );
+  });
+
+  it("turn 失败（session.error 非 abort）：非终态工具收口 interrupted（不宣称仍在运行）", async () => {
+    const ctx = makeAdapter();
+    const { sessionId, nativeSessionId: nativeIdRaw } = await ctx.adapter.createSession({ cwd: CWD });
+    const nativeId = nativeIdRaw!;
+    const server = ctx.server(CWD);
+    await ctx.adapter.sendTurn({ sessionId, text: "跑" });
+    server.emit("message.part.updated", toolPartFrame(nativeId, "msg_1", "tool_1", { status: "running", input: { command: "long" } }));
+    // 网关类错误中断 turn（非 abort）：工具没有后续终态帧
+    server.emit("session.error", { sessionID: nativeId, error: { name: "AiSdkError", message: "gateway 500" } });
+    server.emit("session.idle", { sessionID: nativeId });
+    await waitFor(() => ctx.chat(sessionId).some((e) => e.type === "session_error"));
+    expect(ctx.chat(sessionId).some((e) => e.type === "tool_completed" && e.itemId === "tool_1" && e.status === "interrupted")).toBe(true);
+  });
+
+  it("idle 终结前原生对账：工具 part 帧全丢（连 started 未见，审批靠轮询发现）+ 本 turn 有审批 → 补齐 started+completed", async () => {
+    const ctx = makeAdapter();
+    const { sessionId, nativeSessionId: nativeIdRaw } = await ctx.adapter.createSession({ cwd: CWD, permMode: "ask" });
+    const nativeId = nativeIdRaw!;
+    const server = ctx.server(CWD);
+    await ctx.adapter.sendTurn({ sessionId, text: "跑" });
+    // SSE 断线窗口：permission.asked 与 tool part 帧全部丢失，审批仅经轮询 GET /permission 发现
+    server.pendingPermissions = [{ id: "per_z", sessionID: nativeId, permission: "bash", patterns: ["echo z"], metadata: { command: "echo z" } }];
+    await waitFor(() => ctx.chat(sessionId).some((e) => e.type === "approval_requested"));
+    await ctx.adapter.resolveApproval({ sessionId, requestId: "per_z", decision: "allow-always" });
+    // 原生权威源已落账完整工具执行
+    server.history = [
+      {
+        info: { id: "msg_z", role: "assistant", parentID: "u_z", time: { created: Date.now() } },
+        parts: [{ id: "tool_z", type: "tool", tool: "bash", state: { status: "completed", input: { command: "echo z" }, output: "z", time: { start: 1, end: 2 } } }],
+      },
+    ];
+    server.emit("session.idle", { sessionID: nativeId });
+    await waitFor(() => ctx.chat(sessionId).some((e) => e.type === "turn_completed"));
+    const chat = ctx.chat(sessionId);
+    expect(chat.some((e) => e.type === "tool_started" && e.itemId === "tool_z")).toBe(true); // 全丢自愈：started 一并补齐
+    const doneIdx = chat.findIndex((e) => e.type === "tool_completed" && e.itemId === "tool_z");
+    expect(doneIdx).toBeGreaterThanOrEqual(0);
+    expect(chat[doneIdx]).toMatchObject({ status: "completed", output: "z" });
+    expect(doneIdx).toBeLessThan(chat.findIndex((e) => e.type === "turn_completed")); // 先于 turn 终态
+  });
+
+  it("readHistory 对账：实时只见 tool_started（completed 帧丢失且终结时对账无果）→ 回填补 tool_completed，不重复 started、不造幽灵 turn 边界", async () => {
+    const ctx = makeAdapter();
+    const { sessionId, nativeSessionId: nativeIdRaw } = await ctx.adapter.createSession({ cwd: CWD });
+    const nativeId = nativeIdRaw!;
+    const server = ctx.server(CWD);
+    await ctx.adapter.sendTurn({ sessionId, text: "跑" });
+    server.emit("message.part.updated", toolPartFrame(nativeId, "msg_1", "tool_1", { status: "running", input: { command: "echo x" } }));
+    server.emit("message.part.delta", { sessionID: nativeId, messageID: "msg_1", partID: "prt_1", field: "text", delta: "完成" });
+    server.emit("session.idle", { sessionID: nativeId }); // 终结时原生历史尚未落账（对账无果）
+    await waitFor(() => ctx.chat(sessionId).some((e) => e.type === "turn_completed"));
+    // 之后原生落账可读：readHistory 回填自愈
+    server.history = [
+      {
+        info: { id: "msg_1", role: "assistant", parentID: "u1", time: { created: Date.now() } },
+        parts: [
+          { id: "prt_1", type: "text", text: "完成" },
+          { id: "tool_1", type: "tool", tool: "bash", state: { status: "completed", input: { command: "echo x" }, output: "x", time: { start: 1, end: 2 } } },
+        ],
+      },
+    ];
+    const history = await ctx.adapter.readHistory(sessionId);
+    expect(history.filter((e) => e.type === "tool_started" && e.itemId === "tool_1")).toHaveLength(1); // 不重复
+    const done = history.filter((e): e is Extract<ChatEvent, { type: "tool_completed" }> => e.type === "tool_completed" && e.itemId === "tool_1");
+    expect(done).toHaveLength(1); // 补上缺失终态
+    expect(done[0].status).toBe("completed");
+    // 文本已实时见过 → 不重复；turn 边界不因补终态重复（无幽灵 turn）
+    expect(history.filter((e) => e.type === "message_delta").length).toBe(1);
+    expect(history.filter((e) => e.type === "turn_started").length).toBe(1);
+    expect(history.filter((e) => e.type === "turn_completed").length).toBe(1);
+  });
+});
+
+describe("OpenCodeAdapter：running 卡死自愈（SSE 断线窗口丢 session.idle 帧，issue #39）", () => {
+  /** 探测快捷断言：/message 快照 GET 次数（apiCalls 记录） */
+  const probes = (server: ReturnType<ReturnType<typeof makeAdapter>["server"]>) =>
+    server.apiCalls.filter((c) => c.method === "GET" && /\/session\/.+\/message/.test(c.path)).length;
+  const lastStatusOf = (ctx: ReturnType<typeof makeAdapter>, sid: string) => {
+    const ss = ctx.chat(sid).filter((e): e is Extract<ChatEvent, { type: "session_status" }> => e.type === "session_status");
+    return ss.at(-1)?.status;
+  };
+  const completedSnapshot = (msgId: string, toolId: string): Array<{ info: Record<string, unknown>; parts: Record<string, unknown>[] }> => [
+    {
+      info: { id: msgId, role: "assistant", parentID: "u1", time: { created: Date.now() } },
+      parts: [
+        { id: "prt_1", type: "text", text: "完成" },
+        { id: toolId, type: "tool", tool: "bash", state: { status: "completed", input: { command: "echo x" }, output: "x", time: { start: 1, end: 2 } } },
+      ],
+    },
+  ];
+
+  it("idle 帧永久丢失（SSE 断线）→ 静默后双快照零变化 → 对账收尾 turn_completed+idle，丢帧工具自愈终态", async () => {
+    const ctx = makeAdapter({ stuckIdleMs: 120, stuckConfirmMs: 60 });
+    const { sessionId, nativeSessionId: nativeIdRaw } = await ctx.adapter.createSession({ cwd: CWD });
+    const nativeId = nativeIdRaw!;
+    const server = ctx.server(CWD);
+    await ctx.adapter.sendTurn({ sessionId, text: "跑" });
+    server.emit("message.part.updated", toolPartFrame(nativeId, "msg_1", "tool_1", { status: "running", input: { command: "echo x" }, time: { start: 1 } }));
+    // 权威快照已落账完整执行，但 session.idle 帧永不到达（SSE 断线窗口吞噬）
+    server.history = completedSnapshot("msg_1", "tool_1");
+    await waitFor(() => ctx.chat(sessionId).some((e) => e.type === "turn_completed"));
+    const chat = ctx.chat(sessionId);
+    const doneIdx = chat.findIndex((e) => e.type === "tool_completed" && e.itemId === "tool_1");
+    expect(doneIdx).toBeGreaterThanOrEqual(0);
+    expect(chat[doneIdx]).toMatchObject({ status: "completed", output: "x" }); // 丢帧工具经快照自愈
+    expect(doneIdx).toBeLessThan(chat.findIndex((e) => e.type === "turn_completed")); // 自愈先于 turn 终态
+    expect(lastStatusOf(ctx, sessionId)).toBe("idle"); // 不再永久卡 running
+    expect(probes(server)).toBeGreaterThanOrEqual(2); // 确经双快照确认（非单次试探）
+  });
+
+  it("waiting（审批待决）静默不收尾：卡死探测让位于审批链路（replied/vanished 兜底管辖）", async () => {
+    const ctx = makeAdapter({ stuckIdleMs: 120, stuckConfirmMs: 60 });
+    const { sessionId, nativeSessionId: nativeIdRaw } = await ctx.adapter.createSession({ cwd: CWD, permMode: "ask" });
+    const nativeId = nativeIdRaw!;
+    const server = ctx.server(CWD);
+    await ctx.adapter.sendTurn({ sessionId, text: "跑" });
+    server.pendingPermissions = [{ id: "per_w", sessionID: nativeId, permission: "bash", patterns: ["echo w"], metadata: { command: "echo w" } }];
+    await waitFor(() => ctx.chat(sessionId).some((e) => e.type === "approval_requested"));
+    // 静默窗口 + 确认窗口全部过去（20 轮审批轮询早已跑过）仍不收尾
+    await waitFor(() => server.apiCalls.filter((c) => c.method === "GET" && c.path === "/permission").length >= 20);
+    expect(ctx.chat(sessionId).some((e) => e.type === "turn_completed")).toBe(false);
+    expect(lastStatusOf(ctx, sessionId)).toBe("waiting");
+    expect(probes(server)).toBe(0); // 审批待决期间不发起卡死探测
+  });
+
+  it("快照仍在落账（两次探测内容不同）→ 不收尾；内容稳定后 → 才收尾", async () => {
+    const ctx = makeAdapter({ stuckIdleMs: 120, stuckConfirmMs: 60 });
+    const { sessionId, nativeSessionId: nativeIdRaw } = await ctx.adapter.createSession({ cwd: CWD });
+    const nativeId = nativeIdRaw!;
+    const server = ctx.server(CWD);
+    await ctx.adapter.sendTurn({ sessionId, text: "跑" });
+    server.emit("message.part.updated", toolPartFrame(nativeId, "msg_1", "tool_1", { status: "running", input: { command: "echo x" }, time: { start: 1 } }));
+    server.history = completedSnapshot("msg_1", "tool_1");
+    await waitFor(() => probes(server) >= 1); // 首次探测
+    server.history = [...completedSnapshot("msg_1", "tool_1"), ...completedSnapshot("msg_2", "tool_2").map((m) => ({ ...m, info: { ...m.info, id: "msg_2", parentID: "msg_1" } }))]; // 原生仍在落账新消息
+    await waitFor(() => probes(server) >= 2); // 第二次探测（内容不同 → 重置确认窗，不收尾）
+    expect(ctx.chat(sessionId).some((e) => e.type === "turn_completed")).toBe(false); // 变化中不收尾
+    await waitFor(() => ctx.chat(sessionId).some((e) => e.type === "turn_completed")); // 稳定后按双快照确认收尾
+    expect(lastStatusOf(ctx, sessionId)).toBe("idle");
   });
 });
 

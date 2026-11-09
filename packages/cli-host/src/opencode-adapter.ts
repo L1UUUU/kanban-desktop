@@ -30,6 +30,10 @@ export interface OpenCodeAdapterOptions extends Omit<OpenCodeServerHostOptions, 
   host?: OpenCodeServerHostLike;
   /** 审批轮询间隔（缺省 500ms；测试调小） */
   pollIntervalMs?: number;
+  /** running 静默多久进入卡死探测（缺省 60s；SSE 断线丢 session.idle 帧的自愈窗口，测试调小） */
+  stuckIdleMs?: number;
+  /** 卡死确认：连续两次快照探测的最小间隔（缺省 10s；内容零变化才收尾，测试调小） */
+  stuckConfirmMs?: number;
   /** 诊断日志 */
   log?: (kind: string, detail: string) => void;
 }
@@ -59,6 +63,14 @@ interface SessionState {
   status: SessionStatus;
   turnActive: boolean;
   interruptRequested: boolean;
+  /** 本 turn 出现过审批（审批必然伴随工具执行：idle 对账触发条件之一，覆盖工具帧全丢形态） */
+  turnHadApproval: boolean;
+  /** idle 终结对账进行中（防重入：对账期间再到的 idle 不重复收尾） */
+  finishPending: boolean;
+  /** 本会话最近一条 ChatEvent 时刻（running 卡死判定基准；SSE 静默时长） */
+  lastEventAtMs: number;
+  /** 卡死探测记忆（连续两次 /message 快照零变化 → 判定 turn 已终结） */
+  stuckProbe: { key: string; at: number } | null;
   lastTurnError: { name: string; message: string } | null;
   queue: string[];
   pendingApprovals: Map<string, PendingApproval>;
@@ -90,6 +102,8 @@ export class OpenCodeAdapter implements CliAdapter {
   private readonly ownHost: OpenCodeServerHost | null;
   private readonly log: (kind: string, detail: string) => void;
   private readonly pollIntervalMs: number;
+  private readonly stuckIdleMs: number;
+  private readonly stuckConfirmMs: number;
   private pollTimer: NodeJS.Timeout | null = null;
   private pollBusy = false;
   /** server 客户端级缓存：command 名单 / 默认模型 */
@@ -99,6 +113,8 @@ export class OpenCodeAdapter implements CliAdapter {
   constructor(options: OpenCodeAdapterOptions = {}) {
     this.log = options.log ?? (() => {});
     this.pollIntervalMs = options.pollIntervalMs ?? 500;
+    this.stuckIdleMs = options.stuckIdleMs ?? 60_000;
+    this.stuckConfirmMs = options.stuckConfirmMs ?? 10_000;
     if (options.host) {
       this.host = options.host;
       this.ownHost = null;
@@ -206,7 +222,8 @@ export class OpenCodeAdapter implements CliAdapter {
       // 绑定为回退合成 id（审批先于 tool part 事件到达）时，标记待绑：下一个 error part 映射 denied
       if (entry.itemId.startsWith("ap-")) s.unboundDeny = true;
     }
-    if (s.turnActive) this.emit(s, { type: "session_status", status: "running" });
+    // 仍有待决审批（模型一次性多工具调用）时保持 waiting——回 running 会掩盖待决卡并误导空闲等待（issue #39）
+    if (s.turnActive && s.pendingApprovals.size === 0) this.emit(s, { type: "session_status", status: "running" });
   }
 
   async readHistory(sessionId: string): Promise<ChatEvent[]> {
@@ -347,6 +364,10 @@ export class OpenCodeAdapter implements CliAdapter {
       status: "idle",
       turnActive: false,
       interruptRequested: false,
+      turnHadApproval: false,
+      finishPending: false,
+      lastEventAtMs: Date.now(),
+      stuckProbe: null,
       lastTurnError: null,
       queue: [],
       pendingApprovals: new Map(),
@@ -378,7 +399,7 @@ export class OpenCodeAdapter implements CliAdapter {
         this.handlePartUpdated(s, p);
         break;
       case "session.idle":
-        if (s.turnActive) this.finishTurn(s);
+        if (s.turnActive && !s.finishPending) void this.finishTurnWithReconcile(s);
         break;
       case "session.error":
         this.handleSessionError(s, p);
@@ -556,6 +577,7 @@ export class OpenCodeAdapter implements CliAdapter {
         } catch {
           /* 瞬时不可达：下轮重试（死亡由 client.onDead 处理） */
         }
+        await this.checkStuckRunning(s);
       }
     } finally {
       this.pollBusy = false;
@@ -568,10 +590,51 @@ export class OpenCodeAdapter implements CliAdapter {
     this.pollTimer = null;
   }
 
+  /** running 卡死自愈（SSE 断线窗口丢 session.idle 帧 → 会话永久 running 的根因，issue #39）：
+   *  静默超阈值后连续两次 /message 快照内容零变化（正常生成必有新帧/新落账）→ 判定 turn 已终结，走 idle 同款对账收尾。
+   *  保守触发：waiting（审批待决）不收尾（replied/vanished 兜底管辖）；快照有变化即重置（网关慢而未死） */
+  private async checkStuckRunning(s: SessionState): Promise<void> {
+    if (s.finishPending || s.pendingApprovals.size > 0) return;
+    if (Date.now() - s.lastEventAtMs < this.stuckIdleMs) {
+      s.stuckProbe = null; // 有新事件 → 清除探测记忆重新计静默
+      return;
+    }
+    let key = "";
+    try {
+      const r = await s.client!.api("GET", `/session/${s.nativeId}/message?limit=500`);
+      if (!r.ok) return;
+      const json = r.json as { items?: unknown[] } | null;
+      const items = json?.items ?? (Array.isArray(r.json) ? r.json : []);
+      // 内容指纹：消息/部件 id + 工具状态 + 文本与输出长度（时间戳类字段不参与，避免永远「有变化」）
+      key = JSON.stringify(
+        (items as Array<{ info?: Record<string, unknown>; parts?: unknown[] }>).map((it) => [
+          String(it.info?.id ?? ""),
+          (it.parts ?? []).map((p) => {
+            const part = p as Record<string, unknown>;
+            const state = (part.state ?? {}) as Record<string, unknown>;
+            return [String(part.id ?? ""), String(state.status ?? ""), String(part.text ?? "").length, typeof state.output === "string" ? state.output.length : 0];
+          }),
+        ]),
+      );
+    } catch {
+      return; // 探测失败下轮重试
+    }
+    const prev = s.stuckProbe;
+    if (prev && prev.key === key) {
+      if (Date.now() - prev.at < this.stuckConfirmMs) return; // 同快照：自首次探测起计确认窗（at 不刷新，否则永远凑不满）
+      this.log("stuck-finish", `session=${s.sessionId} silentMs=${Date.now() - s.lastEventAtMs}（idle 帧丢失自愈）`);
+      s.stuckProbe = null;
+      await this.finishTurnWithReconcile(s); // 复用 idle 终结路径：快照对账补 tool 终态 + 分类收尾
+      return;
+    }
+    s.stuckProbe = { key, at: Date.now() }; // 新快照指纹：从这里起计确认窗
+  }
+
   /** 新审批：绑定当前非终态 tool part → approval_requested（含 patterns/always 建议映射）+ waiting */
   private registerApproval(s: SessionState, perm: Record<string, unknown>): void {
     const requestId = String(perm.id ?? "");
     if (!requestId || s.pendingApprovals.has(requestId) || s.expiredApprovals.has(requestId)) return;
+    s.turnHadApproval = true; // idle 对账触发标记（审批伴随的工具执行可能整段丢帧）
     // 绑定 itemId：最近一个非终态 tool part（审批发生在工具 pending 阶段）；无则回退合成 id
     let itemId = "";
     for (const [id, t] of s.tools) {
@@ -646,6 +709,8 @@ export class OpenCodeAdapter implements CliAdapter {
   private async startTurn(s: SessionState, text: string, command: string | null): Promise<void> {
     s.turnActive = true;
     s.interruptRequested = false;
+    s.turnHadApproval = false;
+    s.stuckProbe = null; // 上一 turn 的探测记忆不复用
     s.lastTurnError = null;
     s.unboundDeny = false; // deny 待绑标记仅在本 turn 内有效
     this.emit(s, { type: "session_status", status: "running" });
@@ -686,6 +751,49 @@ export class OpenCodeAdapter implements CliAdapter {
     }
   }
 
+  /** turn 终结入口（session.idle）：先经原生 message 快照对账再统一收尾——非终态工具补终态、本 turn 有审批而帧全丢的工具整体重建（SSE 断线窗口自愈） */
+  private async finishTurnWithReconcile(s: SessionState): Promise<void> {
+    const openIds = new Set([...s.tools.entries()].filter(([, t]) => !t.terminal).map(([id]) => id));
+    // 触发：有非终态工具（丢 completed 帧），或本 turn 有审批（工具帧可能全丢：审批经轮询可发现，工具事件只走 SSE）
+    if ((openIds.size > 0 || s.turnHadApproval) && !s.interruptRequested && s.client && !s.client.dead && !s.dead) {
+      s.finishPending = true;
+      try {
+        const r = await s.client.api("GET", `/session/${s.nativeId}/message?limit=500`);
+        if (r.ok) {
+          const json = r.json as { items?: Array<{ parts?: unknown[] }> } | null;
+          const items = json?.items ?? (Array.isArray(r.json) ? (r.json as Array<{ parts?: unknown[] }>) : []);
+          const seen = new Set<string>();
+          for (const it of items) {
+            for (const p of Array.isArray(it.parts) ? (it.parts as Array<Record<string, unknown>>) : []) {
+              if (p.type !== "tool") continue;
+              const pid = String(p.id ?? "");
+              if (!pid) continue;
+              seen.add(pid);
+              // 已终态的工具不重放；非终态或全丢（started 也未见）的经权威快照补齐（handleToolPart 幂等）
+              if (openIds.has(pid) || !s.tools.has(pid)) this.handleToolPart(s, p);
+            }
+          }
+          const healed = [...openIds].filter((id) => s.tools.get(id)?.terminal);
+          if (healed.length > 0) this.log("tool-reconcile", `session=${s.sessionId} healed=[${healed.join(",")}]`);
+        }
+      } catch {
+        /* 对账失败按既有行为收尾（失败分支收口 + readHistory 回填兜底） */
+      }
+      s.finishPending = false;
+      if (!s.turnActive) return; // 等待期间死亡/resume 已接管终态
+    }
+    this.finishTurn(s);
+  }
+
+  /** 非终态工具收口 interrupted（中断/失败 turn 不宣称仍在运行，spec H） */
+  private closeOpenTools(s: SessionState): void {
+    for (const [itemId, t] of s.tools) {
+      if (t.terminal) continue;
+      t.terminal = true;
+      this.emit(s, { type: "tool_completed", itemId, status: "interrupted", durationMs: Date.now() - t.startedAtMs, output: "" });
+    }
+  }
+
   /** turn 终态统一收尾（session.idle 触发）：interrupted/failed/completed 分类 + 残留收口 + 队列策略 */
   private finishTurn(s: SessionState, forced?: "failed"): void {
     s.turnActive = false;
@@ -704,12 +812,7 @@ export class OpenCodeAdapter implements CliAdapter {
     s.pendingApprovals.clear();
     if (aborted) {
       // 中断中的工具不宣称仍在运行（spec H）：非终态工具 → interrupted
-      for (const [itemId, t] of s.tools) {
-        if (!t.terminal) {
-          t.terminal = true;
-          this.emit(s, { type: "tool_completed", itemId, status: "interrupted", durationMs: Date.now() - t.startedAtMs, output: "" });
-        }
-      }
+      this.closeOpenTools(s);
       s.queue.length = 0;
       this.emit(s, { type: "turn_interrupted", reason: "user" });
       this.emit(s, { type: "session_status", status: "interrupted" });
@@ -719,6 +822,7 @@ export class OpenCodeAdapter implements CliAdapter {
       if (s.lastTurnError) {
         this.emit(s, { type: "session_error", code: "E_OPENCODE_TURN", message: `${s.lastTurnError.name}: ${s.lastTurnError.message}` });
       }
+      this.closeOpenTools(s); // 失败 turn 的非终态工具同样收口（对账未愈/无终态帧时不留运行中卡片）
       s.queue.length = 0; // 明确报错不重放（spec H）
       this.emit(s, { type: "session_status", status: "idle" });
       return;
@@ -759,7 +863,8 @@ export class OpenCodeAdapter implements CliAdapter {
     const existing = new Set<string>();
     for (const e of s.log) {
       if (e.type === "message_delta" || e.type === "message_completed") existing.add(`msg:${e.itemId}:${e.partId}`);
-      else if (e.type === "tool_started" || e.type === "tool_completed") existing.add(`tool:${e.itemId}`);
+      else if (e.type === "tool_started") existing.add(`tool-start:${e.itemId}`);
+      else if (e.type === "tool_completed") existing.add(`tool-done:${e.itemId}`);
     }
     // 按 parentID 分组 assistant 消息（工具轮+总结轮同 parent = 同一 turn）
     const groups = new Map<string, Array<{ info: Record<string, unknown>; parts: unknown[] }>>();
@@ -772,7 +877,7 @@ export class OpenCodeAdapter implements CliAdapter {
       groups.set(parent, arr);
     }
     for (const [, msgs] of groups) {
-      const seeds: Array<{ seed: ChatEventSeed; at: string }> = [];
+      const seeds: Array<{ seed: ChatEventSeed; at: string; heal?: boolean }> = [];
       for (const { info, parts } of msgs) {
         const itemId = String(info.id ?? "");
         if (!itemId) continue;
@@ -790,14 +895,21 @@ export class OpenCodeAdapter implements CliAdapter {
             s.completedItems.add(itemId);
           } else if (raw.type === "tool") {
             const toolId = String(raw.id ?? "");
-            if (!toolId || existing.has(`tool:${toolId}`)) continue;
-            existing.add(`tool:${toolId}`);
+            if (!toolId) continue;
+            // started/completed 分键去重：丢帧自愈——实时只见 started（completed 帧丢失）时仅补终态
+            const startedSeen = existing.has(`tool-start:${toolId}`);
+            const doneSeen = existing.has(`tool-done:${toolId}`);
+            if (startedSeen && doneSeen) continue;
             const state = (raw.state ?? {}) as Record<string, unknown>;
             const t = (state.time ?? {}) as { start?: number; end?: number };
-            seeds.push({
-              seed: { type: "tool_started", itemId: toolId, tool: String(raw.tool ?? "tool"), argsSummary: describeToolArgs(state.input) },
-              at,
-            });
+            if (!startedSeen) {
+              existing.add(`tool-start:${toolId}`);
+              seeds.push({
+                seed: { type: "tool_started", itemId: toolId, tool: String(raw.tool ?? "tool"), argsSummary: describeToolArgs(state.input) },
+                at,
+              });
+            }
+            existing.add(`tool-done:${toolId}`);
             const durationMs = t.start && t.end ? Math.max(0, t.end - t.start) : 0;
             const output = typeof state.output === "string" ? state.output : "";
             const denied = typeof state.error === "string" && state.error.includes("rejected");
@@ -810,11 +922,17 @@ export class OpenCodeAdapter implements CliAdapter {
                 output: typeof state.error === "string" && !denied ? `[error] ${state.error}` : output,
               },
               at,
+              heal: startedSeen, // started 已实时见过的补终态为自愈事件（不重造 turn 边界）
             });
           }
         }
       }
       if (seeds.length === 0) continue; // 该轮已全部实时见过 → 整轮跳过（无重复）
+      // 纯补终态（started 已实时见过、completed 帧丢失）：不包裹 turn 边界（该轮边界已实时见过，避免幽灵 turn）
+      if (seeds.every((x) => x.heal)) {
+        for (const { seed, at } of seeds) this.emit(s, seed, at);
+        continue;
+      }
       this.emit(s, { type: "turn_started", turnId: `t-${randomUUID().slice(0, 8)}` }, seeds[0].at);
       for (const { seed, at } of seeds) this.emit(s, seed, at);
       this.emit(s, { type: "turn_completed" }, seeds.at(-1)!.at);
@@ -826,6 +944,7 @@ export class OpenCodeAdapter implements CliAdapter {
   /** ChatEvent 唯一出口：seq 单调 + at + 广播；SkillObservation 直发订阅者不入日志 */
   private emit(s: SessionState, ev: ChatEventSeed, at?: string): void {
     s.seq += 1;
+    s.lastEventAtMs = Date.now(); // SSE 静默基准：有事件 = turn 活着（卡死探测不触发）
     const full = { ...ev, sessionId: s.sessionId, seq: s.seq, at: at ?? new Date().toISOString() } as ChatEvent;
     s.log.push(full);
     for (const h of this.handlers) h(full);

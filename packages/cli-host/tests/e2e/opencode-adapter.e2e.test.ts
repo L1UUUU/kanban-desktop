@@ -6,7 +6,7 @@ import net from "node:net";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { OpenCodeAdapter } from "../../src/opencode-adapter";
 import { OpenCodeServerHost } from "../../src/opencode/server-host";
-import { createCollector, defineAdapterContractTests } from "../../src/adapter.contract";
+import { createCollector, defineAdapterContractTests, type EventCollector } from "../../src/adapter.contract";
 import type { CliAdapter } from "../../src/adapter";
 import type { AdapterEvent, ChatEvent, SkillObservation } from "@kanban/ipc-schema";
 import { transcriptEventSchema } from "@kanban/ipc-schema";
@@ -154,6 +154,15 @@ describe.skipIf(!E2E)("OpenCodeAdapter 真实集成（env-gated）", () => {
       .map((e) => e.delta)
       .join("");
 
+  /** 契约中断用例前置钩子：等该会话首个 message_delta（模型真实出流）再返回，由契约套立即 interrupt——中断时机与模型速度解耦（issue #39） */
+  async function waitTurnActive(col: EventCollector, sid: string): Promise<void> {
+    const deadline = Date.now() + 120_000;
+    while (!col.chat(sid).some((e) => e.type === "message_delta")) {
+      if (Date.now() > deadline) return; // 尽力等待：超时照常打断（turn 若已完成，断言显性失败）
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+
   /* ---------------- 契约套（Fake 同断言参数化复跑，spec Testing seam 1） ----------------
    * 会话目录隔离：契约每个会话给独立 cwd → 独立 server。两个原因：
    * 1) allow-always 的 pattern 规则为 server 级持久（实证）——契约 always 用例放行 echo * 后，
@@ -190,6 +199,8 @@ describe.skipIf(!E2E)("OpenCodeAdapter 真实集成（env-gated）", () => {
       turnText: "请用两三句话解释什么是单元测试。",
       secondTurnText: "只回复一句话：第二轮完成。",
       interruptTurnText: "请从 1 慢慢数到 30，每行一个数字，不要跳过任何数字，也不要提前停止。",
+      // 首 delta 后打断：中断时机与模型速度解耦（issue #39，与 claude e2e 同法；abort 专用用例已有同款等待）
+      interruptWaitTurnActive: waitTurnActive,
       approvalTurnText: approvalPrompt,
       approvalPermMode: "ask",
       cwd: workdir, // 占位（契约 wrapper 已按会话改写为独立 cwd）
@@ -349,7 +360,7 @@ describe.skipIf(!E2E)("OpenCodeAdapter 真实集成（env-gated）", () => {
   });
 
   /* ---------------- always 判定（spec B：未实测则 capabilities 声明/UI 不暴露；本用例即实证） ---------------- */
-  it("allow-always：第一命令 always 放行后同类第二命令不再询问（patterns server 级生效）", async () => {
+  it("allow-always：第一命令 always 放行建立规则后，第二 turn 同类命令不再询问（patterns server 级生效）", async () => {
     markScope();
     const g1 = path.join(alwaysDir, "always-g1.txt");
     const g2 = path.join(alwaysDir, "always-g2.txt");
@@ -358,32 +369,54 @@ describe.skipIf(!E2E)("OpenCodeAdapter 真实集成（env-gated）", () => {
     const local: AdapterEvent[] = [];
     a.subscribe((e) => local.push(e));
     const { sessionId } = await a.createSession({ cwd: alwaysDir, permMode: "ask" });
-    await a.sendTurn({
-      sessionId,
-      text: [
-        "请依次分别运行下面两条 shell 命令（分成两次独立运行，不要合并，也不要跳过）：",
-        `1) echo g1 > "${g1}"`,
-        `2) echo g2 > "${g2}"`,
-        "每条运行完后各用一句话报告结果。",
-      ].join("\n"),
-    });
-    // 停在第一处审批等待（waiting 稳定）
-    const waitApproval = async (): Promise<Extract<ChatEvent, { type: "approval_requested" }>> => {
-      const deadline = Date.now() + 180_000;
+    const lastStatus = (): string | undefined => {
+      const ss = local.filter((e): e is Extract<ChatEvent, { type: "session_status" }> => "type" in e && e.sessionId === sessionId && e.type === "session_status");
+      return ss.at(-1)?.status;
+    };
+    /** 驱动 turn 至终态（终态驱动而非定步长）：期间新到的审批逐个处置——echo 类按 decision，他类（模型偏航的 read/write 等）allow-once 放行
+     *  （deny 他类会阻断副作用产生（模型用 write 写目标文件时 g1/g2 即缺失，issue #39 重跑定位）；allow-once 不建规则，不影响 echo 规则断言） */
+    const settleTurn = async (echoDecision: "allow-always" | "deny"): Promise<void> => {
+      const deadline = Date.now() + 240_000; // 与 driveIdle/waitSessionsDone 预算一致（内网网关长尾下 180s 偏紧，issue #39 重跑定位）
+      let scan = local.length;
       for (;;) {
-        const req = local.find((e): e is Extract<ChatEvent, { type: "approval_requested" }> => "type" in e && e.sessionId === sessionId && e.type === "approval_requested");
-        if (req) return req;
-        if (Date.now() > deadline) throw new Error("审批未到达");
+        if (Date.now() > deadline) {
+          // 失败现场可见：末态 + 已见审批（* 标未处置，按 local 游标）——区分「waiting 卡死（审批漏处置）」与「running 无产出（网关长尾）」
+          const dump = local
+            .map((e, i) => ({ e, i }))
+            .filter(({ e }) => "type" in e && e.sessionId === sessionId && e.type === "approval_requested")
+            .map(({ e, i }) => `${i >= scan ? "*" : ""}${JSON.stringify((e as Extract<ChatEvent, { type: "approval_requested" }>).command.slice(0, 40))}`)
+            .join(", ");
+          throw new Error(`turn 超时：lastStatus=${lastStatus()} asks=[${dump}]`);
+        }
+        const status = lastStatus();
+        if (status === "idle" || status === "interrupted" || status === "disconnected") return;
+        const idx = local
+          .slice(scan)
+          .findIndex((e): e is Extract<ChatEvent, { type: "approval_requested" }> => "type" in e && e.sessionId === sessionId && e.type === "approval_requested");
+        if (idx >= 0) {
+          const req = local[scan + idx] as Extract<ChatEvent, { type: "approval_requested" }>;
+          scan = scan + idx + 1; // 逐条推进（= local.length 会把同批到达的第二条审批永久跳过）
+          await a.resolveApproval({ sessionId, requestId: req.requestId, decision: req.command.includes("echo") ? echoDecision : "allow-once" });
+          continue;
+        }
         await new Promise((r) => setTimeout(r, 400));
       }
     };
-    const first = await waitApproval();
-    await a.resolveApproval({ sessionId, requestId: first.requestId, decision: "allow-always" });
-    await waitSessionsDone(local, [sessionId]);
-    const asks = local.filter((e): e is Extract<ChatEvent, { type: "approval_requested" }> => "type" in e && e.sessionId === sessionId && e.type === "approval_requested");
-    expect(asks.length).toBe(1); // 同类（echo *）不再询问 —— always 实证
-    expect(existsSync(g1)).toBe(true);
-    expect(existsSync(g2)).toBe(true);
+    // 两条命令分两个 turn：规则先于第二命令被评估时存在。单 turn 双命令会依赖「模型串行发工具调用」的时序假设——
+    // 模型一次性发出两个 tool call 时第二 ask 先于规则建立、永不被规则覆盖（issue #39 复现形态）。
+    // prompt 点名 bash 工具：模型改用 write 等写文件时 echo 审批不会出现，规则无从建立（第二 turn 显性失败而非静默）
+    await a.sendTurn({ sessionId, text: `请用 bash 工具运行下面这条 shell 命令（不要用其他工具替代），然后只用一句话报告命令的输出（不要读取文件验证，也不要运行其他命令）：echo g1 > "${g1}"` });
+    await settleTurn("allow-always"); // 首个 echo 审批 always（建立规则）；他类偏航审批 allow-once 放行
+    expect(existsSync(g1)).toBe(true); // 第一命令真执行
+    // 第二 turn：同类 echo 命令——server 级规则已存在，应直接放行不再询问（echo 若被询问将被 deny → g2 不产生，断言即败）
+    const mark = local.length;
+    await a.sendTurn({ sessionId, text: `请用 bash 工具运行下面这条 shell 命令（不要用其他工具替代），然后只用一句话报告命令的输出（不要读取文件验证，也不要运行其他命令）：echo g2 > "${g2}"` });
+    await settleTurn("deny"); // 同类 echo 若被询问将被 deny → g2 不会产生（断言即败）；他类偏航 allow-once 不阻断
+    const turn2EchoAsks = local.slice(mark).filter(
+      (e): e is Extract<ChatEvent, { type: "approval_requested" }> => "type" in e && e.sessionId === sessionId && e.type === "approval_requested" && e.command.includes("echo"),
+    );
+    expect(turn2EchoAsks).toHaveLength(0); // 同类（echo *）不再询问 —— always 实证
+    expect(existsSync(g2)).toBe(true); // 命令真执行（规则直接放行）
     expect(local.some((e): e is ChatEvent => "type" in e && e.sessionId === sessionId && e.type === "turn_completed")).toBe(true);
     await a.dispose();
   });

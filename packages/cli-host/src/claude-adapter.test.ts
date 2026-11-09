@@ -305,6 +305,25 @@ describe("ClaudeAdapter：stdio 审批映射", () => {
     await expect(adapter.readHistory("nope")).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
     void chat;
   });
+
+  it("多审批并发 pending：resolve 其一后仍有待决 → 状态保持 waiting（不误报 running，issue #39 同型根因）", async () => {
+    const ctx = makeAdapter();
+    hookRoots.push(ctx.hookDir);
+    const { sessionId } = await ctx.adapter.createSession({ cwd: CWD, permMode: "ask" });
+    await ctx.adapter.sendTurn({ sessionId, text: "两个工具" });
+    // CLI 并行工具调用：两个 can_use_tool 控制请求先后到达（均待决）
+    emitCanUseTool(ctx.stream(), "ap-1", "call-1");
+    emitCanUseTool(ctx.stream(), "ap-2", "call-2");
+    const lastStatus = () => {
+      const ss = ctx.chat(sessionId).filter((e): e is Extract<ChatEvent, { type: "session_status" }> => e.type === "session_status");
+      return ss.at(-1)?.status;
+    };
+    expect(lastStatus()).toBe("waiting");
+    await ctx.adapter.resolveApproval({ sessionId, requestId: "ap-1", decision: "allow-once" });
+    expect(lastStatus()).toBe("waiting"); // ap-2 仍待决：不得回 running
+    await ctx.adapter.resolveApproval({ sessionId, requestId: "ap-2", decision: "deny" });
+    expect(lastStatus()).toBe("running"); // 全部决完才回 running（turn 继续）
+  });
 });
 
 describe("ClaudeAdapter：interrupt 与进程死亡/resume", () => {
