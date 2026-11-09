@@ -1,5 +1,6 @@
-// 用途：应用运行信息的 wire 契约（主进程提供、renderer 展示；本工单的 zod 冒烟面，spec E）
+// 用途：应用运行信息的 wire 契约（主进程提供、renderer 展示；本工单的 zod 冒烟面，spec E）+ app:event 应用级事件推送（#49）
 import { z } from "zod";
+import { residueProcessSchema } from "./residue";
 
 export const appInfoSchema = z.object({
   app: z.string(),
@@ -10,6 +11,8 @@ export const appInfoSchema = z.object({
   sqliteEntry: z.string(),
   /** Fake 演示会话 cwd（Main 注入：env KANBAN_FAKE_DEMO_CWD 覆盖、缺省用户主目录；renderer 不内置任何路径） */
   fakeDemoCwd: z.string(),
+  /** 配置文件绝对路径（#46：Main 注入 <userData>/config.json；spawn 失败卡「复制配置路径」动作数据源） */
+  configPath: z.string(),
 });
 
 export type AppInfo = z.infer<typeof appInfoSchema>;
@@ -19,3 +22,13 @@ export const shutdownNoticeSchema = z.object({
   reason: z.string(),
 });
 export type ShutdownNotice = z.infer<typeof shutdownNoticeSchema>;
+
+// 应用级事件推送（main→renderer，通道 app:event；现状仅 app:shutdown 单通知——#49 spec #40 D 节 F17 处置新增订阅桥）
+export const appEventSchema = z.discriminatedUnion("type", [
+  // 残留检测一次性通知：应用就绪后检测一次，有结果才推送（无残留不推送、不打扰）
+  z.object({
+    type: z.literal("residue-detected"),
+    processes: z.array(residueProcessSchema),
+  }),
+]);
+export type AppEventWire = z.infer<typeof appEventSchema>;

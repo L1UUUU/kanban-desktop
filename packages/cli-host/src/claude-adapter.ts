@@ -5,11 +5,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
 import { transformHookEvents } from "@kanban/tracker";
-import { AdapterError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
+import { AdapterError, ExeNotFoundError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
 import { resolveClaudeExe } from "./claude/exe";
 import { ClaudeStreamClient, type ClaudeStreamOptions } from "./claude/client";
 import { prepareSessionHookDir, resolveHookNodeBin, tailJsonl, writeSessionSettings, type SessionHookFiles } from "./claude/hook-inject";
 import { findTranscriptFile, parseTranscriptEvents, parseTranscriptItems } from "./claude/transcript";
+import { isAuthFailureStatus, isAuthFailureText } from "./session-error";
 
 /** 可注入的流客户端面（生产 ClaudeStreamClient；测试 Fake 手动驱动协议消息） */
 export interface ClaudeStreamClientLike {
@@ -22,6 +23,8 @@ export interface ClaudeStreamClientLike {
   stop(): void;
   dead: boolean;
   exitInfo?: { code: number | null; signal: NodeJS.Signals | null } | null;
+  /** 子进程 pid（listChildPids 用；无进程/已退出的实现为 null） */
+  pid?: number | null;
 }
 
 export interface ClaudeAdapterOptions {
@@ -145,6 +148,9 @@ export class ClaudeAdapter implements CliAdapter {
       }
       this.emit(s, { type: "session_status", status: "idle" });
     } catch (e) {
+      // #46：exe 解析失败协议级映射（E_SPAWN_NOT_FOUND → renderer spawn 卡）；其余包装为创建失败
+      if (e instanceof ExeNotFoundError) throw new AdapterError("E_SPAWN_NOT_FOUND", e.message);
+      if (e instanceof AdapterError) throw e;
       throw new AdapterError("E_INTERNAL", `创建 Claude 会话失败：${e instanceof Error ? e.message : String(e)}`);
     }
     return { sessionId, nativeSessionId };
@@ -279,6 +285,16 @@ export class ClaudeAdapter implements CliAdapter {
     return () => {
       this.handlers.delete(handler);
     };
+  }
+
+  /** C5 演进（#44）：单进程单会话模型 —— 每个存活会话的客户端各报一份 pid；死亡/断开不报陈旧 pid（防 pid 复用误判） */
+  async listChildPids(): Promise<number[]> {
+    const pids = new Set<number>();
+    for (const s of this.sessions.values()) {
+      const pid = s.client && !s.client.dead ? s.client.pid : null;
+      if (pid) pids.add(pid);
+    }
+    return [...pids];
   }
 
   /* ---------------- 内部：进程与协议挂接 ---------------- */
@@ -443,9 +459,18 @@ export class ClaudeAdapter implements CliAdapter {
     }
   }
 
-  /** result 轮终态：success → completed；error_during_execution+已请求中断 → 已取消（GUI 非报错，PoC 7 T2）；其余 → session_error */
+  /** result 轮终态：success 且无错 → completed；error_during_execution+已请求中断 → 已取消（GUI 非报错，PoC 7 T2）；
+   *  success+is_error → API 级失败（认证失效在此形态到达，claude 2.1.317 实证 subtype 仍为 success，#41）；
+   *  其余 → session_error（#41 枚举映射：401/403 或认证文本 → AUTH_EXPIRED，否则 INTERNAL） */
   private handleResult(s: SessionState, msg: Record<string, unknown>): void {
     const subtype = String(msg.subtype ?? "");
+    if (subtype === "success" && msg.is_error === true) {
+      const apiStatus = typeof msg.api_error_status === "number" ? msg.api_error_status : null;
+      this.emitTurnError(s, String(msg.result ?? `claude turn 失败（api error）`), apiStatus);
+      this.finishTurn(s, "failed");
+      this.scheduleLateHookScan(s);
+      return;
+    }
     if (subtype === "success") {
       this.finishTurn(s, "completed");
       this.scheduleLateHookScan(s);
@@ -455,13 +480,15 @@ export class ClaudeAdapter implements CliAdapter {
       this.finishTurn(s, "interrupted");
       return;
     }
-    this.emit(s, {
-      type: "session_error",
-      code: "E_CLAUDE_TURN",
-      message: String(msg.result ?? `claude turn 失败（${subtype || "unknown"}）`),
-    });
+    this.emitTurnError(s, String(msg.result ?? `claude turn 失败（${subtype || "unknown"}）`), null);
     this.finishTurn(s, "failed");
     this.scheduleLateHookScan(s);
+  }
+
+  /** turn 失败报错发射（#41）：结构化 api_error_status 优先（401/403 → AUTH_EXPIRED），无结构化状态时按协议错误文本归类 */
+  private emitTurnError(s: SessionState, message: string, apiStatus: number | null): void {
+    const code = apiStatus !== null ? (isAuthFailureStatus(apiStatus) ? "AUTH_EXPIRED" : "INTERNAL") : isAuthFailureText(message) ? "AUTH_EXPIRED" : "INTERNAL";
+    this.emit(s, { type: "session_error", code, message });
   }
 
   /** CLI→host 控制请求：can_use_tool 审批（--permission-prompt-tool=stdio 前提） */

@@ -1,0 +1,711 @@
+{
+  "generatedAt": "2026-11-09T09:46:11.274Z",
+  "summary": [
+    {
+      "cli": "claude-code",
+      "clean": 10,
+      "hits": 10,
+      "rate": 1,
+      "excluded": 4
+    },
+    {
+      "cli": "codex",
+      "clean": 10,
+      "hits": 10,
+      "rate": 1,
+      "excluded": 4
+    },
+    {
+      "cli": "opencode",
+      "clean": 18,
+      "hits": 6,
+      "rate": 0.3333333333333333,
+      "excluded": 0
+    }
+  ],
+  "rows": [
+    {
+      "cli": "claude-code",
+      "turn": "read",
+      "itemId": "call_c79bf7123f684039aab02841",
+      "tool": "Read",
+      "argsSummary": "{\"file_path\":\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\claude\\\\r1.txt\"}",
+      "outputExcerpt": "1\tMARK-R1 内容甲",
+      "extracted": [
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude\\r1.txt",
+        "C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\claude\\\\r1.txt"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude\\r1.txt",
+      "hit": true,
+      "status": "hit"
+    },
+    {
+      "cli": "claude-code",
+      "turn": "read",
+      "itemId": "call_7a6fa4c35daf434187742721",
+      "tool": "Read",
+      "argsSummary": "{\"file_path\":\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\claude\\\\r2.txt\"}",
+      "outputExcerpt": "1\tMARK-R2 内容乙",
+      "extracted": [
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude\\r2.txt",
+        "C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\claude\\\\r2.txt"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude\\r2.txt",
+      "hit": true,
+      "status": "hit"
+    },
+    {
+      "cli": "claude-code",
+      "turn": "read",
+      "itemId": "call_2930f1a34a6243a3b27aa6a9",
+      "tool": "Read",
+      "argsSummary": "{\"file_path\":\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\claude\\\\r3.txt\"}",
+      "outputExcerpt": "1\tMARK-R3 内容丙",
+      "extracted": [
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude\\r3.txt",
+        "C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\claude\\\\r3.txt"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude\\r3.txt",
+      "hit": true,
+      "status": "hit"
+    },
+    {
+      "cli": "claude-code",
+      "turn": "write",
+      "itemId": "call_ca3b21d31796433b84e84df0",
+      "tool": "Write",
+      "argsSummary": "{\"file_path\":\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\claude\\\\w1.txt\",\"content\":\"MARK-W1\\n\"}",
+      "outputExcerpt": "File created successfully at: C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude\\w1.txt (file state is current in your context — no need to Read it back)",
+      "extracted": [
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude\\w1.txt",
+        "C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\claude\\\\w1.txt",
+        "\\n"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude\\w1.txt",
+      "hit": true,
+      "status": "hit"
+    },
+    {
+      "cli": "claude-code",
+      "turn": "write",
+      "itemId": "call_85073f1de00146d7b79ad93d",
+      "tool": "Write",
+      "argsSummary": "{\"file_path\":\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\claude\\\\w2.txt\",\"content\":\"MARK-W2\\n\"}",
+      "outputExcerpt": "File created successfully at: C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude\\w2.txt (file state is current in your context — no need to Read it back)",
+      "extracted": [
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude\\w2.txt",
+        "C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\claude\\\\w2.txt",
+        "\\n"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude\\w2.txt",
+      "hit": true,
+      "status": "hit"
+    },
+    {
+      "cli": "claude-code",
+      "turn": "write",
+      "itemId": "call_1f7d3205662b489c96810dfd",
+      "tool": "Write",
+      "argsSummary": "{\"file_path\":\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\claude\\\\w3.txt\",\"content\":\"MARK-W3\\n\"}",
+      "outputExcerpt": "File created successfully at: C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude\\w3.txt (file state is current in your context — no need to Read it back)",
+      "extracted": [
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude\\w3.txt",
+        "C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\claude\\\\w3.txt",
+        "\\n"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude\\w3.txt",
+      "hit": true,
+      "status": "hit"
+    },
+    {
+      "cli": "claude-code",
+      "turn": "edit",
+      "itemId": "call_23fd1cb13db943e89de74c5b",
+      "tool": "Read",
+      "argsSummary": "{\"file_path\":\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\claude\\\\e1.txt\"}",
+      "outputExcerpt": "1\talpha 第一处文本",
+      "extracted": [],
+      "actualFile": "",
+      "hit": false,
+      "status": "excluded",
+      "excludeReason": "事件对数 4 ≠ 指令数 2（无法无偏归因）"
+    },
+    {
+      "cli": "claude-code",
+      "turn": "edit",
+      "itemId": "call_360b7b00734a436ba167f06d",
+      "tool": "Edit",
+      "argsSummary": "{\"replace_all\":false,\"file_path\":\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\claude\\\\e1.txt\",\"old_string\":\"alpha\",\"new_string\":\"MARK-E1\"}",
+      "outputExcerpt": "The file C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude\\e1.txt has been updated successfully. (file state is current in your context — no need to Read it back)",
+      "extracted": [],
+      "actualFile": "",
+      "hit": false,
+      "status": "excluded",
+      "excludeReason": "事件对数 4 ≠ 指令数 2（无法无偏归因）"
+    },
+    {
+      "cli": "claude-code",
+      "turn": "edit",
+      "itemId": "call_d7be5a4140c64c6b8e54487c",
+      "tool": "Read",
+      "argsSummary": "{\"file_path\":\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\claude\\\\e2.txt\"}",
+      "outputExcerpt": "1\talpha 第二处文本",
+      "extracted": [],
+      "actualFile": "",
+      "hit": false,
+      "status": "excluded",
+      "excludeReason": "事件对数 4 ≠ 指令数 2（无法无偏归因）"
+    },
+    {
+      "cli": "claude-code",
+      "turn": "edit",
+      "itemId": "call_b4acd1ed32b64492bb60158a",
+      "tool": "Edit",
+      "argsSummary": "{\"replace_all\":false,\"file_path\":\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\claude\\\\e2.txt\",\"old_string\":\"alpha\",\"new_string\":\"MARK-E2\"}",
+      "outputExcerpt": "The file C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude\\e2.txt has been updated successfully. (file state is current in your context — no need to Read it back)",
+      "extracted": [],
+      "actualFile": "",
+      "hit": false,
+      "status": "excluded",
+      "excludeReason": "事件对数 4 ≠ 指令数 2（无法无偏归因）"
+    },
+    {
+      "cli": "claude-code",
+      "turn": "bash",
+      "itemId": "call_88eb715b20a24d0cb4cb9e6d",
+      "tool": "Bash",
+      "argsSummary": "{\"command\":\"echo MARK-B1 > \\\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\claude\\\\b1.txt\\\"\",\"description\":\"写入标记 MARK-B1 到 b1.txt\"}",
+      "outputExcerpt": "Shell cwd was reset to C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude",
+      "extracted": [
+        "C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\claude\\\\b1.txt\\",
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude\\b1.txt",
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude\\b1.txt",
+      "hit": true,
+      "status": "hit"
+    },
+    {
+      "cli": "claude-code",
+      "turn": "bash",
+      "itemId": "call_eda8f3c388ed4965a65d6766",
+      "tool": "Bash",
+      "argsSummary": "{\"command\":\"echo MARK-B2 > \\\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\claude\\\\b2.txt\\\"\",\"description\":\"写入标记 MARK-B2 到 b2.txt\"}",
+      "outputExcerpt": "Shell cwd was reset to C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude",
+      "extracted": [
+        "C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\claude\\\\b2.txt\\",
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude\\b2.txt",
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude\\b2.txt",
+      "hit": true,
+      "status": "hit"
+    },
+    {
+      "cli": "claude-code",
+      "turn": "bash",
+      "itemId": "call_f4f57845e6c04513b515a94c",
+      "tool": "Bash",
+      "argsSummary": "{\"command\":\"echo MARK-B3 > \\\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\claude\\\\b3.txt\\\"\",\"description\":\"写入标记 MARK-B3 到 b3.txt\"}",
+      "outputExcerpt": "Shell cwd was reset to C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude",
+      "extracted": [
+        "C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\claude\\\\b3.txt\\",
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude\\b3.txt",
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude\\b3.txt",
+      "hit": true,
+      "status": "hit"
+    },
+    {
+      "cli": "claude-code",
+      "turn": "bash",
+      "itemId": "call_edba0c529fa8423ebb70488d",
+      "tool": "Bash",
+      "argsSummary": "{\"command\":\"echo MARK-B4 > \\\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\claude\\\\b4.txt\\\"\",\"description\":\"写入标记 MARK-B4 到 b4.txt\"}",
+      "outputExcerpt": "Shell cwd was reset to C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude",
+      "extracted": [
+        "C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\claude\\\\b4.txt\\",
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude\\b4.txt",
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\claude\\b4.txt",
+      "hit": true,
+      "status": "hit"
+    },
+    {
+      "cli": "codex",
+      "turn": "cmd-read",
+      "itemId": "exec-a0c895e7-88dd-4498-91af-6066d040531a",
+      "tool": "commandExecution",
+      "argsSummary": "\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command \"type \\\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\r1.txt\\\"\"",
+      "outputExcerpt": "MARK-R1 内容甲\r\n",
+      "extracted": [
+        "C:\\\\Program",
+        "\\\\PowerShell\\\\7\\\\pwsh.exe",
+        "C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\r1.txt\\"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\codex\\r1.txt",
+      "hit": true,
+      "status": "hit"
+    },
+    {
+      "cli": "codex",
+      "turn": "cmd-read",
+      "itemId": "exec-d032512e-105f-41d9-9901-bec5792df60f",
+      "tool": "commandExecution",
+      "argsSummary": "\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command \"type \\\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\r2.txt\\\"\"",
+      "outputExcerpt": "MARK-R2 内容乙\r\n",
+      "extracted": [
+        "C:\\\\Program",
+        "\\\\PowerShell\\\\7\\\\pwsh.exe",
+        "C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\r2.txt\\"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\codex\\r2.txt",
+      "hit": true,
+      "status": "hit"
+    },
+    {
+      "cli": "codex",
+      "turn": "cmd-read",
+      "itemId": "exec-57de4e5f-3f32-4892-9362-e40c1d30bbff",
+      "tool": "commandExecution",
+      "argsSummary": "\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command \"type \\\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\r3.txt\\\"\"",
+      "outputExcerpt": "MARK-R3 内容丙\r\n",
+      "extracted": [
+        "C:\\\\Program",
+        "\\\\PowerShell\\\\7\\\\pwsh.exe",
+        "C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\r3.txt\\"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\codex\\r3.txt",
+      "hit": true,
+      "status": "hit"
+    },
+    {
+      "cli": "codex",
+      "turn": "cmd-write",
+      "itemId": "exec-e2367b05-4d81-4abe-8234-aea518e898a0",
+      "tool": "commandExecution",
+      "argsSummary": "\"C:\\\\WINDOWS\\\\system32\\\\cmd.exe\" /c \"echo MARK-B1 > \\\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\b1.txt\\\"\"",
+      "outputExcerpt": "[exit 1] �ļ�����Ŀ¼��������﷨����ȷ��\r\n",
+      "extracted": [
+        "C:\\\\WINDOWS\\\\system32\\\\cmd.exe",
+        "/c",
+        "C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\b1.txt\\"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\codex\\b1.txt",
+      "hit": false,
+      "status": "excluded",
+      "excludeReason": "写验证未通过（文件缺失或无 marker）"
+    },
+    {
+      "cli": "codex",
+      "turn": "cmd-write",
+      "itemId": "exec-563cf16d-eea9-4687-b0b5-cc6ece30eb04",
+      "tool": "commandExecution",
+      "argsSummary": "\"C:\\\\WINDOWS\\\\system32\\\\cmd.exe\" /c \"echo MARK-B2 > \\\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\b2.txt\\\"\"",
+      "outputExcerpt": "[exit 1] �ļ�����Ŀ¼��������﷨����ȷ��\r\n",
+      "extracted": [
+        "C:\\\\WINDOWS\\\\system32\\\\cmd.exe",
+        "/c",
+        "C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\b2.txt\\"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\codex\\b2.txt",
+      "hit": false,
+      "status": "excluded",
+      "excludeReason": "写验证未通过（文件缺失或无 marker）"
+    },
+    {
+      "cli": "codex",
+      "turn": "cmd-write",
+      "itemId": "exec-45c9e2ec-9acc-412b-893c-4fb0754286f2",
+      "tool": "commandExecution",
+      "argsSummary": "\"C:\\\\WINDOWS\\\\system32\\\\cmd.exe\" /c \"echo MARK-B3 > \\\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\b3.txt\\\"\"",
+      "outputExcerpt": "[exit 1] �ļ�����Ŀ¼��������﷨����ȷ��\r\n",
+      "extracted": [
+        "C:\\\\WINDOWS\\\\system32\\\\cmd.exe",
+        "/c",
+        "C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\b3.txt\\"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\codex\\b3.txt",
+      "hit": false,
+      "status": "excluded",
+      "excludeReason": "写验证未通过（文件缺失或无 marker）"
+    },
+    {
+      "cli": "codex",
+      "turn": "cmd-write",
+      "itemId": "exec-37f94029-2419-4625-94b9-8b58354a39b2",
+      "tool": "commandExecution",
+      "argsSummary": "\"C:\\\\WINDOWS\\\\system32\\\\cmd.exe\" /c \"echo MARK-B4 > \\\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\b4.txt\\\"\"",
+      "outputExcerpt": "[exit 1] �ļ�����Ŀ¼��������﷨����ȷ��\r\n",
+      "extracted": [
+        "C:\\\\WINDOWS\\\\system32\\\\cmd.exe",
+        "/c",
+        "C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\b4.txt\\"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\codex\\b4.txt",
+      "hit": false,
+      "status": "excluded",
+      "excludeReason": "写验证未通过（文件缺失或无 marker）"
+    },
+    {
+      "cli": "codex",
+      "turn": "patch-edit",
+      "itemId": "call_a4eaae60d5c54a2abf827697b1a112eb",
+      "tool": "mcp:codey_fastctx/replace",
+      "argsSummary": "{\"path\":\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\e1.txt\",\"pattern\":\"alpha\",\"replacement\":\"MARK-E1\",\"literal\":true}",
+      "outputExcerpt": "{\"content\":[{\"type\":\"text\",\"text\":\"C:/Users/liuy/AppData/Local/Temp/kb-clue-probe-4aFkUl/codex/e1.txt: 1 replacement\\n\\n(Complete: 1 replacement in 1 file.)\"}],\"structuredContent\":null,\"_meta\":null}",
+      "extracted": [
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\codex\\e1.txt",
+        "C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\e1.txt",
+        "\\n\\n(Complete"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\codex\\e1.txt",
+      "hit": true,
+      "status": "hit"
+    },
+    {
+      "cli": "codex",
+      "turn": "patch-edit",
+      "itemId": "call_15151401f45b4ba385da0eda8df02246",
+      "tool": "mcp:codey_fastctx/replace",
+      "argsSummary": "{\"path\":\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\e2.txt\",\"pattern\":\"alpha\",\"replacement\":\"MARK-E2\",\"literal\":true}",
+      "outputExcerpt": "{\"content\":[{\"type\":\"text\",\"text\":\"C:/Users/liuy/AppData/Local/Temp/kb-clue-probe-4aFkUl/codex/e2.txt: 1 replacement\\n\\n(Complete: 1 replacement in 1 file.)\"}],\"structuredContent\":null,\"_meta\":null}",
+      "extracted": [
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\codex\\e2.txt",
+        "C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\e2.txt",
+        "\\n\\n(Complete"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\codex\\e2.txt",
+      "hit": true,
+      "status": "hit"
+    },
+    {
+      "cli": "codex",
+      "turn": "patch-create",
+      "itemId": "exec-c10a2f9d-862b-4333-b7bb-40554befaca7",
+      "tool": "fileChange",
+      "argsSummary": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\codex\\w1.txt",
+      "outputExcerpt": "[{\"path\":\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\w1.txt\",\"kind\":{\"type\":\"add\"},\"diff\":\"MARK-W1\\n\"}]",
+      "extracted": [
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\codex\\w1.txt",
+        "C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\w1.txt",
+        "\\n"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\codex\\w1.txt",
+      "hit": true,
+      "status": "hit"
+    },
+    {
+      "cli": "codex",
+      "turn": "patch-create",
+      "itemId": "exec-2abd9a09-2f71-4e15-b4a2-f39722c7b295",
+      "tool": "fileChange",
+      "argsSummary": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\codex\\w2.txt",
+      "outputExcerpt": "[{\"path\":\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\w2.txt\",\"kind\":{\"type\":\"add\"},\"diff\":\"MARK-W2\\n\"}]",
+      "extracted": [
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\codex\\w2.txt",
+        "C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\w2.txt",
+        "\\n"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\codex\\w2.txt",
+      "hit": true,
+      "status": "hit"
+    },
+    {
+      "cli": "codex",
+      "turn": "patch-create",
+      "itemId": "exec-d370c18c-02c2-43be-ab40-fbfd7584a7da",
+      "tool": "fileChange",
+      "argsSummary": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\codex\\w3.txt",
+      "outputExcerpt": "[{\"path\":\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\w3.txt\",\"kind\":{\"type\":\"add\"},\"diff\":\"MARK-W3\\n\"}]",
+      "extracted": [
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\codex\\w3.txt",
+        "C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\w3.txt",
+        "\\n"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\codex\\w3.txt",
+      "hit": true,
+      "status": "hit"
+    },
+    {
+      "cli": "codex",
+      "turn": "patch-create",
+      "itemId": "exec-e9506131-4e9b-4ce4-acc8-b5be50ad27bc",
+      "tool": "fileChange",
+      "argsSummary": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\codex\\w4.txt",
+      "outputExcerpt": "[{\"path\":\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\w4.txt\",\"kind\":{\"type\":\"add\"},\"diff\":\"MARK-W4\\n\"}]",
+      "extracted": [
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\codex\\w4.txt",
+        "C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\w4.txt",
+        "\\n"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\codex\\w4.txt",
+      "hit": true,
+      "status": "hit"
+    },
+    {
+      "cli": "codex",
+      "turn": "patch-create",
+      "itemId": "exec-7f163e72-f192-45d0-9f24-be2b3872a685",
+      "tool": "fileChange",
+      "argsSummary": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\codex\\w5.txt",
+      "outputExcerpt": "[{\"path\":\"C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\w5.txt\",\"kind\":{\"type\":\"add\"},\"diff\":\"MARK-W5\\n\"}]",
+      "extracted": [
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\codex\\w5.txt",
+        "C:\\\\Users\\\\liuy\\\\AppData\\\\Local\\\\Temp\\\\kb-clue-probe-4aFkUl\\\\codex\\\\w5.txt",
+        "\\n"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\codex\\w5.txt",
+      "hit": true,
+      "status": "hit"
+    },
+    {
+      "cli": "opencode",
+      "turn": "read",
+      "itemId": "prt_1bfb26f26001S6trVWNlAW3WCd",
+      "tool": "read",
+      "argsSummary": "{}",
+      "outputExcerpt": "<path>C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\r1.txt</path>\n<type>file</type>\n<content>\n1: MARK-R1 内容甲\n\n(End of file - total 1 lines)\n</content>",
+      "extracted": [
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\r1.txt",
+        "/path",
+        "/type",
+        "/content"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\r1.txt",
+      "hit": true,
+      "status": "hit"
+    },
+    {
+      "cli": "opencode",
+      "turn": "read",
+      "itemId": "prt_1bfb297ed001p7yEs2YVWjCsSM",
+      "tool": "read",
+      "argsSummary": "{}",
+      "outputExcerpt": "<path>C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\r2.txt</path>\n<type>file</type>\n<content>\n1: MARK-R2 内容乙\n\n(End of file - total 1 lines)\n</content>",
+      "extracted": [
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\r2.txt",
+        "/path",
+        "/type",
+        "/content"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\r2.txt",
+      "hit": true,
+      "status": "hit"
+    },
+    {
+      "cli": "opencode",
+      "turn": "read",
+      "itemId": "prt_1bfb29f260018N0vO3NbLbSkOR",
+      "tool": "read",
+      "argsSummary": "{}",
+      "outputExcerpt": "<path>C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\r3.txt</path>\n<type>file</type>\n<content>\n1: MARK-R3 内容丙\n\n(End of file - total 1 lines)\n</content>",
+      "extracted": [
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\r3.txt",
+        "/path",
+        "/type",
+        "/content"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\r3.txt",
+      "hit": true,
+      "status": "hit"
+    },
+    {
+      "cli": "opencode",
+      "turn": "read",
+      "itemId": "prt_1bfb2a49d001JtcD5dO0RJqXWf",
+      "tool": "read",
+      "argsSummary": "{}",
+      "outputExcerpt": "<path>C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\r4.txt</path>\n<type>file</type>\n<content>\n1: MARK-R4 内容丁\n\n(End of file - total 1 lines)\n</content>",
+      "extracted": [
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\r4.txt",
+        "/path",
+        "/type",
+        "/content"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\r4.txt",
+      "hit": true,
+      "status": "hit"
+    },
+    {
+      "cli": "opencode",
+      "turn": "read",
+      "itemId": "prt_1bfb2b0b4001fQ36FnGsxlF2Ch",
+      "tool": "read",
+      "argsSummary": "{}",
+      "outputExcerpt": "<path>C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\r5.txt</path>\n<type>file</type>\n<content>\n1: MARK-R5 内容戊\n\n(End of file - total 1 lines)\n</content>",
+      "extracted": [
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\r5.txt",
+        "/path",
+        "/type",
+        "/content"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\r5.txt",
+      "hit": true,
+      "status": "hit"
+    },
+    {
+      "cli": "opencode",
+      "turn": "read",
+      "itemId": "prt_1bfb2b9ee001R76Hqlp9UUl4dg",
+      "tool": "read",
+      "argsSummary": "{}",
+      "outputExcerpt": "<path>C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\r6.txt</path>\n<type>file</type>\n<content>\n1: MARK-R6 内容己\n\n(End of file - total 1 lines)\n</content>",
+      "extracted": [
+        "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\r6.txt",
+        "/path",
+        "/type",
+        "/content"
+      ],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\r6.txt",
+      "hit": true,
+      "status": "hit"
+    },
+    {
+      "cli": "opencode",
+      "turn": "write",
+      "itemId": "prt_1bfb2cfc8001KtnzNL7xvP4biY",
+      "tool": "write",
+      "argsSummary": "{}",
+      "outputExcerpt": "Wrote file successfully.",
+      "extracted": [],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\w1.txt",
+      "hit": false,
+      "status": "miss"
+    },
+    {
+      "cli": "opencode",
+      "turn": "write",
+      "itemId": "prt_1bfb2d6ed001cxkW3rbaz1nq1R",
+      "tool": "write",
+      "argsSummary": "{}",
+      "outputExcerpt": "Wrote file successfully.",
+      "extracted": [],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\w2.txt",
+      "hit": false,
+      "status": "miss"
+    },
+    {
+      "cli": "opencode",
+      "turn": "write",
+      "itemId": "prt_1bfb2dfba001TTwNBMPquIxeJ6",
+      "tool": "write",
+      "argsSummary": "{}",
+      "outputExcerpt": "Wrote file successfully.",
+      "extracted": [],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\w3.txt",
+      "hit": false,
+      "status": "miss"
+    },
+    {
+      "cli": "opencode",
+      "turn": "write",
+      "itemId": "prt_1bfb2fe4d001Ab8AZkHuQ18zkt",
+      "tool": "write",
+      "argsSummary": "{}",
+      "outputExcerpt": "Wrote file successfully.",
+      "extracted": [],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\w4.txt",
+      "hit": false,
+      "status": "miss"
+    },
+    {
+      "cli": "opencode",
+      "turn": "write",
+      "itemId": "prt_1bfb30503001kof6dWvQFi5kXS",
+      "tool": "write",
+      "argsSummary": "{}",
+      "outputExcerpt": "Wrote file successfully.",
+      "extracted": [],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\w5.txt",
+      "hit": false,
+      "status": "miss"
+    },
+    {
+      "cli": "opencode",
+      "turn": "edit",
+      "itemId": "prt_1bfb322c2001maz7CVkWhvMpSf",
+      "tool": "edit",
+      "argsSummary": "{}",
+      "outputExcerpt": "Edit applied successfully.",
+      "extracted": [],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\e1.txt",
+      "hit": false,
+      "status": "miss"
+    },
+    {
+      "cli": "opencode",
+      "turn": "edit",
+      "itemId": "prt_1bfb32b74001Ok4eYxJfZFof7N",
+      "tool": "edit",
+      "argsSummary": "{}",
+      "outputExcerpt": "Edit applied successfully.",
+      "extracted": [],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\e2.txt",
+      "hit": false,
+      "status": "miss"
+    },
+    {
+      "cli": "opencode",
+      "turn": "edit",
+      "itemId": "prt_1bfb3336b001a2sWxlxfarg7Kh",
+      "tool": "edit",
+      "argsSummary": "{}",
+      "outputExcerpt": "Edit applied successfully.",
+      "extracted": [],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\e3.txt",
+      "hit": false,
+      "status": "miss"
+    },
+    {
+      "cli": "opencode",
+      "turn": "bash",
+      "itemId": "prt_1bfb345a7001hdbQh6Yo5lRnvq",
+      "tool": "bash",
+      "argsSummary": "{}",
+      "outputExcerpt": "(no output)",
+      "extracted": [],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\b1.txt",
+      "hit": false,
+      "status": "miss"
+    },
+    {
+      "cli": "opencode",
+      "turn": "bash",
+      "itemId": "prt_1bfb351a00013f2LF5h1a7d4CU",
+      "tool": "bash",
+      "argsSummary": "{}",
+      "outputExcerpt": "(no output)",
+      "extracted": [],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\b2.txt",
+      "hit": false,
+      "status": "miss"
+    },
+    {
+      "cli": "opencode",
+      "turn": "bash",
+      "itemId": "prt_1bfb35b1e001rFWQIQ62wZkLDW",
+      "tool": "bash",
+      "argsSummary": "{}",
+      "outputExcerpt": "(no output)",
+      "extracted": [],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\b3.txt",
+      "hit": false,
+      "status": "miss"
+    },
+    {
+      "cli": "opencode",
+      "turn": "bash",
+      "itemId": "prt_1bfb363de001t4X7gE4f7V6V5G",
+      "tool": "bash",
+      "argsSummary": "{}",
+      "outputExcerpt": "(no output)",
+      "extracted": [],
+      "actualFile": "C:\\Users\\liuy\\AppData\\Local\\Temp\\kb-clue-probe-4aFkUl\\opencode\\b4.txt",
+      "hit": false,
+      "status": "miss"
+    }
+  ]
+}

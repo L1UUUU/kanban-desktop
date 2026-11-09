@@ -32,6 +32,8 @@ export default defineConfig({
           environment: "node",
           include: ["electron/**/*.test.ts", "tests/**/*.test.ts"],
           globals: true,
+          // SQLite 重负载用例在共享机器高负载下会超默认 5s（隔离复跑仅数百 ms），放宽以消除负载型假红
+          testTimeout: 20_000,
         },
       },
     ],

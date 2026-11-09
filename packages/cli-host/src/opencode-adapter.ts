@@ -3,9 +3,10 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AdapterEvent, ApprovalDecision, ApprovalSuggestion, ChatEvent, ChatEventSeed, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
-import { AdapterError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
+import { AdapterError, ExeNotFoundError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
 import type { OpenCodeSseEvent, OpenCodeServerClientLike } from "./opencode/client";
 import { OpenCodeServerHost, type OpenCodeServerHostLike, type OpenCodeServerHostOptions } from "./opencode/server-host";
+import { isAuthFailureStatus, isAuthFailureText, isProtocolDisconnectText } from "./session-error";
 
 /** 全能力（approval/interrupt/resume/readHistory 实证于 poc-3 + 1.15.7 探针；skillSignal=command 路由 self_reported） */
 const OPENCODE_CAPABILITIES: AdapterCapabilities = {
@@ -21,6 +22,13 @@ export function splitModelId(model: string): { providerID: string; modelID: stri
   const idx = model.indexOf("/");
   if (idx <= 0) return { providerID: "", modelID: model };
   return { providerID: model.slice(0, idx), modelID: model.slice(idx + 1) };
+}
+
+/** turn 提交/command 请求失败文本 → session_error.code 归类（#41）：认证 → AUTH_EXPIRED；传输不可达 → PROTOCOL_DISCONNECT；其余 INTERNAL */
+function classifyTransportFailure(message: string): "AUTH_EXPIRED" | "PROTOCOL_DISCONNECT" | "INTERNAL" {
+  if (isAuthFailureText(message)) return "AUTH_EXPIRED";
+  if (isProtocolDisconnectText(message)) return "PROTOCOL_DISCONNECT";
+  return "INTERNAL";
 }
 
 export interface OpenCodeAdapterOptions extends Omit<OpenCodeServerHostOptions, "exe"> {
@@ -138,6 +146,9 @@ export class OpenCodeAdapter implements CliAdapter {
     try {
       client = await this.host.acquire(init.cwd, mode, sessionId);
     } catch (e) {
+      // #46：exe 解析失败协议级映射（E_SPAWN_NOT_FOUND → renderer spawn 卡）；其余包装为创建失败
+      if (e instanceof ExeNotFoundError) throw new AdapterError("E_SPAWN_NOT_FOUND", e.message);
+      if (e instanceof AdapterError) throw e;
       throw new AdapterError("E_INTERNAL", e instanceof Error ? e.message : String(e));
     }
     let nativeId: string;
@@ -331,6 +342,11 @@ export class OpenCodeAdapter implements CliAdapter {
     return () => {
       this.handlers.delete(handler);
     };
+  }
+
+  /** C5 演进（#44）：server-per-project —— 经 host 上报运行中 server pid（同 project 引用共享只报一份，多 project 多份） */
+  async listChildPids(): Promise<number[]> {
+    return this.host.listChildPids?.() ?? [];
   }
 
   /* ---------------- 内部：server 挂接与事件映射 ---------------- */
@@ -726,12 +742,18 @@ export class OpenCodeAdapter implements CliAdapter {
           if (r.ok) {
             this.emitObservation(s, command, "self_reported", "opencode-command");
           } else {
-            this.emit(s, { type: "session_error", code: "E_OPENCODE_TURN", message: `command 执行失败：HTTP ${r.status} ${r.text.slice(0, 160)}` });
+            // #41 枚举映射：结构化 HTTP 状态优先（401/403 → AUTH_EXPIRED），其余 INTERNAL
+            this.emit(s, {
+              type: "session_error",
+              code: isAuthFailureStatus(r.status) ? "AUTH_EXPIRED" : "INTERNAL",
+              message: `command 执行失败：HTTP ${r.status} ${r.text.slice(0, 160)}`,
+            });
             if (s.turnActive) this.finishTurn(s, "failed");
           }
         })
         .catch((e: unknown) => {
-          this.emit(s, { type: "session_error", code: "E_OPENCODE_TURN", message: `command 执行失败：${e instanceof Error ? e.message : String(e)}` });
+          const msg = e instanceof Error ? e.message : String(e);
+          this.emit(s, { type: "session_error", code: classifyTransportFailure(msg), message: `command 执行失败：${msg}` });
           if (s.turnActive) this.finishTurn(s, "failed");
         });
       return;
@@ -743,11 +765,12 @@ export class OpenCodeAdapter implements CliAdapter {
       });
       if (!r.ok) throw new Error(`HTTP ${r.status} ${r.text.slice(0, 160)}`);
     } catch (e) {
-      // 提交失败：turn 回滚空闲并明确报错（不进入事件流重放）
+      // 提交失败：turn 回滚空闲并明确报错（不进入事件流重放）；#41 认证/断连/内部归类
       s.turnActive = false;
-      this.emit(s, { type: "session_error", code: "E_OPENCODE_TURN", message: e instanceof Error ? e.message : String(e) });
+      const msg = e instanceof Error ? e.message : String(e);
+      this.emit(s, { type: "session_error", code: classifyTransportFailure(msg), message: msg });
       this.emit(s, { type: "session_status", status: "idle" });
-      throw new AdapterError("E_INTERNAL", `turn 提交失败：${e instanceof Error ? e.message : String(e)}`);
+      throw new AdapterError("E_INTERNAL", `turn 提交失败：${msg}`);
     }
   }
 
@@ -820,7 +843,9 @@ export class OpenCodeAdapter implements CliAdapter {
     }
     if (forced === "failed" || s.lastTurnError) {
       if (s.lastTurnError) {
-        this.emit(s, { type: "session_error", code: "E_OPENCODE_TURN", message: `${s.lastTurnError.name}: ${s.lastTurnError.message}` });
+        // #41 枚举映射：provider 认证类文本 → AUTH_EXPIRED，其余 INTERNAL（session.error 真实形状见 auth-samples.md）
+        const msg = `${s.lastTurnError.name}: ${s.lastTurnError.message}`;
+        this.emit(s, { type: "session_error", code: isAuthFailureText(msg) ? "AUTH_EXPIRED" : "INTERNAL", message: msg });
       }
       this.closeOpenTools(s); // 失败 turn 的非终态工具同样收口（对账未愈/无终态帧时不留运行中卡片）
       s.queue.length = 0; // 明确报错不重放（spec H）

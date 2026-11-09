@@ -1,5 +1,5 @@
 // 用途：聊天会话视图 store —— ChatEvent 按合并键归并成每会话 items（不变量 3/4 的 renderer 侧），useSyncExternalStore 兼容（快照引用稳定）
-import type { ApprovalSuggestion, ChatEvent, PermMode, SessionRow, SessionStatus } from "@kanban/ipc-schema";
+import type { ApprovalSuggestion, ChatEvent, CliKind, PermMode, SessionRow, SessionStatus } from "@kanban/ipc-schema";
 
 /** 用户消息条目（ChatEvent 无 user 成员：renderer 发送时本地回显） */
 export interface UserItem {
@@ -36,6 +36,20 @@ export interface PendingApproval {
   suggestions: ApprovalSuggestion[];
 }
 
+/** #42 恢复引导条三态：idle=待恢复（无恢复进行）；resuming=恢复中（不可中断，D1）；failed=上次尝试失败（附 IPC 错误） */
+export type ResumeState = { phase: "idle" } | { phase: "resuming" } | { phase: "failed"; code: string; message: string };
+
+/** #46 会话创建失败记录（session:create 失败无会话视图可挂——挂侧栏创建入口卡；携带原参数供「重试创建」，spec #40 F1） */
+export interface CreateFailure {
+  cli: CliKind;
+  code: string;
+  message: string;
+  cwd: string;
+  projectId: string | null;
+  title?: string;
+  requirementId?: string;
+}
+
 export interface SessionView {
   sessionId: string;
   cli: string;
@@ -59,6 +73,8 @@ export interface SessionView {
   skillConflicts: string[];
   /** #21：冲突提示条已关闭（关闭仅隐藏，不影响会话；再次创建会话重新出现） */
   skillConflictDismissed: boolean;
+  /** #42：恢复引导条状态（banner 三态数据源；成功收敛由 resume 后实时 session_status 驱动复位） */
+  resumeState: ResumeState;
 }
 
 export interface SessionMeta {
@@ -79,6 +95,8 @@ export interface ChatSnapshot {
   sessions: SessionView[];
   activeId: string | null;
   version: number;
+  /** #46：最近一次会话创建失败（null=无；侧栏创建入口错误卡数据源） */
+  createFailure: CreateFailure | null;
 }
 
 let userItemSeq = 0;
@@ -86,6 +104,8 @@ let userItemSeq = 0;
 export class ChatStore {
   private sessions = new Map<string, SessionView>();
   private activeId: string | null = null;
+  /** #46：最近一次会话创建失败（无会话视图可挂） */
+  private createFailure: CreateFailure | null = null;
   private listeners = new Set<() => void>();
   private version = 0;
   private snapshot: ChatSnapshot | null = null;
@@ -93,7 +113,12 @@ export class ChatStore {
   /** useSyncExternalStore 数据源：变更间引用稳定（箭头属性保证 this 绑定） */
   getSnapshot = (): ChatSnapshot => {
     if (!this.snapshot) {
-      this.snapshot = { sessions: [...this.sessions.values()], activeId: this.activeId, version: this.version };
+      this.snapshot = {
+        sessions: [...this.sessions.values()],
+        activeId: this.activeId,
+        version: this.version,
+        createFailure: this.createFailure,
+      };
     }
     return this.snapshot;
   };
@@ -127,8 +152,11 @@ export class ChatStore {
       lastError: null,
       skillConflicts: meta.skillConflicts ?? [],
       skillConflictDismissed: false,
+      resumeState: { phase: "idle" },
     });
     this.activeId = meta.sessionId;
+    // #46：创建成功清除旧的创建失败卡（不残留）
+    if (this.createFailure) this.createFailure = null;
     this.changed();
   }
 
@@ -152,6 +180,7 @@ export class ChatStore {
       // #21：检测仅在创建时一次（spec E 节），重启恢复的历史会话不再检测
       skillConflicts: [],
       skillConflictDismissed: false,
+      resumeState: { phase: "idle" },
     });
     this.changed();
   }
@@ -209,6 +238,43 @@ export class ChatStore {
     const s = this.sessions.get(id);
     if (!s) return;
     s.lastError = { code, message };
+    this.changed();
+  }
+
+  /** #46：清除会话错误（错误卡「知道了」动作：仅隐藏不影响会话） */
+  clearError(id: string): void {
+    const s = this.sessions.get(id);
+    if (!s || !s.lastError) return;
+    s.lastError = null;
+    this.changed();
+  }
+
+  /** #46：记录会话创建失败（session:create IPC 错误；无会话视图可挂——侧栏创建入口错误卡数据源） */
+  setCreateFailure(f: CreateFailure): void {
+    this.createFailure = f;
+    this.changed();
+  }
+
+  /** #46：清除创建失败记录（「知道了」或下次创建成功时） */
+  clearCreateFailure(): void {
+    if (!this.createFailure) return;
+    this.createFailure = null;
+    this.changed();
+  }
+
+  /** #42：恢复引导条进入「恢复中」（resume 发出后不可中断，D1） */
+  markResuming(id: string): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    s.resumeState = { phase: "resuming" };
+    this.changed();
+  }
+
+  /** #42：恢复引导条进入「失败」（readHistory/resume 的 IPC 错误，供重试与复制详情） */
+  markResumeFailed(id: string, code: string, message: string): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    s.resumeState = { phase: "failed", code, message };
     this.changed();
   }
 
@@ -307,6 +373,8 @@ export class ChatStore {
           s.pendingApproval = null;
         }
         s.status = event.status;
+        // #42：状态实时回流即生命周期翻页——恢复引导条收敛复位（resume 成功 → idle；再断开 → 重新待恢复，不残留旧失败态）
+        if (s.resumeState.phase !== "idle") s.resumeState = { phase: "idle" };
         break;
       case "session_error":
         s.lastError = { code: event.code, message: event.message };
@@ -357,6 +425,7 @@ export class ChatStore {
         lastError: null,
         skillConflicts: [],
         skillConflictDismissed: false,
+        resumeState: { phase: "idle" },
       };
       this.sessions.set(sessionId, s);
     }

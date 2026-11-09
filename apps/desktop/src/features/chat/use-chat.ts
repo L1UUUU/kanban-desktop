@@ -28,6 +28,8 @@ export interface ChatControllerActions {
   resumeSession(sessionId: string): Promise<void>;
   /** #21：关闭同名 skill 冲突提示条（仅隐藏不影响会话） */
   dismissSkillConflict(sessionId: string): void;
+  /** #46：关闭会话创建失败卡（仅隐藏；下次创建成功自动清除） */
+  dismissCreateFailure(): void;
 }
 
 export interface ChatController extends ChatControllerActions {
@@ -36,6 +38,8 @@ export interface ChatController extends ChatControllerActions {
   activeId: string | null;
   /** store 版本号（驱动视图滚动等副作用） */
   version: number;
+  /** #46：最近一次会话创建失败（null=无；侧栏创建入口错误卡数据源） */
+  createFailure: import("./chat-store").CreateFailure | null;
   /** store 直面（终端控制器等并列模块登记 PTY 会话/更新状态用） */
   store: ChatStore;
 }
@@ -126,6 +130,7 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
       },
       switchTo: (sessionId) => store.setActive(sessionId),
       dismissSkillConflict: (sessionId) => store.dismissSkillConflict(sessionId),
+      dismissCreateFailure: () => store.clearCreateFailure(),
       setPerm: (mode) => {
         const id = activeId();
         if (id) store.updateSession(id, { permMode: mode });
@@ -136,16 +141,19 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
       },
       resumeSession: async (sessionId) => {
         if (!transport) return;
+        // #42：恢复引导条三态驱动——发出即「恢复中」（不可中断，D1），任一步 IPC 失败进「失败」态（重试/复制详情），
+        // 成功收敛由 resume 后实时 session_status 驱动（store 复位 resumeState + 状态徽标回 idle）
+        store.markResuming(sessionId);
         // 第一步：读原生历史（事件溯源快照）重建消息流；第二步：resume 重连，状态经实时事件流回 idle
         const r = await transport.invoke({ channel: "session:readHistory", sessionId });
         if (!r.ok) {
-          store.setError(sessionId, r.error.code, r.error.message);
+          store.markResumeFailed(sessionId, r.error.code, r.error.message);
           return;
         }
         store.applySnapshot(sessionId, r.events ?? []);
         const r2 = await transport.invoke({ channel: "session:resume", sessionId });
         if (!r2.ok) {
-          store.setError(sessionId, r2.error.code, r2.error.message);
+          store.markResumeFailed(sessionId, r2.error.code, r2.error.message);
         }
       },
     };
@@ -153,7 +161,15 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
 
   const activeSession = snap.activeId ? (store.getSession(snap.activeId) ?? null) : null;
 
-  return { ...actions, sessions: snap.sessions, activeSession, activeId: snap.activeId, version: snap.version, store };
+  return {
+    ...actions,
+    sessions: snap.sessions,
+    activeSession,
+    activeId: snap.activeId,
+    version: snap.version,
+    createFailure: snap.createFailure,
+    store,
+  };
 }
 
 /** 启动自举：恢复 DB 历史会话（统一断开态）；无项目且无历史时用注入的 demoCwd 建 Fake 演示会话（#6 链路保持） */
@@ -171,7 +187,7 @@ async function bootstrap(transport: ChatTransport, store: ChatStore, demoCwd: st
   }
 }
 
-/** 创建会话并登记激活（目录身份来自 Main 判定回传；登记失败在 console 报告） */
+/** 创建会话并登记激活（目录身份来自 Main 判定回传；#46 起创建失败记录进 store 由侧栏创建入口错误卡呈现） */
 export async function createCliSession(
   transport: ChatTransport,
   store: ChatStore,
@@ -204,7 +220,15 @@ export async function createCliSession(
       skillConflicts: r.skillConflicts ?? [],
     });
   } else if (!r.ok) {
-    // 创建失败也要可见（如 Main 校验拒绝）：挂到错误展示需有会话，此处直接 console 报告
-    console.error("[kanban] 会话创建失败", r.error);
+    // #46：创建失败无会话视图可挂——记录到 store（侧栏创建入口错误卡呈现，携带原参数供「重试创建」；spec #40 F1）
+    store.setCreateFailure({
+      cli,
+      code: r.error.code,
+      message: r.error.message,
+      cwd: opts.cwd,
+      projectId: opts.projectId ?? null,
+      title: opts.title,
+      requirementId: opts.requirementId,
+    });
   }
 }

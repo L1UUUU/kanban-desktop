@@ -1,13 +1,18 @@
-// 用途：contextBridge 薄层 —— 向 renderer 暴露最小 IPC 面（app:getInfo + kanban:ipc/memory:ipc 单通道 invoke + chat:event/terminal:event/tracker:event/memory:event/app:shutdown 订阅）；全部通道形状由 @kanban/ipc-schema 契约化，preload 不做校验（两端校验，spec E）
+// 用途：contextBridge 薄层 —— 向 renderer 暴露最小 IPC 面（app:getInfo + kanban:ipc/memory:ipc/residue:ipc/diff:ipc 单通道 invoke + chat:event/terminal:event/tracker:event/memory:event/app:event/app:shutdown 订阅）；全部通道形状由 @kanban/ipc-schema 契约化，preload 不做校验（两端校验，spec E）
 import { contextBridge, ipcRenderer } from "electron";
 import type {
   AdapterEvent,
+  AppEventWire,
   AppInfo,
+  DiffRequest,
+  DiffResult,
   IpcRequest,
   IpcResult,
   MemoryEventWire,
   MemoryRequest,
   MemoryResult,
+  ResidueRequest,
+  ResidueResult,
   ShutdownNotice,
   TerminalEvent,
   TrackerChangeWire,
@@ -20,6 +25,10 @@ const api = {
   invoke: (req: IpcRequest) => ipcRenderer.invoke("kanban:ipc", req) as Promise<IpcResult>,
   /** #31：发送一条 memory:ipc 请求（提取/取消/审核/总结处置/需求一次读/项目检索/知识再编辑，schema 见 memoryRequestSchema） */
   invokeMemory: (req: MemoryRequest) => ipcRenderer.invoke("memory:ipc", req) as Promise<MemoryResult>,
+  /** #49：发送一条 residue:ipc 请求（residue:detect 检测清单 / residue:kill 确认式清理，schema 见 residueRequestSchema） */
+  invokeResidue: (req: ResidueRequest) => ipcRenderer.invoke("residue:ipc", req) as Promise<ResidueResult>,
+  /** #43：发送一条 diff:ipc 请求（工作区未提交变更一次读，schema 见 diffRequestSchema） */
+  invokeDiff: (req: DiffRequest) => ipcRenderer.invoke("diff:ipc", req) as Promise<DiffResult>,
   /** 订阅 Adapter 事件流（ChatEvent ∪ SkillObservation），返回注销函数 */
   onChatEvent: (handler: (event: AdapterEvent) => void): (() => void) => {
     const listener = (_e: unknown, event: AdapterEvent): void => handler(event);
@@ -43,6 +52,12 @@ const api = {
     const listener = (_e: unknown, event: MemoryEventWire): void => handler(event);
     ipcRenderer.on("memory:event", listener);
     return () => ipcRenderer.off("memory:event", listener);
+  },
+  /** #49：订阅应用级事件流（residue-detected 残留检测一次性通知，schema 见 appEventSchema），返回注销函数 */
+  onAppEvent: (handler: (event: AppEventWire) => void): (() => void) => {
+    const listener = (_e: unknown, event: AppEventWire): void => handler(event);
+    ipcRenderer.on("app:event", listener);
+    return () => ipcRenderer.off("app:event", listener);
   },
   /** 订阅退出通知（统一退出序列第 1 步「停止接收新请求」的 UI 提示，#13/spec H），返回注销函数 */
   onShutdownNotice: (handler: (notice: ShutdownNotice) => void): (() => void) => {

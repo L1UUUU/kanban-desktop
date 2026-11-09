@@ -61,16 +61,55 @@ describe("saveConfig / loadConfig 往返", () => {
   it("save 后 load 得到等值配置（含父目录自动创建）", () => {
     const dir = newTempDir();
     const path = join(dir, "nested", "config.json");
-    saveConfig(path, { cliExe: { codex: "C:/codex.exe", claude: null, opencode: "C:/oc.exe" }, currentProjectId: "p-9", terminal: { shell: null }, shutdown: { graceMs: 3000 } });
+    saveConfig(path, { cliExe: { codex: "C:/codex.exe", claude: null, opencode: "C:/oc.exe" }, currentProjectId: "p-9", gitExe: null, diff: { maxBytes: 4096, maxFiles: 5, maxUntrackedLines: 10 }, terminal: { shell: null }, shutdown: { graceMs: 3000 } });
     const loaded = loadConfig(path);
     expect(loaded.cliExe).toEqual({ codex: "C:/codex.exe", claude: null, opencode: "C:/oc.exe" });
     expect(loaded.currentProjectId).toBe("p-9");
+    expect(loaded.diff).toEqual({ maxBytes: 4096, maxFiles: 5, maxUntrackedLines: 10 });
   });
 });
 
 describe("detectCliExe（探测占位）", () => {
   it("返回三 CLI null 占位形状（真实探测由后续 Adapter 工单接入，spec G）", () => {
     expect(detectCliExe()).toEqual({ codex: null, claude: null, opencode: null });
+  });
+});
+
+describe("gitExe（#43 git 可执行手动覆盖：where 探测之上的最高优先）", () => {
+  it("默认 null（未覆盖 → 走 where 探测）；合法字符串往返；非法类型回退 null", () => {
+    expect(defaultConfig().gitExe).toBeNull();
+    const dir = newTempDir();
+    const path = join(dir, "config.json");
+    writeFileSync(path, JSON.stringify({ gitExe: "C:/Program Files/Git/bin/git.exe" }), "utf8");
+    expect(loadConfig(path).gitExe).toBe("C:/Program Files/Git/bin/git.exe");
+    writeFileSync(path, JSON.stringify({ gitExe: 123 }), "utf8");
+    expect(loadConfig(path).gitExe).toBeNull();
+    writeFileSync(path, JSON.stringify({ gitExe: "" }), "utf8");
+    expect(loadConfig(path).gitExe).toBeNull();
+  });
+});
+
+
+describe("diff 截断上限配置（#47，spec #40 E 节/F8：三类上限数值进配置不硬编码）", () => {
+  it("默认 maxBytes=2_000_000 / maxFiles=200 / maxUntrackedLines=2000；合法值逐字段透传", () => {
+    expect(defaultConfig().diff).toEqual({ maxBytes: 2_000_000, maxFiles: 200, maxUntrackedLines: 2000 });
+    const dir = newTempDir();
+    const path = join(dir, "config.json");
+    writeFileSync(path, JSON.stringify({ diff: { maxBytes: 4096, maxFiles: 5, maxUntrackedLines: 10 } }), "utf8");
+    expect(loadConfig(path).diff).toEqual({ maxBytes: 4096, maxFiles: 5, maxUntrackedLines: 10 });
+  });
+
+  it("非法值（非整数/非正/超防御上限）逐字段回退默认；缺节保持默认", () => {
+    const dir = newTempDir();
+    const path = join(dir, "config.json");
+    writeFileSync(path, JSON.stringify({ diff: { maxBytes: 1.5, maxFiles: 0, maxUntrackedLines: 9e99 } }), "utf8");
+    expect(loadConfig(path).diff).toEqual(defaultConfig().diff);
+    writeFileSync(path, JSON.stringify({ diff: "nope" }), "utf8");
+    expect(loadConfig(path).diff).toEqual(defaultConfig().diff);
+    writeFileSync(path, JSON.stringify({ diff: { maxFiles: 3 } }), "utf8");
+    const partial = loadConfig(path).diff;
+    expect(partial.maxFiles).toBe(3);
+    expect(partial.maxBytes).toBe(2_000_000); // 未覆盖字段保持默认（各字段独立合并）
   });
 });
 

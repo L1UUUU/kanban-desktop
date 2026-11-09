@@ -1,17 +1,25 @@
 // 用途：Main 入站 IPC 路由 —— 单通道 kanban:ipc 强制 zod 校验 + 分发到 CliAdapter 与 projects/sessions store + PTY 宿主（纯函数无 Electron 依赖：dialog 与 config 经 deps 注入）
+// 行数评估（~560 行，超 500 行阈值）：app:getInfo + 四个 :ipc 通道（kanban/memory/diff/residue）的 handler 聚合是既有装配模式（共享单通道校验、deps 注入与 store 装配，拆开只搬文件不减耦合），本次不拆；触发条件：第六个 IPC 通道（或任一通道 handler 独立逻辑显著膨胀）加入时按通道拆分为独立模块。
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import {
+  diffRequestSchema,
   ipcRequestSchema,
   memoryRequestSchema,
+  residueRequestSchema,
+  type DiffResult,
   type IpcRequest,
   type IpcResult,
   type MemoryResult,
+  type ResidueProcess,
+  type ResidueResult,
+  type ResidueKillResult,
   type SessionRow,
 } from "@kanban/ipc-schema";
 import { AdapterError, detectSkillConflicts, resolveUserClaudeDir, type CliAdapter } from "@kanban/cli-host";
 import { TrackerEngine, formatRequirementId, type Cli, type NormalizedEvent, type TrackerChange } from "@kanban/tracker";
 import { detectDirIdentity } from "./git-identity";
+import type { WorkspaceDiff } from "./git-diff-service";
 import { type MemoryService } from "./memory-service";
 import type { PtyHost } from "./pty-host";
 import type { ProjectStore } from "./project-store";
@@ -486,6 +494,66 @@ export async function handleMemoryIpc(deps: MemoryIpcDeps, raw: unknown): Promis
     }
     case "memory:editSummary": {
       return deps.memory.editSummary(req.requirementId, req.content);
+    }
+  }
+}
+
+// ============ #49 residue:ipc 通道（spec #40 D 节，对齐 memory:ipc 模式：单通道 + Main 入站 zod 强制校验 + 业务拒绝 ok:false+reason） ============
+
+/** residue:ipc 路由依赖（检测与终止由 index.ts 装配注入：检测为本次启动缓存的一次性结果，不重复探测） */
+export interface ResidueIpcDeps {
+  /** 残留检测（返回缓存清单；spec：每次启动只检测一次，不轮询） */
+  detect(): Promise<ResidueProcess[]>;
+  /** 确认式逐 pid 终止（用户显式触发；无自动清理路径） */
+  kill(pids: number[]): Promise<ResidueKillResult[]>;
+  /** 退出序列门闸（true=正在退出，拒绝新请求；缺省恒 false 供测试） */
+  isShuttingDown?(): boolean;
+}
+
+// ============ #43 diff:ipc 通道（spec #40 D 节，对齐 memory:ipc 独立单通道先例：入站 zod 强制校验 + 退出门闸 + 经 project store 解析 cwd） ============
+
+/** diff:ipc 路由依赖：project store（projectId → canonicalPath）+ git-diff-service 单函数（测试注入 fixture） */
+export interface DiffIpcDeps {
+  projects: ProjectStore;
+  /** 读取工作区未提交变更（生产 = git-diff-service readWorkspaceDiff 装配） */
+  readWorkspaceDiff(cwd: string): Promise<WorkspaceDiff>;
+  /** 退出序列门闸（true=正在退出，拒绝新请求；缺省恒 false 供测试） */
+  isShuttingDown?(): boolean;
+}
+
+/** 处理一条 residue:ipc 入站请求：zod 强制校验 → 退出门闸 → 二通道路由（业务拒绝直达调用方，不新增全局错误码） */
+export async function handleResidueIpc(deps: ResidueIpcDeps, raw: unknown): Promise<ResidueResult> {
+  const parsed = residueRequestSchema.safeParse(raw);
+  if (!parsed.success) {
+    return { ok: false, reason: "invalid-request", detail: summarizeIssues(parsed.error.issues) };
+  }
+  if (deps.isShuttingDown?.()) {
+    return { ok: false, reason: "shutting-down", detail: "应用正在退出，已停止接收新请求" };
+  }
+  switch (parsed.data.channel) {
+    case "residue:detect":
+      return { ok: true, processes: await deps.detect() };
+    case "residue:kill":
+      return { ok: true, results: await deps.kill(parsed.data.pids) };
+  }
+}
+
+/** 处理一条 diff:ipc 入站请求：zod 强制校验 → 退出门闸 → diff:get 经 project store 解析 cwd 后透传服务结果 */
+export async function handleDiffIpc(deps: DiffIpcDeps, raw: unknown): Promise<DiffResult> {
+  const parsed = diffRequestSchema.safeParse(raw);
+  if (!parsed.success) {
+    return { ok: false, error: { code: "E_SCHEMA", message: summarizeIssues(parsed.error.issues) } };
+  }
+  if (deps.isShuttingDown?.()) {
+    return { ok: false, error: { code: "E_INTERNAL", message: "应用正在退出，已停止接收新请求" } };
+  }
+  switch (parsed.data.channel) {
+    case "diff:get": {
+      const project = deps.projects.get(parsed.data.projectId);
+      if (!project) {
+        return { ok: false, error: { code: "E_PROJECT_NOT_FOUND", message: `项目不存在：${parsed.data.projectId}` } };
+      }
+      return deps.readWorkspaceDiff(project.canonicalPath);
     }
   }
 }

@@ -20,19 +20,37 @@ export interface ShutdownConfig {
   graceMs: number;
 }
 
+/** Diff 视图截断保护上限（#47，spec #40 E 节/F8：三类上限数值进配置不硬编码；超限置 truncated、剩余文件仅列名） */
+export interface DiffConfig {
+  /** git diff/status 采集 stdout 总字节上限（超出停止采集并终止 git 进程） */
+  maxBytes: number;
+  /** 文件数上限（窗口外文件仅列名，不采集/不展开 hunks） */
+  maxFiles: number;
+  /** 单个 untracked 新文件全文展示的行数上限 */
+  maxUntrackedLines: number;
+}
+
+/** diff 上限各字段的防御上限（防配置写 absurd 值导致主进程超大缓冲） */
+const DIFF_LIMIT_BOUNDS = { maxBytes: 100_000_000, maxFiles: 100_000, maxUntrackedLines: 1_000_000 } as const;
+
 export interface AppConfig {
   cliExe: CliExeConfig;
   /** 当前项目 id（项目注册/切换时持久化，重启恢复；null=尚无项目） */
   currentProjectId: string | null;
+  /** #43：git 可执行手动覆盖路径（最高优先；null=未覆盖走 where 探测；解析失败 diff 面归 git-missing） */
+  gitExe: string | null;
+  diff: DiffConfig;
   terminal: TerminalConfig;
   shutdown: ShutdownConfig;
 }
 
-/** 默认配置：三 CLI exe 均为占位 null；终端 shell 自动探测；退出等待 3s */
+/** 默认配置：三 CLI exe 均为占位 null；diff 上限 2MB/200 文件/2000 行（覆盖日常大改动的审阅量级） */
 export function defaultConfig(): AppConfig {
   return {
     cliExe: { codex: null, claude: null, opencode: null },
     currentProjectId: null,
+    gitExe: null,
+    diff: { maxBytes: 2_000_000, maxFiles: 200, maxUntrackedLines: 2000 },
     terminal: { shell: null },
     shutdown: { graceMs: 3000 },
   };
@@ -60,6 +78,18 @@ export function loadConfig(path: string): AppConfig {
   }
   const current = (raw as { currentProjectId?: unknown }).currentProjectId;
   if (typeof current === "string" && current.length > 0) fallback.currentProjectId = current;
+  const gitExe = (raw as { gitExe?: unknown }).gitExe;
+  if (typeof gitExe === "string" && gitExe.length > 0) fallback.gitExe = gitExe;
+  const fileDiff = (raw as { diff?: Record<string, unknown> }).diff;
+  if (typeof fileDiff === "object" && fileDiff !== null) {
+    for (const key of ["maxBytes", "maxFiles", "maxUntrackedLines"] as const) {
+      const v = fileDiff[key];
+      // 正整数且不超防御上限才采纳（对齐 graceMs 的不信任文件数值惯例）
+      if (typeof v === "number" && Number.isInteger(v) && v > 0 && v <= DIFF_LIMIT_BOUNDS[key]) {
+        fallback.diff[key] = v;
+      }
+    }
+  }
   const termShell = (raw as { terminal?: { shell?: unknown } }).terminal?.shell;
   if (typeof termShell === "string" && termShell.length > 0) fallback.terminal.shell = termShell;
   const graceMs = (raw as { shutdown?: { graceMs?: unknown } }).shutdown?.graceMs;

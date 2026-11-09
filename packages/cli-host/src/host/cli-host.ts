@@ -16,15 +16,18 @@ export type HostCommand =
   | { kind: "adoptSession"; sessionId: string; nativeSessionId: string; cwd: string; cli: string; permMode?: string; model?: string }
   | { kind: "dispose"; sessionId?: string }
   | { kind: "run-once"; runId: string; cli: string; args: string[]; cwd: string; stdin?: string; timeoutMs?: number }
-  | { kind: "cancel-run-once"; runId: string };
+  | { kind: "cancel-run-once"; runId: string }
+  | { kind: "listChildPids" };
 
-/** 命令结果载荷（createSession 附 sessionId/nativeSessionId；readHistory 附事件数组；readTranscript 附双视角剧本；run-once 附执行结果；其余 void） */
+/** 命令结果载荷（createSession 附 sessionId/nativeSessionId；readHistory 附事件数组；readTranscript 附双视角剧本；run-once 附执行结果；listChildPids 附 pid 集合；其余 void） */
 export interface HostCommandResult {
   sessionId?: string;
   nativeSessionId?: string | null;
   events?: ChatEvent[];
   transcript?: TranscriptEvent[];
   runOnce?: RunOnceResult;
+  /** 活跃 CLI 子进程 pid 去重集合（C5 演进 #44；残留治理的本应用活跃集合基准） */
+  pids?: number[];
 }
 
 /** 有序停机原因（spec H：停止新请求→有序取消→有限等待→受控终止） */
@@ -102,6 +105,9 @@ export class CliHost {
       case "cancel-run-once":
         this.runOnceRunner.cancel(cmd.runId);
         return {};
+      case "listChildPids":
+        // C5 演进（#44）：worker 内聚合各 Adapter 活跃子进程 pid 上报 Main（不路由会话，host 级查询）
+        return { pids: await this.router.listChildPids() };
     }
   }
 

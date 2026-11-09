@@ -92,6 +92,12 @@ export class CliHostClient implements CliAdapter {
     return r.transcript ?? [];
   }
 
+  /** 上报 worker 管理的全部活跃 CLI 子进程 pid（#44 C5 演进，spec #40 C 节；残留治理 #49 的本应用活跃集合基准） */
+  async listChildPids(): Promise<number[]> {
+    const r = (await this.command({ kind: "listChildPids" })) as { pids?: number[] };
+    return r.pids ?? [];
+  }
+
   async resume(sessionId: string): Promise<void> {
     await this.command({ kind: "resume", sessionId });
   }

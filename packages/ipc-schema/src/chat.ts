@@ -16,6 +16,19 @@ export type ApprovalDecision = z.infer<typeof approvalDecisionSchema>;
 export const sessionStatusSchema = z.enum(["idle", "running", "waiting", "interrupted", "disconnected"]);
 export type SessionStatus = z.infer<typeof sessionStatusSchema>;
 
+// 会话错误码六成员闭枚举（#41 C1 演进，spec #40 B 节）：AUTH_EXPIRED 认证失效（Adapter 协议级检测）/
+// SPAWN_NOT_FOUND 找不到 CLI 可执行（IPC 侧映射）/ PROTOCOL_DISCONNECT 协议传输断连 / CLI_EXIT 进程退出 /
+// INTERNAL 已知来源错误 / UNKNOWN 未识别兜底。renderer 合成码与 IPC 错误码不进本枚举（归 S4-02 classify 输入域）。
+export const sessionErrorCodeSchema = z.enum([
+  "AUTH_EXPIRED",
+  "SPAWN_NOT_FOUND",
+  "PROTOCOL_DISCONNECT",
+  "CLI_EXIT",
+  "INTERNAL",
+  "UNKNOWN",
+]);
+export type SessionErrorCode = z.infer<typeof sessionErrorCodeSchema>;
+
 // 审批建议项（规则/目录，spec I-5：审批卡建议行）
 export const approvalSuggestionSchema = z.object({
   kind: z.string().min(1),
@@ -66,7 +79,7 @@ export const chatEventSchema = z.discriminatedUnion("type", [
   chatEventBase.extend({ type: z.literal("turn_completed") }),
   chatEventBase.extend({ type: z.literal("turn_interrupted"), reason: z.string().optional() }),
   chatEventBase.extend({ type: z.literal("session_status"), status: sessionStatusSchema }),
-  chatEventBase.extend({ type: z.literal("session_error"), code: z.string().min(1), message: z.string() }),
+  chatEventBase.extend({ type: z.literal("session_error"), code: sessionErrorCodeSchema, message: z.string() }),
   chatEventBase.extend({ type: z.literal("session_exit"), exitCode: z.number().int(), reason: z.string().optional() }),
 ]);
 export type ChatEvent = z.infer<typeof chatEventSchema>;

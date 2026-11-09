@@ -124,6 +124,18 @@ describe("SkillObservation → Engine 落库（#9 接线）", () => {
     expect(forwarded).toHaveLength(2); // 只有两条合法 ChatEvent 被转发
   });
 
+  it("session_error 不落库（#41 钉住）：sessions 表状态/活跃时间零写入，事件仍转发 renderer", () => {
+    const { db, handler, forwarded } = makeWiring(":memory:");
+    db.prepare(
+      "INSERT INTO sessions (id, kind, cli, native_session_id, project_id, title, cwd, perm_mode, status, last_active_at) VALUES ('s-err-1','structured','codex',NULL,NULL,'t','C:\\p','auto','idle',NULL)",
+    ).run();
+    handler({ sessionId: "s-err-1", seq: 1, at: "2026-11-05T10:00:01.000Z", type: "session_error", code: "AUTH_EXPIRED", message: "登录态失效" });
+    const row = db.prepare("SELECT status, last_active_at FROM sessions WHERE id = 's-err-1'").get() as { status: string; last_active_at: string | null };
+    expect(row.status).toBe("idle"); // 错误不改写落库状态
+    expect(row.last_active_at).toBeNull(); // 不触发活跃时间 touch
+    expect(forwarded).toHaveLength(1); // renderer 呈现不受落库边界影响
+  });
+
   it("应用级重启恢复：建卡/关联/事件经 SQLite 往返一致，恢复后新事件继续驱动（REQ-002）", () => {
     const dbFile = join(tmpdir(), `kb-main-restart-${process.pid}-${Date.now()}.db`);
     dbFiles.push(dbFile);

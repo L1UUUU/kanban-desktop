@@ -132,8 +132,8 @@ describe("chat-store 事件归并", () => {
 
   it("session_error 记录错误；下一 turn_started 清除", () => {
     const store = makeStore();
-    store.applyEvent(ev(1, { type: "session_error", code: "E_FAKE_CRASH", message: "进程退出" }));
-    expect(store.getSession("s-1")!.lastError).toEqual({ code: "E_FAKE_CRASH", message: "进程退出" });
+    store.applyEvent(ev(1, { type: "session_error", code: "CLI_EXIT", message: "进程退出" }));
+    expect(store.getSession("s-1")!.lastError).toEqual({ code: "CLI_EXIT", message: "进程退出" });
     store.applyEvent(ev(2, { type: "turn_started", turnId: "t-9" }));
     expect(store.getSession("s-1")!.lastError).toBeNull();
   });
@@ -224,6 +224,73 @@ describe("chat-store 断开会话恢复（#9：readHistory 快照 + 实时增量
     store.applyEvent(ev(12, { type: "session_status", status: "idle" }));
     expect(store.getSession("s-1")!.status).toBe("idle");
   });
+
+  it("applySnapshot 跳过 session_error/session_exit（#41 钉住）：历史错误不随快照重建复活", () => {
+    const store = makeRestored();
+    store.applySnapshot("s-1", [
+      ev(1, { type: "turn_started", turnId: "t-1" }),
+      ev(2, { type: "session_error", code: "AUTH_EXPIRED", message: "登录态失效" }),
+      ev(3, { type: "session_exit", exitCode: 1, reason: "崩溃" }),
+      ev(4, { type: "turn_completed" }),
+    ]);
+    // 快照中的错误/退出事件不冒充当前错误（实时错误经事件流到达；resume 后状态由实时 session_status 驱动）
+    expect(store.getSession("s-1")!.lastError).toBeNull();
+    expect(store.getSession("s-1")!.items).toHaveLength(0); // turn_started/completed 不产条目
+  });
+});
+
+describe("chat-store 恢复引导三态（#42：banner 状态机 idle/resuming/failed）", () => {
+  /** 断开会话登记（恢复引导条的数据源） */
+  function makeDisconnected(): ChatStore {
+    const store = new ChatStore();
+    store.registerRestored({
+      id: "s-1",
+      kind: "structured",
+      cli: "fake",
+      nativeSessionId: null,
+      projectId: null,
+      title: "历史会话",
+      cwd: null,
+      permMode: "auto",
+      status: "idle",
+      lastActiveAt: null,
+      dirIdentity: "none",
+      worktreeName: null,
+    });
+    return store;
+  }
+
+  it("登记即待恢复（idle）；markResuming → resuming；markResumeFailed → failed（附 IPC 错误码与消息）", () => {
+    const store = makeDisconnected();
+    expect(store.getSession("s-1")!.resumeState).toEqual({ phase: "idle" });
+    store.markResuming("s-1");
+    expect(store.getSession("s-1")!.resumeState).toEqual({ phase: "resuming" });
+    store.markResumeFailed("s-1", "E_SESSION_NOT_FOUND", "原生历史文件不可读");
+    expect(store.getSession("s-1")!.resumeState).toEqual({
+      phase: "failed",
+      code: "E_SESSION_NOT_FOUND",
+      message: "原生历史文件不可读",
+    });
+  });
+
+  it("恢复成功收敛：session_status 非 disconnected 实时事件到达 → resumeState 复位 idle（banner 消失依据）", () => {
+    const store = makeDisconnected();
+    store.markResuming("s-1");
+    store.markResumeFailed("s-1", "E_INTERNAL", "x");
+    store.markResuming("s-1"); // 失败后重试
+    store.applyEvent(ev(1, { type: "session_status", status: "idle" })); // resume 成功的实时回流
+    expect(store.getSession("s-1")!.resumeState).toEqual({ phase: "idle" });
+    expect(store.getSession("s-1")!.status).toBe("idle");
+    // 生命周期继续（再断开）：引导条重新从待恢复开始，不残留旧失败态
+    store.applyEvent(ev(2, { type: "session_status", status: "disconnected" }));
+    expect(store.getSession("s-1")!.resumeState).toEqual({ phase: "idle" });
+  });
+
+  it("未登记会话 markResuming/markResumeFailed 安全无操作", () => {
+    const store = new ChatStore();
+    expect(() => store.markResuming("s-none")).not.toThrow();
+    expect(() => store.markResumeFailed("s-none", "E_INTERNAL", "x")).not.toThrow();
+  });
 });
 
 describe("chat-store CLI 异常退出终态化（#13/spec H：不崩溃、不自动继续、不宣称运行中）", () => {
@@ -254,5 +321,36 @@ describe("chat-store CLI 异常退出终态化（#13/spec H：不崩溃、不自
     const s = store.getSession("s-1")!;
     expect(s.items.find((i) => i.kind === "tool")).toMatchObject({ status: "interrupted" });
     expect(s.lastError).toBeNull();
+  });
+});
+
+describe("chat-store 会话创建失败与错误卡数据源（#46）", () => {
+  it("setCreateFailure：记录失败（含原参数供重试创建）并进快照；clearCreateFailure 清除", () => {
+    const store = makeStore();
+    store.setCreateFailure({
+      cli: "claude",
+      code: "E_SPAWN_NOT_FOUND",
+      message: "未找到 claude 可执行文件（已尝试：where）",
+      cwd: "C:\repo",
+      projectId: "p-1",
+    });
+    expect(store.getSnapshot().createFailure).toMatchObject({ cli: "claude", code: "E_SPAWN_NOT_FOUND", projectId: "p-1" });
+    store.clearCreateFailure();
+    expect(store.getSnapshot().createFailure).toBeNull();
+  });
+
+  it("registerSession 成功登记时清除创建失败记录（新卡不残留旧失败）", () => {
+    const store = makeStore();
+    store.setCreateFailure({ cli: "claude", code: "E_SPAWN_NOT_FOUND", message: "m", cwd: "C:\repo", projectId: "p-1" });
+    store.registerSession({ sessionId: "s-2", cli: "claude", title: "新会话 · Claude", permMode: "auto", model: "默认模型" });
+    expect(store.getSnapshot().createFailure).toBeNull();
+  });
+
+  it("clearError：清除会话 lastError（错误卡「知道了」动作数据源）", () => {
+    const store = makeStore();
+    store.setError("s-1", "E_INTERNAL", "x");
+    expect(store.getSession("s-1")!.lastError).not.toBeNull();
+    store.clearError("s-1");
+    expect(store.getSession("s-1")!.lastError).toBeNull();
   });
 });

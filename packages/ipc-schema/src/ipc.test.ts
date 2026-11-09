@@ -123,12 +123,14 @@ describe("ipcRequestSchema 最小消息集", () => {
 });
 
 describe("错误码与结果形状", () => {
-  it("错误码枚举（首版四枚 + E_PROJECT_NOT_FOUND）", () => {
+  it("错误码枚举（首版四枚 + E_PROJECT_NOT_FOUND + #46 E_SPAWN_NOT_FOUND）", () => {
     expect(errorCodeSchema.parse("E_SCHEMA")).toBe("E_SCHEMA");
     expect(errorCodeSchema.parse("E_SESSION_NOT_FOUND")).toBe("E_SESSION_NOT_FOUND");
     expect(errorCodeSchema.parse("E_APPROVAL_EXPIRED")).toBe("E_APPROVAL_EXPIRED");
     expect(errorCodeSchema.parse("E_INTERNAL")).toBe("E_INTERNAL");
     expect(errorCodeSchema.parse("E_PROJECT_NOT_FOUND")).toBe("E_PROJECT_NOT_FOUND");
+    // #46：spawn 失败协议级映射（exe 解析失败经 AdapterError 以此码回传，renderer classify 归 spawn_not_found）
+    expect(errorCodeSchema.parse("E_SPAWN_NOT_FOUND")).toBe("E_SPAWN_NOT_FOUND");
     expect(() => errorCodeSchema.parse("E_WHATEVER")).toThrow();
   });
 
