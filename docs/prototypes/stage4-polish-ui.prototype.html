@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>阶段 4 体验打磨原型（Diff 视图 + 错误提示卡 + 恢复引导条 + 残留进程通知）</title>
+<style>
+  /* 暗色主题基调，与阶段 1/2/3 原型一致 */
+  :root {
+    --bg: #0f1115; --card: #161a22; --muted-card: #1b2029; --border: #2a3140;
+    --fg: #e6e9ef; --fg-muted: #9aa3b2; --fg-faint: #6b7484;
+    --primary: #7c9cff; --ok: #4ade80; --warn: #f5c66b; --destructive: #f87171;
+    --diff-add: #1c2b22; --diff-add-fg: #7ee2a8; --diff-del: #2b1d1d; --diff-del-fg: #f09090;
+    --diff-hunk: #1a2030;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font: 13px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--fg); padding: 16px; }
+  button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+  .demo-tabs { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .demo-tabs button { padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--fg-muted); }
+  .demo-tabs button.on { border-color: var(--primary); color: var(--fg); background: rgba(124,156,255,.12); }
+  .demo { display: none; }
+  .demo.on { display: block; }
+  .frame { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; display: flex; height: 640px; background: var(--bg); }
+  .note { color: var(--fg-faint); font-size: 12px; margin: 8px 2px; }
+  .sidebar { width: 190px; flex: none; border-right: 1px solid var(--border); padding: 12px 10px; display: flex; flex-direction: column; gap: 4px; }
+  .side-title { font-size: 11px; color: var(--fg-faint); letter-spacing: .1em; margin-bottom: 6px; }
+  .side-item { padding: 6px 10px; border-radius: 8px; color: var(--fg-muted); display: flex; gap: 8px; align-items: center; }
+  .side-item.on { background: rgba(124,156,255,.12); color: var(--fg); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .entry-btn { display: flex; align-items: center; gap: 8px; width: 100%; border-radius: 8px; padding: 6px 10px; font-size: 13px; color: var(--fg-muted); border: 1px solid transparent; text-align: left; margin-bottom: 4px; }
+  .entry-btn:hover { border-color: var(--border); background: var(--muted-card); }
+  .entry-btn.on { border-color: var(--primary); background: rgba(124,156,255,.12); color: var(--fg); }
+  .entry-btn .proj { margin-left: auto; font-size: 11px; color: var(--fg-faint); }
+
+  /* ── 演示 1：Diff 视图（第四态） ─────────────────────────── */
+  .diff-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .diff-head { padding: 12px 18px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }
+  .diff-head h2 { font-size: 15px; }
+  .diff-stat { font-size: 12px; color: var(--fg-muted); }
+  .diff-stat .add { color: var(--diff-add-fg); }
+  .diff-stat .del { color: var(--diff-del-fg); }
+  .btn { border: 1px solid var(--border); border-radius: 8px; padding: 3px 10px; font-size: 12px; color: var(--fg-muted); }
+  .btn:hover { border-color: var(--primary); color: var(--fg); }
+  .btn.primary { border-color: var(--primary); color: var(--primary); }
+  .btn.danger { border-color: rgba(248,113,113,.5); color: var(--destructive); }
+  .diff-body { flex: 1; overflow-y: auto; padding: 12px 18px; display: flex; flex-direction: column; gap: 10px; }
+  .diff-file { border: 1px solid var(--border); border-radius: 10px; background: var(--card); overflow: hidden; }
+  .diff-file-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; user-select: none; }
+  .diff-file-head:hover { background: var(--muted-card); }
+  .ct { font-size: 11px; border-radius: 4px; padding: 0 6px; flex: none; font-weight: 600; }
+  .ct.m { background: rgba(124,156,255,.15); color: var(--primary); }
+  .ct.a { background: rgba(74,222,128,.13); color: var(--ok); }
+  .ct.d { background: rgba(248,113,113,.13); color: var(--destructive); }
+  .ct.u { background: rgba(245,198,107,.13); color: var(--warn); }
+  .diff-path { font-family: Consolas, monospace; font-size: 12px; }
+  .session-tag { font-size: 11px; color: var(--fg-faint); border: 1px dashed var(--border); border-radius: 999px; padding: 0 8px; flex: none; }
+  .diff-file-stat { margin-left: auto; font-size: 11px; flex: none; }
+  .diff-file-stat .add { color: var(--diff-add-fg); }
+  .diff-file-stat .del { color: var(--diff-del-fg); }
+  .caret { color: var(--fg-faint); flex: none; transition: transform .15s; }
+  .diff-file.open .caret { transform: rotate(90deg); }
+  .diff-content { display: none; border-top: 1px solid var(--border); font: 12px/1.55 Consolas, monospace; }
+  .diff-file.open .diff-content { display: block; }
+  .dl { padding: 0 12px; white-space: pre; }
+  .dl.add { background: var(--diff-add); color: var(--diff-add-fg); }
+  .dl.del { background: var(--diff-del); color: var(--diff-del-fg); }
+  .dl.hunk { background: var(--diff-hunk); color: var(--fg-faint); }
+  .dl.ctx { color: var(--fg-muted); }
+  .diff-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--fg-faint); }
+
+  /* ── 演示 2/3/4：banner 与错误卡 ─────────────────────── */
+  .chat-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .banner { display: flex; align-items: center; gap: 10px; padding: 8px 16px; font-size: 12px; border-bottom: 1px solid; flex: none; }
+  .banner.warn { background: rgba(245,198,107,.08); border-color: rgba(245,198,107,.4); color: var(--warn); }
+  .banner.err { background: rgba(248,113,113,.08); border-color: rgba(248,113,113,.4); color: var(--destructive); }
+  .banner.info { background: rgba(124,156,255,.08); border-color: rgba(124,156,255,.4); color: var(--primary); }
+  .banner .msg { min-width: 0; }
+  .banner .actions { margin-left: auto; display: flex; gap: 8px; flex: none; }
+  .msg-body { flex: 1; overflow-y: auto; padding: 16px 24px; display: flex; flex-direction: column; gap: 12px; }
+  .bubble { max-width: 68%; border-radius: 10px; padding: 8px 12px; font-size: 13px; }
+  .bubble.user { align-self: flex-end; background: rgba(124,156,255,.14); }
+  .bubble.assistant { align-self: flex-start; background: var(--card); border: 1px solid var(--border); }
+  .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--fg-faint); border-top-color: var(--primary); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .err-card { align-self: center; width: min(640px, 92%); border: 1px solid rgba(248,113,113,.4); border-radius: 10px; background: var(--card); overflow: hidden; }
+  .err-card-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); color: var(--destructive); font-weight: 600; }
+  .err-card-body { padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; }
+  .err-card-body .why { color: var(--fg-muted); font-size: 12px; }
+  .err-card-body .cmd { font: 12px Consolas, monospace; background: var(--muted-card); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; color: var(--fg-muted); }
+  .err-card-actions { display: flex; gap: 8px; padding: 0 14px 12px; }
+  .pid-table { font: 12px Consolas, monospace; border-collapse: collapse; margin: 6px 0; }
+  .pid-table td, .pid-table th { border: 1px solid var(--border); padding: 3px 10px; text-align: left; color: var(--fg-muted); font-weight: 400; }
+</style>
+</head>
+<body>
+
+<div class="demo-tabs">
+  <button class="on" data-demo="d1">① Diff 视图</button>
+  <button data-demo="d2">② 错误提示卡（四类）</button>
+  <button data-demo="d3">③ 恢复引导条</button>
+  <button data-demo="d4">④ 残留进程通知</button>
+</div>
+
+<!-- ══════════ 演示 1：Diff 视图（第四态，入口=侧栏底部按钮） ══════════ -->
+<div class="demo on" id="d1">
+  <div class="frame">
+    <div class="sidebar">
+      <div class="side-title">会话</div>
+      <div class="side-item"><span class="dot" style="background:var(--ok)"></span>实现 Diff 解析</div>
+      <div class="side-item on"><span class="dot" style="background:var(--primary)"></span>修复启动崩溃</div>
+      <div class="side-item"><span class="dot" style="background:var(--fg-faint)"></span>设计评审（断开）</div>
+      <div style="margin-top:auto; display:flex; flex-direction:column; gap:4px;">
+        <button class="entry-btn">🗂 看板 <span class="proj">kanban-desktop</span></button>
+        <button class="entry-btn">🧠 记忆 <span class="proj">kanban-desktop</span></button>
+        <button class="entry-btn on">🔀 Diff <span class="proj">kanban-desktop</span></button>
+      </div>
+    </div>
+    <div class="diff-main">
+      <div class="diff-head">
+        <h2>工作区变更</h2>
+        <span class="diff-stat">5 个文件 · <span class="add">+86</span> <span class="del">-31</span> · 未提交（HEAD 对比）</span>
+        <button class="btn" style="margin-left:auto" onclick="alert('重新执行 git diff（进入视图/手动刷新）')">↻ 刷新</button>
+      </div>
+      <div class="diff-body">
+
+        <div class="diff-file open">
+          <div class="diff-file-head" onclick="this.parentElement.classList.toggle('open')">
+            <span class="caret">▶</span><span class="ct m">M</span>
+            <span class="diff-path">apps/desktop/src/features/chat/chat-store.ts</span>
+            <span class="session-tag">会话「修复启动崩溃」最近改动</span>
+            <span class="diff-file-stat"><span class="add">+24</span> <span class="del">-6</span></span>
+          </div>
+          <div class="diff-content">
+            <div class="dl hunk">@@ -180,6 +180,24 @@ export class ChatStore {</div>
+            <div class="dl ctx">    case "session_status":</div>
+            <div class="dl del">-      if (event.status === "disconnected") {</div>
+            <div class="dl add">+      if (event.status === "disconnected") {</div>
+            <div class="dl add">+        // 阶段 4：断开引导条由顶部 banner 驱动（spec US-S4-3）</div>
+            <div class="dl add">+        s.recoveryState = "idle";</div>
+            <div class="dl ctx">        this.finalizeLiveItems(s);</div>
+            <div class="dl add">+        s.lastError = classifySessionError(s.lastError, s.cli);</div>
+            <div class="dl ctx">      }</div>
+          </div>
+        </div>
+
+        <div class="diff-file">
+          <div class="diff-file-head" onclick="this.parentElement.classList.toggle('open')">
+            <span class="caret">▶</span><span class="ct a">A</span>
+            <span class="diff-path">apps/desktop/src/features/diff/DiffWorkspace.tsx</span>
+            <span class="session-tag">会话「实现 Diff 解析」最近改动</span>
+            <span class="diff-file-stat"><span class="add">+52</span></span>
+          </div>
+          <div class="diff-content">
+            <div class="dl hunk">@@ -0,0 +1,52 @@</div>
+            <div class="dl add">+// 用途：Diff 视图（阶段 4）——当前项目工作区未提交变更</div>
+            <div class="dl add">+export function DiffWorkspace(props: DiffProps) {</div>
+            <div class="dl add">+  const diff = useWorkspaceDiff(props.projectId);</div>
+          </div>
+        </div>
+
+        <div class="diff-file">
+          <div class="diff-file-head" onclick="this.parentElement.classList.toggle('open')">
+            <span class="caret">▶</span><span class="ct d">D</span>
+            <span class="diff-path">apps/desktop/src/features/chat/legacy-error.ts</span>
+            <span class="diff-file-stat"><span class="del">-18</span></span>
+          </div>
+          <div class="diff-content"></div>
+        </div>
+
+        <div class="diff-file">
+          <div class="diff-file-head" onclick="this.parentElement.classList.toggle('open')">
+            <span class="caret">▶</span><span class="ct u">U</span>
+            <span class="diff-path">notes/diff-parsing.md</span>
+            <span class="session-tag">会话「实现 Diff 解析」最近改动</span>
+            <span class="diff-file-stat">新文件（未跟踪）</span>
+          </div>
+          <div class="diff-content">
+            <div class="dl ctx">untracked 新文件：列出并展示全文（截断保护）</div>
+          </div>
+        </div>
+
+        <div class="diff-file">
+          <div class="diff-file-head" onclick="this.parentElement.classList.toggle('open')">
+            <span class="caret">▶</span><span class="ct m">M</span>
+            <span class="diff-path">assets/logo.png</span>
+            <span class="diff-file-stat">二进制文件</span>
+          </div>
+          <div class="diff-content"></div>
+        </div>
+
+        <div class="note">行为说明：进入视图与点「刷新」时经 diff:get 重新读取；非 git 项目显示空态（见下）；「会话线索」为 best-effort 标注，提取不到则不显示。</div>
+      </div>
+    </div>
+  </div>
+  <div class="note">空态（非 git 项目 / git 不可用）：同一视图区域显示「当前项目不是 git 仓库，无变更可展示」居中提示，不报错弹窗。</div>
+</div>
+
+<!-- ══════════ 演示 2：错误提示卡（四类错误 × 分类文案 + 恢复动作） ══════════ -->
+<div class="demo" id="d2">
+  <div class="frame" style="flex-direction:column; height:auto; min-height:640px;">
+    <div class="msg-body" style="padding:16px 24px;">
+
+      <div class="err-card">
+        <div class="err-card-head">⚠ CLI 进程异常退出</div>
+        <div class="err-card-body">
+          <div>会话「修复启动崩溃」的 CLI 进程已退出（exit 1），会话已断开。已产生的对话与文件修改不受影响。</div>
+          <div class="why">常见原因：CLI 自身崩溃、被系统终止、或机器资源不足。不会自动重放任何未完成的操作。</div>
+        </div>
+        <div class="err-card-actions">
+          <button class="btn primary">读取原生历史并恢复</button>
+          <button class="btn">知道了</button>
+        </div>
+      </div>
+
+      <div class="err-card">
+        <div class="err-card-head">🔑 登录已失效（Codex）</div>
+        <div class="err-card-body">
+          <div>Codex 报告认证失败，会话无法继续。需要在终端重新登录一次。</div>
+          <div class="cmd">$ codex login</div>
+          <div class="why">可在应用的 PTY 终端会话中直接运行上面的命令；完成后点「重试」继续本会话。</div>
+        </div>
+        <div class="err-card-actions">
+          <button class="btn primary">重试</button>
+          <button class="btn">打开 PTY 终端</button>
+        </div>
+      </div>
+
+      <div class="err-card">
+        <div class="err-card-head">🔍 找不到 CLI 程序（Claude）</div>
+        <div class="err-card-body">
+          <div>未找到 claude 可执行文件，会话创建失败。已探测的常见安装位置均无结果。</div>
+          <div class="why">确认已安装并在 PATH 中，或在配置文件（应用数据目录 config.json）手动指定 cliExe.claude 路径。</div>
+        </div>
+        <div class="err-card-actions">
+          <button class="btn primary">重试创建</button>
+          <button class="btn">复制配置路径</button>
+        </div>
+      </div>
+
+      <div class="err-card">
+        <div class="err-card-head">🔌 连接中断（OpenCode）</div>
+        <div class="err-card-body">
+          <div>与 OpenCode 服务的连接断开（SSE 中断），消息流已停止。工作区文件保持当前状态。</div>
+          <div class="why">常见原因：server 进程退出、端口被占用或网络抖动。可尝试恢复会话；恢复时将按需重新拉起 server。</div>
+        </div>
+        <div class="err-card-actions">
+          <button class="btn primary">恢复会话</button>
+          <button class="btn">知道了</button>
+        </div>
+      </div>
+
+      <div class="err-card" style="border-color:var(--border)">
+        <div class="err-card-head" style="color:var(--fg-muted)">❔ 未知错误</div>
+        <div class="err-card-body">
+          <div>发生未识别的错误：<span class="why">E_INTERNAL: …原始消息原文…</span></div>
+          <div class="why">未覆盖的错误类型保留原始 code 与 message 原文展示（不吞错、不编造原因）。</div>
+        </div>
+        <div class="err-card-actions">
+          <button class="btn">重试</button>
+          <button class="btn">复制错误详情</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+  <div class="note">分类来源：session_error.code 统一枚举（C1 演进，三 Adapter + Fake 映射）；未知类保留原文兜底。动作按钮仅做编排（恢复/重试/指引），不自动执行破坏性操作。</div>
+</div>
+
+<!-- ══════════ 演示 3：恢复引导条（断开会话顶部常驻） ══════════ -->
+<div class="demo" id="d3">
+  <div class="frame">
+    <div class="sidebar">
+      <div class="side-title">会话</div>
+      <div class="side-item on"><span class="dot" style="background:var(--fg-faint)"></span>设计评审（断开）</div>
+    </div>
+    <div class="chat-main">
+      <!-- 三态：待恢复 / 恢复中 / 恢复失败（演示并列展示，实际同一位置互斥） -->
+      <div class="banner info">
+        <span>📴 会话「设计评审」来自上次运行（CLI 已退出）。缓存消息不替代原生历史。</span>
+        <span class="actions"><button class="btn primary">读取原生历史并恢复</button></span>
+      </div>
+      <div class="banner info">
+        <span><span class="spinner"></span>&nbsp; 正在读取原生历史并恢复上下文…（不可中断，通常数秒内完成）</span>
+      </div>
+      <div class="banner err">
+        <span>⚠ 恢复失败：原生历史文件不可读（E_SESSION_NOT_FOUND）。</span>
+        <span class="actions"><button class="btn primary">重试</button><button class="btn">复制错误详情</button></span>
+      </div>
+      <div class="msg-body">
+        <div class="bubble user">继续昨天的设计评审</div>
+        <div class="bubble assistant">…（历史消息快照，来自 readHistory 重建）…</div>
+        <div class="note" style="align-self:center">恢复成功后 banner 消失，状态徽标回到 idle；消息流底部不再放恢复按钮（顶部条为唯一入口，避免双入口）。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ 演示 4：残留进程通知条（启动检测 + 确认式清理） ══════════ -->
+<div class="demo" id="d4">
+  <div class="frame" style="flex-direction:column; height:auto; min-height:400px;">
+    <div class="banner warn">
+      <span>🧹 检测到 2 个疑似残留 CLI 进程（不属于本应用管理）。清理前请确认它们不是你自己打开的。</span>
+      <span class="actions">
+        <button class="btn danger" onclick="alert('逐个 pid 终止；结果回填 killed/failed')">清理选中</button>
+        <button class="btn">忽略本次</button>
+      </span>
+    </div>
+    <div class="msg-body">
+      <table class="pid-table">
+        <tr><th><input type="checkbox" checked></th><th>PID</th><th>进程</th><th>启动时间</th><th>关联记录</th></tr>
+        <tr><td><input type="checkbox" checked></td><td>18432</td><td>C:\...\codex\codex.exe</td><td>2026-11-09 09:12</td><td>会话「实现 Diff 解析」（上次运行遗留）</td></tr>
+        <tr><td><input type="checkbox" checked></td><td>19004</td><td>C:\...\node\opencode.exe</td><td>2026-11-09 09:12</td><td>无会话记录（可能是你手动打开的）</td></tr>
+      </table>
+      <div class="note">判定：exe 路径匹配 CLI 解析链全量候选路径，且 pid 不在 CliHost 上报的本应用活跃 CLI 进程集合（阶段 4 新增上报机制）；OpenCode 注册表核对通过、可无损接管的孤儿 server 不列为残留（恢复时自动接管）。默认不勾选「无会话记录」项（防误杀）；「忽略本次」只关本次通知，下次启动重新检测。已知限制：npm 升级/路径漂移后的旧位置进程会漏检。应用自身被强杀时，Job Object 兜底清理全部 CLI 子孙进程——该场景由门控 e2e 实证（PTY 子树不在覆盖范围，属阶段 4 非目标）。</div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // demo tab 切换（与前三阶段原型一致）
+  document.querySelectorAll(".demo-tabs button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      document.querySelectorAll(".demo-tabs button").forEach(function (x) { x.classList.remove("on"); });
+      document.querySelectorAll(".demo").forEach(function (x) { x.classList.remove("on"); });
+      b.classList.add("on");
+      document.getElementById(b.dataset.demo).classList.add("on");
+    });
+  });
+</script>
+</body>
+</html>
