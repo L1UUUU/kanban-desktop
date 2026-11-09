@@ -23,7 +23,8 @@ export const OPENCODE_PERM_CONFIG: Record<Exclude<PermMode, "full">, Record<stri
 };
 
 /** spawn 注册表条目：宿主崩溃后重启的孤儿核对依据（t0-01 四要素：pid/exe/命令行签名/创建时间） */
-interface RegistryEntry {
+/** Exported registration entry shape and verification (#49 residue detection reuses adoptability determination: registry-verified orphan servers are excluded from the residue list) */
+export interface RegistryEntry {
   cwd: string;
   exe: string;
   pid: number;
@@ -113,7 +114,7 @@ function pidAlive(pid: number): boolean {
 }
 
 /** 孤儿身份核对（t0-01 verifyEntry 演进）：pid 存活 + exe 路径一致 + 命令行签名 + 创建时间 ±10s 防 pid 复用；非 win32 退化为 pid 存活 + 无 CIM */
-function verifyRegistryEntry(entry: RegistryEntry): { match: boolean; reason?: string } {
+export function verifyRegistryEntry(entry: RegistryEntry): { match: boolean; reason?: string } {
   if (!pidAlive(entry.pid)) return { match: false, reason: "pid 已退出" };
   if (process.platform !== "win32") return { match: true };
   const norm = (p: string | null) => (p ?? "").toLowerCase().replace(/\//g, "\\");
