@@ -1,7 +1,8 @@
-// 用途：解析真实 opencode 可执行文件路径（spawn 直连目标，不经 .cmd shim / PATH 兜底；spec G 通用决策，npm 全局优先）
+// 用途：解析真实 opencode 可执行文件路径（spawn 直连目标，不经 .cmd shim / PATH 兜底；spec G 通用决策，npm 全局优先）+ 解析链候选并集（#49 残留检测）
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { dedupePaths, lookupAllPathLines, type ExeCandidateProbes } from "../exe-probes";
 
 /** 解析优先级：手动覆盖（config cliExe.opencode）→ env KANBAN_OPENCODE_BIN → npm 全局 → 原生安装目录 → where/which 显式解析 */
 export interface OpenCodeExeOptions {
@@ -80,4 +81,29 @@ export function resolveOpenCodeExe(options: OpenCodeExeOptions = {}): string {
   throw new Error(
     `未找到 opencode 可执行文件（已尝试：${tried.join("；")}）。请在设置中手动指定 opencode.exe 路径或设置 KANBAN_OPENCODE_BIN。`,
   );
+}
+
+/**
+ * opencode 解析链全量候选路径并集（#49 残留检测的 exe 匹配粒度；采纳条件与 resolveOpenCodeExe 一致）。
+ * 顺序：manualOverride → KANBAN_OPENCODE_BIN → npm 全局 bin/opencode.exe → 原生安装位 → where/ich 全部非 shim 可执行；去重。
+ */
+export function listOpenCodeExeCandidates(options: OpenCodeExeOptions & ExeCandidateProbes = {}): string[] {
+  const paths: string[] = [];
+  if (options.manualOverride && existsSync(options.manualOverride)) paths.push(options.manualOverride);
+  if (process.env.KANBAN_OPENCODE_BIN && existsSync(process.env.KANBAN_OPENCODE_BIN)) paths.push(process.env.KANBAN_OPENCODE_BIN);
+  try {
+    const root = (options.npmRoot ?? npmRootGlobal)();
+    const bin = process.platform === "win32" ? "opencode.exe" : "opencode";
+    const exe = path.join(root, "opencode-ai", "bin", bin);
+    if (existsSync(exe)) paths.push(exe);
+  } catch {
+    /* npm root -g 探测失败：无全局候选 */
+  }
+  const native = nativeInstallPath();
+  if (native) paths.push(native);
+  const lines = (options.pathLookup ?? (() => lookupAllPathLines("opencode")))("opencode");
+  for (const line of lines) {
+    if (!line.toLowerCase().endsWith(".cmd")) paths.push(line); // 与 fromPathLookup 同过滤：.cmd shim 不采用
+  }
+  return dedupePaths(paths);
 }

@@ -1,29 +1,41 @@
-// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc 路由）、CliHost 托管（utilityProcess 优先，进程内回退）与事件转发/状态落库、TrackerEngine（SkillObservation 落库 + 重启恢复）、PTY 终端宿主（node-pty，main 进程直接使用，t0-03 实证）和有序退出、初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
+// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc/memory:ipc/diff:ipc/residue:ipc 路由）、CliHost 托管（utilityProcess 优先，进程内回退）与事件转发/状态落库、TrackerEngine（SkillObservation 落库 + 重启恢复）、PTY 终端宿主（node-pty，main 进程直接使用，t0-03 实证）、有序退出与残留进程检测一次性通知（#49 app:event）；初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import * as nodePty from "node-pty";
 import {
+  appEventSchema,
   appInfoSchema,
   memoryEventSchema,
+  residueProcessSchema,
   shutdownNoticeSchema,
   terminalEventSchema,
   trackerChangeSchema,
+  type AppEventWire,
   type MemoryEventWire,
+  type ResidueProcess,
 } from "@kanban/ipc-schema";
-import { AdapterRouter, createDesktopAdapterFactory, type CliAdapter } from "@kanban/cli-host";
+import {
+  AdapterRouter,
+  createDesktopAdapterFactory,
+  listClaudeExeCandidates,
+  listCodexExeCandidates,
+  listOpenCodeExeCandidates,
+  type CliAdapter,
+} from "@kanban/cli-host";
 import { TrackerEngine, type TrackerChange } from "@kanban/tracker";
 import { defaultConfig, loadConfig, saveConfig, type AppConfig } from "./config";
 import { createAdapterEventHandler } from "./adapter-events";
 import { CliHostClient } from "./cli-host-client";
 import { SQLITE_ENTRY, openDatabase } from "./db";
-import { handleIpc, handleDiffIpc, handleMemoryIpc, TRACKER_CLI_BY_APP, type IpcDeps } from "./ipc";
+import { handleIpc, handleDiffIpc, handleMemoryIpc, handleResidueIpc, TRACKER_CLI_BY_APP, type IpcDeps } from "./ipc";
 import { defaultGitDiffDeps, readWorkspaceDiff } from "./git-diff-service";
 import { openMemoryService } from "./memory-service";
 import { createPtyHost } from "./pty-host";
 import { ProjectStore } from "./project-store";
+import { detectResidue, killResidue, type ResidueServiceDeps } from "./residue-service";
 import { SessionStore } from "./session-store";
 import { adoptRestoredSessions, createShutdownOrchestrator } from "./shutdown";
 
@@ -290,8 +302,78 @@ app.whenReady().then(async () => {
     ),
   );
 
+  // #49 残留治理装配（spec #40 A/D/F 节）：检测 = exe 匹配三 CLI 解析链候选并集 + 排除 #44 活跃集合 +
+  // 排除注册表核对通过可接管的 OpenCode 孤儿；终止 = 逐 pid 确认式 killed/failed（无自动清理路径）
+  // E2E 预置 fake 检测结果（KANBAN_TEST_RESIDUE_JSON 指向残留清单 JSON，参照 memory-seed.ts 预置思路）：
+  // 不做真实探测与终止，驱动通知条 Playwright 流程；KANBAN_USER_DATA 隔离环境（整机 e2e）且无种子时跳过
+  // 机器级进程枚举——否则开发机上他人打开的真实 CLI 进程会把非密封 banner 带进无关 e2e 断言
+  const residueSeed = loadResidueSeed(process.env.KANBAN_TEST_RESIDUE_JSON);
+  const residueE2eSkip = !residueSeed && !!process.env.KANBAN_USER_DATA;
+  const residueDeps: ResidueServiceDeps = residueSeed
+    ? {
+        listCandidates: () => ({ codex: [], claude: [], opencode: [] }),
+        queryProcesses: () => [],
+        listActivePids: async () => [],
+        registryPath: join(app.getPath("userData"), "opencode-servers.json"),
+        listSessions: () => [],
+        killPid: () => ({ ok: true }), // fake pid 不真实存在：统一回报 killed 驱动 UI 流程
+      }
+    : {
+        listCandidates: () => ({
+          codex: listCodexExeCandidates({ manualOverride: appConfig.cliExe.codex }),
+          claude: listClaudeExeCandidates({ manualOverride: appConfig.cliExe.claude }),
+          opencode: listOpenCodeExeCandidates({ manualOverride: appConfig.cliExe.opencode }),
+        }),
+        listActivePids: () => (hostedAdapter ? hostedAdapter.listChildPids() : Promise.resolve([])),
+        registryPath: join(app.getPath("userData"), "opencode-servers.json"),
+        listSessions: () => sessions.list(),
+      };
+  // 每次启动只检测一次（spec：就绪后一次、不轮询）；residue:detect 返回同一缓存，renderer 挂载拉取与 app:event 推送同源
+  const detectResidueOnce = (() => {
+    let p: Promise<ResidueProcess[]> | null = null;
+    return () =>
+      (p ??= residueSeed ? Promise.resolve(residueSeed) : residueE2eSkip ? Promise.resolve([]) : detectResidue(residueDeps));
+  })();
+  const sendAppEvent = (event: AppEventWire): void => {
+    appEventSchema.parse(event);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("app:event", event);
+    }
+  };
+  ipcMain.handle("residue:ipc", (_event, raw: unknown) =>
+    handleResidueIpc(
+      {
+        detect: detectResidueOnce,
+        kill: (pids) => killResidue(residueDeps, pids),
+        isShuttingDown: () => shutdown.isShuttingDown(),
+      },
+      raw,
+    ),
+  );
+
   createWindow();
+
+  // 残留检测一次性触发（窗口就绪后推送；无结果不推送任何事件 = 不打扰；renderer 挂载时的 residue:detect 拉取兜底覆盖窗口时序）
+  mainWindow?.once("ready-to-show", () => {
+    void detectResidueOnce()
+      .then((list) => {
+        if (list.length > 0) sendAppEvent({ type: "residue-detected", processes: list });
+      })
+      .catch((e) => console.error(`[kanban:residue] 检测失败：${e instanceof Error ? e.message : String(e)}`));
+  });
 });
+
+/** E2E 残留种子读取：KANBAN_TEST_RESIDUE_JSON 指向的 JSON 数组经 residueProcessSchema 逐条校验过滤（非法条目丢弃、文件缺失/损坏返回 null） */
+function loadResidueSeed(seedPath: string | undefined): ResidueProcess[] | null {
+  if (!seedPath) return null;
+  try {
+    const raw = JSON.parse(readFileSync(seedPath, "utf8")) as unknown[];
+    return raw.filter((r): r is ResidueProcess => residueProcessSchema.safeParse(r).success);
+  } catch (e) {
+    console.error(`[kanban:residue] 种子文件不可读（${seedPath}）：${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  }
+}
 
 // Windows 优先：关窗即退出（before-quit 触发统一退出序列：停新请求→有序取消→有限等待→受控终止→PTY 停止，#13/spec H）
 app.on("window-all-closed", () => {
