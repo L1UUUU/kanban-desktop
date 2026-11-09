@@ -341,6 +341,11 @@ export class OpenCodeAdapter implements CliAdapter {
     };
   }
 
+  /** C5 演进（#44）：server-per-project —— 经 host 上报运行中 server pid（同 project 引用共享只报一份，多 project 多份） */
+  async listChildPids(): Promise<number[]> {
+    return this.host.listChildPids?.() ?? [];
+  }
+
   /* ---------------- 内部：server 挂接与事件映射 ---------------- */
 
   /** 拉起/复用 server（应用侧 sessionId 为引用键；档位缺省=auto） */

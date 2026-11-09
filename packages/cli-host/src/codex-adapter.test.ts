@@ -9,6 +9,8 @@ import type { AdapterEvent, ChatEvent } from "@kanban/ipc-schema";
 /** 记录型 Fake app-server：request 响应 + 测试手动 emit 通知/服务端请求/进程退出 */
 class FakeRpc implements CodexRpcClientLike {
   dead = false;
+  /** 模拟子进程 pid（listChildPids 用；null=未启动） */
+  pid: number | null = null;
   readonly calls: Array<{ method: string; params: unknown }> = [];
   private readonly notifHandlers = new Map<string, Set<(p: unknown, m: string) => void>>();
   private readonly serverHandlers = new Map<string, (p: unknown, id: number | string) => unknown>();
@@ -596,5 +598,40 @@ describe("CodexAdapter：readTranscript 双视角（#28）", () => {
   it("未知会话 → E_SESSION_NOT_FOUND", async () => {
     const ctx = makeAdapter();
     await expect(ctx.adapter.readTranscript("nope")).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
+  });
+});
+
+describe("CodexAdapter：listChildPids（#44 C5 演进）", () => {
+  it("共享单进程模型：多会话一个 app-server pid，只报一份；未启动为空集", async () => {
+    const { rpc, adapter } = makeAdapter();
+    expect(await adapter.listChildPids!()).toEqual([]); // 未启动
+    rpc.pid = 4242;
+    await adapter.createSession({ cwd: CWD });
+    await adapter.createSession({ cwd: CWD });
+    expect(await adapter.listChildPids!()).toEqual([4242]); // 两会话共享，仍只一份
+  });
+
+  it("进程死亡 → 集合清空；重启进程后新会话 pid 重新出现（集合随进程重建）", async () => {
+    const { rpc, rpcs, adapter } = makeAdapter();
+    rpc.pid = 4242;
+    await adapter.createSession({ cwd: CWD });
+    rpc.simulateExit(1);
+    expect(await adapter.listChildPids!()).toEqual([]); // 死亡不报陈旧 pid
+    await adapter.createSession({ cwd: CWD }); // 触发重启进程（factory 换新 FakeRpc）
+    rpcs.at(-1)!.pid = 5252;
+    expect(await adapter.listChildPids!()).toEqual([5252]);
+  });
+
+  it("会话级 dispose 保留共享进程 pid（t0-01 T3：进程供其他 thread 使用）；全量 dispose 清空", async () => {
+    const { rpc, adapter } = makeAdapter();
+    rpc.pid = 4242;
+    const a = await adapter.createSession({ cwd: CWD });
+    const b = await adapter.createSession({ cwd: CWD });
+    await adapter.dispose({ sessionId: a.sessionId });
+    expect(await adapter.listChildPids!()).toEqual([4242]); // 进程仍受本应用管理
+    await adapter.dispose({ sessionId: b.sessionId });
+    expect(await adapter.listChildPids!()).toEqual([4242]); // 会话清空但进程按设计保留
+    await adapter.dispose(); // 全量：受控终止共享进程
+    expect(await adapter.listChildPids!()).toEqual([]);
   });
 });

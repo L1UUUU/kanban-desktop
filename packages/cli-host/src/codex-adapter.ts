@@ -19,6 +19,8 @@ export interface CodexRpcClientLike {
   stop(): void;
   dead: boolean;
   exitInfo?: { code: number | null; signal: string | null } | null;
+  /** 子进程 pid（listChildPids 用；无进程/已退出的实现为 null） */
+  pid?: number | null;
 }
 
 export interface CodexAdapterOptions {
@@ -353,6 +355,13 @@ export class CodexAdapter implements CliAdapter {
     return () => {
       this.handlers.delete(handler);
     };
+  }
+
+  /** C5 演进（#44）：共享单进程模型 —— app-server 存活时报一份 pid；未启动/已死亡为空集（不报陈旧 pid，防 pid 复用误判） */
+  async listChildPids(): Promise<number[]> {
+    const c = this.client;
+    const pid = c && !c.dead ? c.pid : null;
+    return pid ? [pid] : [];
   }
 
   /* ---------------- 内部：启动与协议挂接 ---------------- */

@@ -233,6 +233,14 @@ describe("FakeAdapter 专属场景", () => {
     expect(seen.every((e) => !("type" in e && e.type === "message_delta"))).toBe(true);
   });
 
+  it("listChildPids（#44 C5 演进）：无真实子进程 —— 建会话前后均为空集", async () => {
+    const clock = new VirtualClock();
+    const adapter = new FakeAdapter({ clock });
+    expect(await adapter.listChildPids!()).toEqual([]);
+    await adapter.createSession({ cwd: "C:\\demo" });
+    expect(await adapter.listChildPids!()).toEqual([]);
+  });
+
   it("createSession 记录 permMode/model（后续真实 Adapter 的映射输入），事件含初始空闲状态", async () => {
     const clock = new VirtualClock();
     const adapter = new FakeAdapter({ clock });
