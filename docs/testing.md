@@ -62,6 +62,7 @@ Playwright（`apps/desktop/playwright.config.ts`）：testDir `./e2e`，workers 
 |---|---|---|---|
 | `KANBAN_E2E` | 全部 8 个 B 类文件（cli-host：四件套 + run-once-claude/run-once-job；desktop：conpty + memory） | `=== "1"` 才跑；否则 `describe.skipIf` 整套显示 skipped | **B 类主开关** |
 | `KANBAN_PROTOCOL_PROBE` | `packages/cli-host/tests/e2e/codex-adapter.e2e.test.ts` 内「协议探针」套 | `!== "1"` 时该子套 skip；叠加在 `KANBAN_E2E` 之上的第二道细粒度开关 | 附属（细粒度） |
+| `KANBAN_SESSION_PROBE` | `packages/cli-host/tests/e2e/session-clue-probe.e2e.test.ts`（会话线索探针，issue #48） | `!== "1"` 时整套 skip；叠加在 `KANBAN_E2E` 之上的第二道细粒度开关（真实驱动三 CLI 采集工具事件样本，一次性取证性质，避免随 B 类例行重跑花 token；结论见 `docs/acceptance/stage4/session-clue-probe.md`） | 附属（细粒度） |
 | `KANBAN_REAL_E2E` | `apps/desktop/e2e/kanban-real.spec.ts`、`apps/desktop/e2e/memory-real.spec.ts` | `=== "1"` 才跑真实最小集（需本机 CLI 已装已认证） | C 类门禁 |
 | `KANBAN_DISABLE_CLAUDE` | 8 个演示型 Playwright spec（fake-chat、kanban、lifecycle、pty、projects、memory、acceptance-screenshots、kanban-acceptance-screenshots） | `"1"` 时禁用真实 claude，回落 Fake 演示模式 | launch env（非 skip 门禁） |
 | `KANBAN_DISABLE_OPENCODE` | 同上 | `"1"` 时禁用真实 opencode，回落 Fake 演示模式 | launch env（非 skip 门禁） |
