@@ -12,6 +12,8 @@ class FakeStream implements ClaudeStreamClientLike {
   private static seq = 0;
   dead = false;
   exitInfo: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+  /** 模拟子进程 pid（listChildPids 用；null=未启动） */
+  pid: number | null = null;
   readonly options: ClaudeStreamOptions;
   readonly sentUsers: string[] = [];
   readonly sentControlResponses: Array<{ requestId: string; response: unknown }> = [];
@@ -239,6 +241,46 @@ describe("ClaudeAdapter：turn 与流式映射", () => {
     expect(ctx.chat(sessionId).at(-1)).toMatchObject({ type: "session_status", status: "idle" });
     await new Promise((r) => setTimeout(r, 10));
     expect(ctx.stream().sentUsers).toEqual(["x"]); // 排队消息被丢弃
+  });
+
+  it("认证失效协议级检测（#41）：subtype=success + is_error + api_error_status=401 → AUTH_EXPIRED（claude 2.1.317 真实 wire 形态）", async () => {
+    const ctx = makeAdapter();
+    hookRoots.push(ctx.hookDir);
+    const { sessionId } = await ctx.adapter.createSession({ cwd: CWD });
+    await ctx.adapter.sendTurn({ sessionId, text: "x" });
+    // 真实捕获：重试耗尽后 subtype 仍是 "success"，靠 is_error/api_error_status 区分（auth-samples.md）
+    ctx.stream().emit({
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      api_error_status: 401,
+      terminal_reason: "api_error",
+      result: "Failed to authenticate. API Error: 401 无效的令牌 (request id: 202611090807431834704041NFEVlSp)",
+      session_id: "native-1",
+    });
+    const err = ctx.chat(sessionId).find((e): e is Extract<ChatEvent, { type: "session_error" }> => e.type === "session_error");
+    expect(err?.code).toBe("AUTH_EXPIRED");
+    expect(err?.message).toContain("Failed to authenticate");
+    expect(ctx.chat(sessionId).some((e) => e.type === "turn_completed")).toBe(false); // 不宣称成功
+    expect(ctx.chat(sessionId).at(-1)).toMatchObject({ type: "session_status", status: "idle" });
+  });
+
+  it("session_error 枚举映射（#41）：result 非 success 认证文本 → AUTH_EXPIRED；非认证 → INTERNAL", async () => {
+    const a = makeAdapter();
+    hookRoots.push(a.hookDir);
+    const { sessionId: sidA } = await a.adapter.createSession({ cwd: CWD });
+    await a.adapter.sendTurn({ sessionId: sidA, text: "x" });
+    a.stream().emit({ type: "result", subtype: "error_during_execution", is_error: true, result: "Failed to authenticate. API Error: 401 无效的令牌", session_id: "native-1" });
+    const errA = a.chat(sidA).find((e): e is Extract<ChatEvent, { type: "session_error" }> => e.type === "session_error");
+    expect(errA?.code).toBe("AUTH_EXPIRED");
+
+    const b = makeAdapter();
+    hookRoots.push(b.hookDir);
+    const { sessionId: sidB } = await b.adapter.createSession({ cwd: CWD });
+    await b.adapter.sendTurn({ sessionId: sidB, text: "x" });
+    b.stream().emit({ type: "result", subtype: "error_max_turns", is_error: true, result: "超出轮次上限", session_id: "native-1" });
+    const errB = b.chat(sidB).find((e): e is Extract<ChatEvent, { type: "session_error" }> => e.type === "session_error");
+    expect(errB?.code).toBe("INTERNAL");
   });
 });
 
@@ -650,5 +692,42 @@ describe("ClaudeAdapter：readTranscript 双视角（#28）", () => {
   it("未知会话 → E_SESSION_NOT_FOUND", async () => {
     const { adapter } = makeTrAdapter();
     await expect(adapter.readTranscript("nope")).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
+  });
+});
+
+describe("ClaudeAdapter：listChildPids（#44 C5 演进）", () => {
+  it("单进程单会话模型：每会话各报一份 pid；无会话为空集", async () => {
+    const { streams, adapter } = makeAdapter();
+    expect(await adapter.listChildPids!()).toEqual([]);
+    await adapter.createSession({ cwd: CWD });
+    await adapter.createSession({ cwd: CWD });
+    streams[0].pid = 7101;
+    streams[1].pid = 7102;
+    const pids = await adapter.listChildPids!();
+    expect(pids.length).toBe(2);
+    expect(new Set(pids)).toEqual(new Set([7101, 7102]));
+  });
+
+  it("会话 dispose → 该会话 pid 离开集合，其余会话保留；全量 dispose → 清空", async () => {
+    const { streams, adapter } = makeAdapter();
+    const a = await adapter.createSession({ cwd: CWD });
+    await adapter.createSession({ cwd: CWD });
+    streams[0].pid = 7101;
+    streams[1].pid = 7102;
+    await adapter.dispose({ sessionId: a.sessionId });
+    expect(await adapter.listChildPids!()).toEqual([7102]);
+    await adapter.dispose(); // 全量：受控终止全部进程
+    expect(await adapter.listChildPids!()).toEqual([]);
+  });
+
+  it("进程死亡 → 该 pid 离开集合（不报陈旧 pid）；resume 换新进程后新 pid 在场", async () => {
+    const { streams, adapter } = makeAdapter();
+    const { sessionId } = await adapter.createSession({ cwd: CWD });
+    streams[0].pid = 7101;
+    streams[0].simulateExit(1);
+    expect(await adapter.listChildPids!()).toEqual([]);
+    await adapter.resume(sessionId); // spawn 新进程 --resume
+    streams[1].pid = 7301;
+    expect(await adapter.listChildPids!()).toEqual([7301]);
   });
 });

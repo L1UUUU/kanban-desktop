@@ -132,6 +132,12 @@ class FakeHost implements OpenCodeServerHostLike {
   refCount(cwd: string): number {
     return this.refs.get(cwd)?.size ?? 0;
   }
+  /** 镜像真实 host 的 C5 演进（#44）：运行中 server 的 pid 去重集合（per-cwd 一份） */
+  listChildPids(): number[] {
+    const pids = new Set<number>();
+    for (const server of this.servers.values()) if (server.pid) pids.add(server.pid);
+    return [...pids];
+  }
 }
 
 /** 构造被测 adapter（注入 FakeHost；轮询间隔缩到 15ms；extra 透传卡死探测阈值等） */
@@ -923,6 +929,96 @@ function makeContractAdapter() {
   return { adapter, driveIdle, chat };
 }
 
+describe("OpenCodeAdapter：session_error 枚举映射与认证失效检测（#41）", () => {
+  it("prompt_async HTTP 401 → AUTH_EXPIRED；HTTP 500 → INTERNAL", async () => {
+    const a = makeAdapter();
+    const { sessionId: sidA } = await a.adapter.createSession({ cwd: CWD });
+    a.server(CWD).apiOverride = (method, path) =>
+      method === "POST" && path.endsWith("/prompt_async") ? { status: 401, ok: false, json: { message: "invalid x-api-key" }, text: "invalid x-api-key" } : null;
+    await a.adapter.sendTurn({ sessionId: sidA, text: "x" }).catch(() => {});
+    const errA = a.chat(sidA).find((e): e is Extract<ChatEvent, { type: "session_error" }> => e.type === "session_error");
+    expect(errA?.code).toBe("AUTH_EXPIRED");
+
+    const b = makeAdapter();
+    const { sessionId: sidB } = await b.adapter.createSession({ cwd: CWD });
+    b.server(CWD).apiOverride = (method, path) =>
+      method === "POST" && path.endsWith("/prompt_async") ? { status: 500, ok: false, json: null, text: "boom" } : null;
+    await b.adapter.sendTurn({ sessionId: sidB, text: "x" }).catch(() => {});
+    const errB = b.chat(sidB).find((e): e is Extract<ChatEvent, { type: "session_error" }> => e.type === "session_error");
+    expect(errB?.code).toBe("INTERNAL");
+  });
+
+  it("prompt_async 传输不可达（server 请求失败/fetch failed）→ PROTOCOL_DISCONNECT", async () => {
+    const ctx = makeAdapter();
+    const { sessionId } = await ctx.adapter.createSession({ cwd: CWD });
+    ctx.server(CWD).apiOverride = (method, path) => {
+      if (method === "POST" && path.endsWith("/prompt_async")) {
+        throw new Error("opencode server 请求失败（POST /session/ses_1/prompt_async）：fetch failed");
+      }
+      return null;
+    };
+    await ctx.adapter.sendTurn({ sessionId, text: "x" }).catch(() => {});
+    const err = ctx.chat(sessionId).find((e): e is Extract<ChatEvent, { type: "session_error" }> => e.type === "session_error");
+    expect(err?.code).toBe("PROTOCOL_DISCONNECT");
+  });
+
+  it("command API HTTP 403 → AUTH_EXPIRED；传输异常 → PROTOCOL_DISCONNECT", async () => {
+    const a = makeAdapter();
+    const { sessionId: sidA } = await a.adapter.createSession({ cwd: CWD });
+    a.server(CWD).commands = [{ name: "deploy" }];
+    a.server(CWD).apiOverride = (method, path) =>
+      method === "POST" && path.endsWith("/command") ? { status: 403, ok: false, json: { message: "forbidden" }, text: "forbidden" } : null;
+    await a.adapter.sendTurn({ sessionId: sidA, text: "/deploy prod" });
+    const errA = await vi.waitFor(() => {
+      const e = a.chat(sidA).find((ev): ev is Extract<ChatEvent, { type: "session_error" }> => ev.type === "session_error");
+      if (!e) throw new Error("未发出 session_error");
+      return e;
+    });
+    expect(errA.code).toBe("AUTH_EXPIRED");
+
+    const b = makeAdapter();
+    const { sessionId: sidB } = await b.adapter.createSession({ cwd: CWD });
+    b.server(CWD).commands = [{ name: "deploy" }];
+    b.server(CWD).apiOverride = (method, path) => {
+      if (method === "POST" && path.endsWith("/command")) throw new Error("opencode server 请求失败（POST /session/ses_1/command）：fetch failed");
+      return null;
+    };
+    await b.adapter.sendTurn({ sessionId: sidB, text: "/deploy prod" });
+    const errB = await vi.waitFor(() => {
+      const e = b.chat(sidB).find((ev): ev is Extract<ChatEvent, { type: "session_error" }> => ev.type === "session_error");
+      if (!e) throw new Error("未发出 session_error");
+      return e;
+    });
+    expect(errB.code).toBe("PROTOCOL_DISCONNECT");
+  });
+
+  it("session.error 认证类文本 → AUTH_EXPIRED；网关类错误 → INTERNAL", async () => {
+    const a = makeAdapter();
+    const { sessionId: sidA, nativeSessionId: nativeA } = await a.adapter.createSession({ cwd: CWD });
+    await a.adapter.sendTurn({ sessionId: sidA, text: "跑" });
+    a.server(CWD).emit("session.error", { sessionID: nativeA, error: { name: "AiSdkError", message: "401 Unauthorized: API key invalid" } });
+    a.server(CWD).emit("session.idle", { sessionID: nativeA });
+    const errA = await vi.waitFor(() => {
+      const e = a.chat(sidA).find((ev): ev is Extract<ChatEvent, { type: "session_error" }> => ev.type === "session_error");
+      if (!e) throw new Error("未发出 session_error");
+      return e;
+    });
+    expect(errA.code).toBe("AUTH_EXPIRED");
+
+    const b = makeAdapter();
+    const { sessionId: sidB, nativeSessionId: nativeB } = await b.adapter.createSession({ cwd: CWD });
+    await b.adapter.sendTurn({ sessionId: sidB, text: "跑" });
+    b.server(CWD).emit("session.error", { sessionID: nativeB, error: { name: "AiSdkError", message: "gateway 500" } });
+    b.server(CWD).emit("session.idle", { sessionID: nativeB });
+    const errB = await vi.waitFor(() => {
+      const e = b.chat(sidB).find((ev): ev is Extract<ChatEvent, { type: "session_error" }> => ev.type === "session_error");
+      if (!e) throw new Error("未发出 session_error");
+      return e;
+    });
+    expect(errB.code).toBe("INTERNAL");
+  });
+});
+
 defineAdapterContractTests(
   async () => makeContractAdapter(),
   {
@@ -943,3 +1039,35 @@ defineAdapterContractTests(
 
 // 保持 createCollector 引用（契约收集器一致性由其自身保证）
 void createCollector;
+
+describe("OpenCodeAdapter：listChildPids（#44 C5 演进）", () => {
+  it("server-per-project 共享计数：同 cwd 两会话只报一份 pid；多 cwd 多份", async () => {
+    const ctx = makeAdapter();
+    expect(await ctx.adapter.listChildPids!()).toEqual([]); // 无会话无 server
+    await ctx.adapter.createSession({ cwd: CWD });
+    await ctx.adapter.createSession({ cwd: CWD }); // 同 cwd 复用同一 server
+    const one = await ctx.adapter.listChildPids!();
+    expect(one.length).toBe(1);
+    expect(one[0]).toBe(ctx.server(CWD).pid);
+    const OTHER_CWD = "D:\\other-project";
+    await ctx.adapter.createSession({ cwd: OTHER_CWD }); // 新 project 新 server
+    const two = await ctx.adapter.listChildPids!();
+    expect(two.length).toBe(2);
+    expect(new Set(two)).toEqual(new Set([ctx.server(CWD).pid, ctx.server(OTHER_CWD).pid]));
+  });
+
+  it("会话 dispose：引用未归零 server 保留 pid；最后一个释放 → pid 离开集合；全量 dispose 清空", async () => {
+    const a = makeAdapter();
+    const s1 = await a.adapter.createSession({ cwd: CWD });
+    await a.adapter.createSession({ cwd: CWD });
+    await a.adapter.dispose({ sessionId: s1.sessionId }); // 引用 2→1：server 保留
+    expect(await a.adapter.listChildPids!()).toEqual([a.server(CWD).pid]);
+    await a.adapter.dispose(); // 全量：引用归零停 server
+    expect(await a.adapter.listChildPids!()).toEqual([]);
+
+    const b = makeAdapter();
+    const only = await b.adapter.createSession({ cwd: CWD });
+    await b.adapter.dispose({ sessionId: only.sessionId }); // 唯一会话释放 → server 停
+    expect(await b.adapter.listChildPids!()).toEqual([]);
+  });
+});

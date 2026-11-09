@@ -510,9 +510,11 @@ describe("项目注册与会话恢复（#7 全链，除 Electron dialog）", () 
     expect(await screen.findByText("demo-repo")).toBeTruthy();
     expect(await screen.findByText("新会话 · Claude")).toBeTruthy();
     expect(screen.getByText("已断开")).toBeTruthy();
-    // 断开会话视图提示（原型 L424 文案）
+    // 断开会话视图提示（#42：顶部恢复引导条，含会话名与「缓存消息不替代原生历史」说明）
     fireEvent.click(screen.getByText("新会话 · Claude"));
-    expect(screen.getByText("该会话来自上次运行（CLI 已退出）。缓存不替代原生历史。")).toBeTruthy();
+    const banner1 = screen.getByTestId("resume-banner");
+    expect(banner1.textContent).toContain("新会话 · Claude");
+    expect(banner1.textContent).toContain("缓存消息不替代原生历史");
     // boot 演示会话不再创建（已有项目）
     expect(screen.queryByText("演示会话 · Fake")).toBeNull();
     void t2;
@@ -607,7 +609,7 @@ describe("PTY 终端链路（#12：mock PTY 驱动 TerminalPanel 与多路复用
   });
 });
 
-describe("断开会话「读取原生历史并恢复」（#9）", () => {
+describe("断开会话「读取原生历史并恢复」（#9 / #42 顶部恢复引导条三态）", () => {
   let tmpRoot = "";
 
   afterEach(() => {
@@ -639,18 +641,21 @@ describe("断开会话「读取原生历史并恢复」（#9）", () => {
     const t2 = mount(makeTransport(adapter, { dbPath })); // mount 的内部 clock 与本 adapter 无关；驱动用 clock1
     await t2.flush();
     expect(await screen.findByText("已断开")).toBeTruthy();
-    // 激活该会话后聊天区呈现断开提示与恢复入口（恢复登记不自动激活）
+    // 激活该会话后聊天区顶部呈现恢复引导条（#42：待恢复态，恢复登记不自动激活；底部弱入口已移除）
     fireEvent.click(screen.getByText("演示会话 · Fake"));
-    expect(screen.getByText("该会话来自上次运行（CLI 已退出）。缓存不替代原生历史。")).toBeTruthy();
+    const banner = screen.getByTestId("resume-banner");
+    expect(banner.textContent).toContain("演示会话 · Fake"); // 会话名进引导条
+    expect(banner.textContent).toContain("缓存消息不替代原生历史");
     expect(screen.queryByText("好的，我先跑一遍现有测试确认基线，然后开始拆分。")).toBeNull(); // 缓存不替代原生历史：恢复前消息流为空
 
-    // 恢复入口：readHistory 快照重建 → resume 回 idle
+    // 恢复入口（顶部条主按钮，文案保留「读取原生历史并恢复」）：readHistory 快照重建 → resume 回 idle → banner 消失
     fireEvent.click(screen.getByRole("button", { name: "读取原生历史并恢复" }));
     await t2.flush();
     expect(screen.getByText("好的，我先跑一遍现有测试确认基线，然后开始拆分。")).toBeTruthy();
     expect(screen.getByText("基线全绿。现在把 chat 与 session 两个命名空间拆成独立文件，并在 index 里保持原导出面不变。")).toBeTruthy();
     expect(screen.queryByText("已断开")).toBeNull(); // resume 后实时 session_status(idle) 驱动状态
     expect(screen.getByText("空闲")).toBeTruthy();
+    expect(screen.queryByTestId("resume-banner")).toBeNull(); // 恢复成功收敛：banner 消失
 
     // 续聊：快照后新事件无缝续上（恢复的会话可继续对话；默认脚本同文案 → 用 getAllByText 计数两次出现）
     send("第二 turn");
@@ -659,6 +664,44 @@ describe("断开会话「读取原生历史并恢复」（#9）", () => {
     });
     expect(screen.getAllByText("好的，我先跑一遍现有测试确认基线，然后开始拆分。")).toHaveLength(2); // 快照 1 次 + 实时 1 次
     expect(screen.getAllByText("基线全绿。现在把 chat 与 session 两个命名空间拆成独立文件，并在 index 里保持原导出面不变。")).toHaveLength(2);
+  });
+
+  it("恢复失败 → 引导条失败态（IPC 错误原因/错误码 + 重试 + 复制详情）→ 重试走同一链成功收敛（#42）", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "kb-ws-resume-fail-"));
+    const dbPath = join(tmpRoot, "state.db");
+
+    // 第一次运行跑一个完整 turn；重启时 adapter 保留但注入「首次 resume 失败」（FakeAdapter e2e 钩子）
+    const clock1 = new VirtualClock();
+    const adapter = new FakeAdapter({ clock: clock1, failResumeFirst: 1 });
+    const t1 = mount(makeTransport(adapter, { dbPath }));
+    await t1.flush();
+    send("拆类型");
+    act(() => {
+      clock1.runToIdle();
+    });
+    cleanup();
+    const t2 = mount(makeTransport(adapter, { dbPath }));
+    await t2.flush();
+    expect(await screen.findByText("已断开")).toBeTruthy();
+    fireEvent.click(screen.getByText("演示会话 · Fake"));
+
+    // 恢复：readHistory 成功（快照重建）→ resume 注入失败 → 引导条失败态，会话仍断开
+    fireEvent.click(screen.getByRole("button", { name: "读取原生历史并恢复" }));
+    await t2.flush();
+    const failed = screen.getByTestId("resume-banner");
+    expect(failed.textContent).toContain("恢复失败");
+    expect(failed.textContent).toContain("注入的恢复失败");
+    expect(failed.textContent).toContain("E_INTERNAL");
+    expect(screen.getByRole("button", { name: "重试" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "复制错误详情" })).toBeTruthy();
+    expect(screen.getByText("已断开")).toBeTruthy();
+    expect(screen.getByText("好的，我先跑一遍现有测试确认基线，然后开始拆分。")).toBeTruthy(); // readHistory 已重建消息流
+
+    // 重试（同一 resumeSession 链）→ 成功收敛：banner 消失、状态徽标回 idle
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    await t2.flush();
+    expect(screen.queryByTestId("resume-banner")).toBeNull();
+    expect(screen.getByText("空闲")).toBeTruthy();
   });
 });
 

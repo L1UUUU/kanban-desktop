@@ -159,12 +159,16 @@ test("重开恢复（§6.1）：项目/会话恢复 + 断开会话「读取原�
     await expect(second.win.locator("aside").getByText(PROJECT_NAME, { exact: true })).toBeVisible({ timeout: 15_000 });
     await expect(second.win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 15_000 });
     await expect(second.win.getByText("已断开").first()).toBeVisible();
-    // 点会话 → 断开提示与恢复入口（缓存不替代原生历史）
+    // 点会话 → 顶部恢复引导条（#42：会话名 + 缓存不替代原生历史 + 恢复入口；底部弱入口已移除）
     await second.win.getByText("新会话 · Claude").first().click();
-    await expect(second.win.getByText("该会话来自上次运行（CLI 已退出）。缓存不替代原生历史。")).toBeVisible();
-    // 恢复：readHistory → resume → 空闲
+    const resumeBanner = second.win.getByTestId("resume-banner");
+    await expect(resumeBanner).toBeVisible();
+    await expect(resumeBanner).toContainText("新会话 · Claude");
+    await expect(resumeBanner).toContainText("缓存消息不替代原生历史");
+    // 恢复：readHistory → resume → 空闲 → banner 收敛消失
     await second.win.getByRole("button", { name: "读取原生历史并恢复" }).click();
     await expect(second.win.getByText("空闲").first()).toBeVisible({ timeout: 15_000 });
+    await expect(resumeBanner).toHaveCount(0);
     // 可续聊：恢复会话发新消息正常完成
     await send(second.win, "中断后继续");
     await expect(second.win.getByText("基线全绿。现在把 chat 与 session 两个命名空间拆成独立文件，并在 index 里保持原导出面不变。")).toBeVisible({ timeout: 30_000 });

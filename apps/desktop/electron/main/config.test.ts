@@ -61,7 +61,7 @@ describe("saveConfig / loadConfig 往返", () => {
   it("save 后 load 得到等值配置（含父目录自动创建）", () => {
     const dir = newTempDir();
     const path = join(dir, "nested", "config.json");
-    saveConfig(path, { cliExe: { codex: "C:/codex.exe", claude: null, opencode: "C:/oc.exe" }, currentProjectId: "p-9", terminal: { shell: null }, shutdown: { graceMs: 3000 } });
+    saveConfig(path, { cliExe: { codex: "C:/codex.exe", claude: null, opencode: "C:/oc.exe" }, currentProjectId: "p-9", gitExe: null, terminal: { shell: null }, shutdown: { graceMs: 3000 } });
     const loaded = loadConfig(path);
     expect(loaded.cliExe).toEqual({ codex: "C:/codex.exe", claude: null, opencode: "C:/oc.exe" });
     expect(loaded.currentProjectId).toBe("p-9");
@@ -73,6 +73,21 @@ describe("detectCliExe（探测占位）", () => {
     expect(detectCliExe()).toEqual({ codex: null, claude: null, opencode: null });
   });
 });
+
+describe("gitExe（#43 git 可执行手动覆盖：where 探测之上的最高优先）", () => {
+  it("默认 null（未覆盖 → 走 where 探测）；合法字符串往返；非法类型回退 null", () => {
+    expect(defaultConfig().gitExe).toBeNull();
+    const dir = newTempDir();
+    const path = join(dir, "config.json");
+    writeFileSync(path, JSON.stringify({ gitExe: "C:/Program Files/Git/bin/git.exe" }), "utf8");
+    expect(loadConfig(path).gitExe).toBe("C:/Program Files/Git/bin/git.exe");
+    writeFileSync(path, JSON.stringify({ gitExe: 123 }), "utf8");
+    expect(loadConfig(path).gitExe).toBeNull();
+    writeFileSync(path, JSON.stringify({ gitExe: "" }), "utf8");
+    expect(loadConfig(path).gitExe).toBeNull();
+  });
+});
+
 
 describe("退出序列配置（#13/spec H 参数进 config 不硬编码）", () => {
   it("缺省 graceMs=3000；合法值透传、非法值回退缺省", () => {

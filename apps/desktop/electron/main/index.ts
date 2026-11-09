@@ -19,7 +19,8 @@ import { defaultConfig, loadConfig, saveConfig, type AppConfig } from "./config"
 import { createAdapterEventHandler } from "./adapter-events";
 import { CliHostClient } from "./cli-host-client";
 import { SQLITE_ENTRY, openDatabase } from "./db";
-import { handleIpc, handleMemoryIpc, TRACKER_CLI_BY_APP, type IpcDeps } from "./ipc";
+import { handleIpc, handleDiffIpc, handleMemoryIpc, TRACKER_CLI_BY_APP, type IpcDeps } from "./ipc";
+import { defaultGitDiffDeps, readWorkspaceDiff } from "./git-diff-service";
 import { openMemoryService } from "./memory-service";
 import { createPtyHost } from "./pty-host";
 import { ProjectStore } from "./project-store";
@@ -275,6 +276,17 @@ app.whenReady().then(async () => {
   // #31：memory:ipc 单通道（入站 zod 强制校验 + 业务拒绝 ok:false+reason，spec #27 H 节）
   ipcMain.handle("memory:ipc", (_event, raw: unknown) =>
     handleMemoryIpc({ memory: memoryService, isShuttingDown: () => shutdown.isShuttingDown() }, raw),
+  );
+  // #43：diff:ipc 单通道（spec #40 D 节；git exe 解析 = config gitExe 覆盖 → env → where，解析失败归 git-missing）
+  ipcMain.handle("diff:ipc", (_event, raw: unknown) =>
+    handleDiffIpc(
+      {
+        projects,
+        readWorkspaceDiff: (cwd) => readWorkspaceDiff(cwd, defaultGitDiffDeps(appConfig.gitExe)),
+        isShuttingDown: () => shutdown.isShuttingDown(),
+      },
+      raw,
+    ),
   );
 
   createWindow();

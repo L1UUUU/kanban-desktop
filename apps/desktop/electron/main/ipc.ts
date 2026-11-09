@@ -2,8 +2,10 @@
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import {
+  diffRequestSchema,
   ipcRequestSchema,
   memoryRequestSchema,
+  type DiffResult,
   type IpcRequest,
   type IpcResult,
   type MemoryResult,
@@ -12,6 +14,7 @@ import {
 import { AdapterError, detectSkillConflicts, resolveUserClaudeDir, type CliAdapter } from "@kanban/cli-host";
 import { TrackerEngine, formatRequirementId, type Cli, type NormalizedEvent, type TrackerChange } from "@kanban/tracker";
 import { detectDirIdentity } from "./git-identity";
+import type { WorkspaceDiff } from "./git-diff-service";
 import { type MemoryService } from "./memory-service";
 import type { PtyHost } from "./pty-host";
 import type { ProjectStore } from "./project-store";
@@ -486,6 +489,37 @@ export async function handleMemoryIpc(deps: MemoryIpcDeps, raw: unknown): Promis
     }
     case "memory:editSummary": {
       return deps.memory.editSummary(req.requirementId, req.content);
+    }
+  }
+}
+
+// ============ #43 diff:ipc 通道（spec #40 D 节，对齐 memory:ipc 独立单通道先例：入站 zod 强制校验 + 退出门闸 + 经 project store 解析 cwd） ============
+
+/** diff:ipc 路由依赖：project store（projectId → canonicalPath）+ git-diff-service 单函数（测试注入 fixture） */
+export interface DiffIpcDeps {
+  projects: ProjectStore;
+  /** 读取工作区未提交变更（生产 = git-diff-service readWorkspaceDiff 装配） */
+  readWorkspaceDiff(cwd: string): Promise<WorkspaceDiff>;
+  /** 退出序列门闸（true=正在退出，拒绝新请求；缺省恒 false 供测试） */
+  isShuttingDown?(): boolean;
+}
+
+/** 处理一条 diff:ipc 入站请求：zod 强制校验 → 退出门闸 → diff:get 经 project store 解析 cwd 后透传服务结果 */
+export async function handleDiffIpc(deps: DiffIpcDeps, raw: unknown): Promise<DiffResult> {
+  const parsed = diffRequestSchema.safeParse(raw);
+  if (!parsed.success) {
+    return { ok: false, error: { code: "E_SCHEMA", message: summarizeIssues(parsed.error.issues) } };
+  }
+  if (deps.isShuttingDown?.()) {
+    return { ok: false, error: { code: "E_INTERNAL", message: "应用正在退出，已停止接收新请求" } };
+  }
+  switch (parsed.data.channel) {
+    case "diff:get": {
+      const project = deps.projects.get(parsed.data.projectId);
+      if (!project) {
+        return { ok: false, error: { code: "E_PROJECT_NOT_FOUND", message: `项目不存在：${parsed.data.projectId}` } };
+      }
+      return deps.readWorkspaceDiff(project.canonicalPath);
     }
   }
 }

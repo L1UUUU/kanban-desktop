@@ -49,6 +49,10 @@ export interface FakeAdapterOptions {
   clock?: FakeClock;
   /** 脚本选择器（按发送文本挑演示分支；缺省 pickScript） */
   pickTurnScript?: (text: string) => ScriptStep[];
+  /** #42 e2e 支撑：resume 前置注入延迟毫秒（整机 Playwright 观察「恢复中」态；缺省 0） */
+  resumeDelayMs?: number;
+  /** #42 e2e 支撑：前 N 次 resume 抛 AdapterError（整机 Playwright 驱动失败/重试态；缺省 0 不注入） */
+  failResumeFirst?: number;
 }
 
 /** 全能力 Fake：UI 不隐藏任何控件（spec B capabilities 语义） */
@@ -65,6 +69,9 @@ export class FakeAdapter implements CliAdapter {
   private readonly clock: FakeClock;
   private readonly ownsClock: boolean;
   private readonly pickTurnScript: (text: string) => ScriptStep[];
+  private readonly resumeDelayMs: number;
+  private readonly failResumeFirst: number;
+  private resumeCalls = 0;
   private readonly sessions = new Map<string, SessionState>();
   private readonly handlers = new Set<(event: AdapterEvent) => void>();
 
@@ -72,6 +79,8 @@ export class FakeAdapter implements CliAdapter {
     this.pickTurnScript = options.pickTurnScript ?? pickScript;
     this.ownsClock = !options.clock;
     this.clock = options.clock ?? new SystemClock();
+    this.resumeDelayMs = options.resumeDelayMs ?? 0;
+    this.failResumeFirst = options.failResumeFirst ?? 0;
   }
 
   async createSession(init: CreateSessionInput): Promise<{ sessionId: string }> {
@@ -180,6 +189,12 @@ export class FakeAdapter implements CliAdapter {
 
   async resume(sessionId: string): Promise<void> {
     const s = this.requireSession(sessionId);
+    // #42 e2e 支撑：可注入延迟（观察「恢复中」态）与前 N 次失败（驱动失败/重试态）；生产构造不传即关闭
+    this.resumeCalls += 1;
+    if (this.resumeDelayMs > 0) await new Promise((r) => setTimeout(r, this.resumeDelayMs));
+    if (this.resumeCalls <= this.failResumeFirst) {
+      throw new AdapterError("E_INTERNAL", `注入的恢复失败（failResumeFirst=${this.failResumeFirst}，FakeAdapter 测试钩子）`);
+    }
     // Fake 复位实现：丢弃残余活动并经事件流通知空闲
     s.script = null;
     s.stream = null;
@@ -220,6 +235,11 @@ export class FakeAdapter implements CliAdapter {
     }
     this.sessions.clear();
     if (this.ownsClock && this.clock instanceof SystemClock) this.clock.dispose();
+  }
+
+  /** C5 演进（#44）：脚本化 mock 无真实子进程 —— 恒空集 */
+  async listChildPids(): Promise<number[]> {
+    return [];
   }
 
   subscribe(handler: (event: AdapterEvent) => void): () => void {
