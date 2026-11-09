@@ -51,7 +51,7 @@ describe("FakeAdapter 专属场景", () => {
     col.off();
   });
 
-  it("错误脚本：session_error 携带 code/message，不宣称 turn_completed，状态回到空闲", async () => {
+  it("错误脚本：session_error 携带枚举 code（E_FAKE_CRASH→CLI_EXIT，#41），不宣称 turn_completed，状态回到空闲", async () => {
     const clock = new VirtualClock();
     const adapter = new FakeAdapter({ clock });
     const col = createCollector(adapter);
@@ -61,11 +61,26 @@ describe("FakeAdapter 专属场景", () => {
     const chat = col.chat(sessionId);
     const err = chat.find((e): e is Extract<ChatEvent, { type: "session_error" }> => e.type === "session_error");
     expect(err).toBeDefined();
-    expect(err!.code).toBe("E_FAKE_CRASH");
+    expect(err!.code).toBe("CLI_EXIT"); // 进程意外退出语义 → CLI_EXIT（#41 枚举映射）
     expect(err!.message.length).toBeGreaterThan(0);
     expect(chat.some((e) => e.type === "turn_completed")).toBe(false);
     const last = chat.at(-1);
     expect(last?.type === "session_status" && last.status === "idle").toBe(true);
+    col.off();
+  });
+
+  it("错误脚本枚举直通：自定义脚本 step.code 为任意枚举成员时原样发出（S4 错误演示入口）", async () => {
+    const clock = new VirtualClock();
+    const adapter = new FakeAdapter({
+      clock,
+      pickTurnScript: () => [{ t: "error", code: "AUTH_EXPIRED", message: "登录态失效（演示）" }],
+    });
+    const col = createCollector(adapter);
+    const { sessionId } = await adapter.createSession({ cwd: "C:\\demo" });
+    await adapter.sendTurn({ sessionId, text: "任意" });
+    clock.runToIdle();
+    const err = col.chat(sessionId).find((e): e is Extract<ChatEvent, { type: "session_error" }> => e.type === "session_error");
+    expect(err?.code).toBe("AUTH_EXPIRED");
     col.off();
   });
 
@@ -238,6 +253,23 @@ describe("FakeAdapter 专属场景", () => {
     expect(sessionId.length).toBeGreaterThan(0);
     const first = col.chat(sessionId).at(0);
     expect(first?.type === "session_status" && first.status === "idle").toBe(true);
+    col.off();
+  });
+
+  it("resume 注入钩子（#42 e2e 支撑）：failResumeFirst=N 时前 N 次抛 AdapterError，此后正常复位 idle", async () => {
+    const clock = new VirtualClock();
+    const adapter = new FakeAdapter({ clock, failResumeFirst: 1 });
+    const col = createCollector(adapter);
+    const { sessionId } = await adapter.createSession({ cwd: "C:\\demo" });
+    // 第一次 resume：注入失败（IPC 错误 → renderer 恢复引导条失败态）
+    await expect(adapter.resume(sessionId)).rejects.toMatchObject({ code: "E_INTERNAL" });
+    // 第二次 resume（重试）：正常复位，事件流发 session_status(idle)
+    await expect(adapter.resume(sessionId)).resolves.toBeUndefined();
+    const statuses = col
+      .chat(sessionId)
+      .filter((e): e is Extract<ChatEvent, { type: "session_status" }> => e.type === "session_status")
+      .map((e) => e.status);
+    expect(statuses.at(-1)).toBe("idle");
     col.off();
   });
 });

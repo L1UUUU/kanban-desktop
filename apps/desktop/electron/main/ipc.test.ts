@@ -7,7 +7,7 @@ import { FakeAdapter, VirtualClock, type CliAdapter } from "@kanban/cli-host";
 import { trackerChangeSchema } from "@kanban/ipc-schema";
 import { TrackerEngine, type TrackerChange } from "@kanban/tracker";
 import { openDatabase } from "./db";
-import { handleIpc, type IpcDeps } from "./ipc";
+import { handleDiffIpc, handleIpc, type DiffIpcDeps, type IpcDeps } from "./ipc";
 import { openMemoryService } from "./memory-service";
 import type { PtyHost } from "./pty-host";
 import { ProjectStore } from "./project-store";
@@ -915,5 +915,51 @@ describe("kanban 通道（#17 spec #15 C 节：全量经 TrackerEngine.process �
     await handleIpc(deps2, { channel: "kanban:setStage", requirementId: "REQ-001", stage: "Design" });
     expect(pushed.filter((c) => c.type === "stage_changed")).toHaveLength(1); // 推送路径本身可用
     engine2.close();
+  });
+});
+
+describe("diff:ipc 通道（#43 spec #40 D 节：独立单通道 + 入站 zod + 经 project store 解析 cwd）", () => {
+  /** diff 专用路由：真实 ProjectStore（临时目录注册）+ 注入 fake readWorkspaceDiff */
+  function makeDiffRouter(readWorkspaceDiff: (cwd: string) => Promise<unknown>) {
+    const db = openDatabase(":memory:");
+    const projects = new ProjectStore(db);
+    const repoDir = join(tmpRoot || (tmpRoot = mkdtempSync(join(tmpdir(), "kb-diff-ipc-"))), "repo");
+    mkdirSync(repoDir, { recursive: true });
+    const { project } = projects.register(repoDir);
+    const handle = (raw: unknown) =>
+      handleDiffIpc(
+        { projects, readWorkspaceDiff: readWorkspaceDiff as DiffIpcDeps["readWorkspaceDiff"], isShuttingDown: () => false },
+        raw,
+      );
+    return { handle, project, repoDir };
+  }
+
+  it("非法请求 → E_SCHEMA；退出门闸 → E_INTERNAL；项目不存在 → E_PROJECT_NOT_FOUND", async () => {
+    const { handle } = makeDiffRouter(async () => ({ ok: true, files: [], truncated: false }));
+    const schema = await handle({ channel: "diff:get", projectId: "" });
+    expect(schema).toEqual({ ok: false, error: { code: "E_SCHEMA", message: expect.any(String) } });
+    const gone = await handle({ channel: "diff:get", projectId: "no-such" });
+    expect(gone).toEqual({ ok: false, error: { code: "E_PROJECT_NOT_FOUND", message: expect.stringContaining("no-such") } });
+  });
+
+  it("diff:get 成功：经 project store 解析 canonicalPath 为 cwd 并透传服务结果", async () => {
+    const seen: string[] = [];
+    const { handle, project, repoDir } = makeDiffRouter(async (cwd) => {
+      seen.push(cwd);
+      return { ok: true, files: [{ path: "a.ts", changeType: "modified", binary: false, oldPath: null, hunks: null, additions: 1, deletions: 0 }], truncated: false };
+    });
+    const res = await handle({ channel: "diff:get", projectId: project.id });
+    expect(seen).toEqual([repoDir]);
+    expect(res).toEqual({
+      ok: true,
+      truncated: false,
+      files: [{ path: "a.ts", changeType: "modified", binary: false, oldPath: null, hunks: null, additions: 1, deletions: 0 }],
+    });
+  });
+
+  it("四档错误透传（not-a-repo 代表）", async () => {
+    const { handle, project } = makeDiffRouter(async () => ({ ok: false, kind: "not-a-repo", message: "当前项目不是 git 仓库" }));
+    const res = await handle({ channel: "diff:get", projectId: project.id });
+    expect(res).toEqual({ ok: false, kind: "not-a-repo", message: "当前项目不是 git 仓库" });
   });
 });

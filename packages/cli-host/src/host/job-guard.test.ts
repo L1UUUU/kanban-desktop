@@ -13,5 +13,8 @@ describe("JOB_GUARD_PS（Job guard 脚本常量）", () => {
     expect(JOB_GUARD_PS).toContain("0x2000");
     expect(JOB_GUARD_PS).toContain("AssignProcessToJobObject");
     expect(JOB_GUARD_PS).toContain("WaitForSingleObject");
+    // #45 实证回归锚点：嵌套 struct 赋值必须走「副本改完整体拷回」，直接 $info.B.LimitFlags 赋值在 PS 5.1 静默无效（KILL 标志从未布防）
+    expect(JOB_GUARD_PS).toContain("$info.B = $__b");
+    expect(JOB_GUARD_PS).not.toContain("$info.B.LimitFlags =");
   });
 });

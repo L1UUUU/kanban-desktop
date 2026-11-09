@@ -20,6 +20,12 @@
   --color-pty: #d4a72c; /* PTY 色点 */
   --color-ok: #3fb27f; /* --ok running/成功 */
   --color-warn: #e5b567; /* --warn waiting/审批 */
+  /* Diff 行级配色（原型 d1：新增行绿底绿字 / 删除行红底红字 / hunk 头深蓝底） */
+  --color-diff-add: #1c2b22; /* 新增行底色 */
+  --color-diff-add-fg: #7ee2a8; /* 新增行前景 */
+  --color-diff-del: #2b1d1d; /* 删除行底色 */
+  --color-diff-del-fg: #f09090; /* 删除行前景 */
+  --color-diff-hunk: #1a2030; /* hunk 头底色 */
 }
 
 /* 流式光标：▍ 闪烁（原型 .vA-streaming::after） */

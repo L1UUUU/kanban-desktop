@@ -199,15 +199,19 @@ test("徽标与断开恢复截图：主仓库绿/worktree 蓝 + 重开断开会�
     await shot(second.win, "06-session-badges-main.png");
     await second.app.close();
 
-    // 第三段：重开（同一 userData）→ 断开会话显示「读取原生历史并恢复」→ 恢复后可续聊
+    // 第三段：重开（同一 userData）→ 断开会话顶部恢复引导条（#42）→ 恢复后可续聊
     const third = await launchApp(userData);
     await expect(third.win.getByText("已断开").first()).toBeVisible({ timeout: 15_000 });
     await third.win.getByText("新会话 · Claude").first().click();
-    await expect(third.win.getByText("该会话来自上次运行（CLI 已退出）。缓存不替代原生历史。")).toBeVisible();
-    // 一致项 5（断开会话恢复入口）截图
+    const resumeBanner = third.win.getByTestId("resume-banner");
+    await expect(resumeBanner).toBeVisible();
+    await expect(resumeBanner).toContainText("新会话 · Claude");
+    await expect(resumeBanner).toContainText("缓存消息不替代原生历史");
+    // 一致项 5（断开会话恢复入口，#42 顶部条形态）截图
     await shot(third.win, "07-disconnected-recovery.png");
     await third.win.getByRole("button", { name: "读取原生历史并恢复" }).click();
     await expect(third.win.getByText("空闲").first()).toBeVisible({ timeout: 15_000 });
+    await expect(resumeBanner).toHaveCount(0); // 恢复成功 banner 收敛
     await send(third.win, "中断后继续");
     await expect(third.win.getByText("基线全绿。现在把 chat 与 session 两个命名空间拆成独立文件，并在 index 里保持原导出面不变。")).toBeVisible({ timeout: 30_000 });
     await third.app.close();

@@ -1,9 +1,11 @@
-// 用途：contextBridge 薄层 —— 向 renderer 暴露最小 IPC 面（app:getInfo + kanban:ipc/memory:ipc/residue:ipc 单通道 invoke + chat:event/terminal:event/tracker:event/memory:event/app:event/app:shutdown 订阅）；全部通道形状由 @kanban/ipc-schema 契约化，preload 不做校验（两端校验，spec E）
+// 用途：contextBridge 薄层 —— 向 renderer 暴露最小 IPC 面（app:getInfo + kanban:ipc/memory:ipc/residue:ipc/diff:ipc 单通道 invoke + chat:event/terminal:event/tracker:event/memory:event/app:event/app:shutdown 订阅）；全部通道形状由 @kanban/ipc-schema 契约化，preload 不做校验（两端校验，spec E）
 import { contextBridge, ipcRenderer } from "electron";
 import type {
   AdapterEvent,
   AppEventWire,
   AppInfo,
+  DiffRequest,
+  DiffResult,
   IpcRequest,
   IpcResult,
   MemoryEventWire,
@@ -25,6 +27,8 @@ const api = {
   invokeMemory: (req: MemoryRequest) => ipcRenderer.invoke("memory:ipc", req) as Promise<MemoryResult>,
   /** #49：发送一条 residue:ipc 请求（residue:detect 检测清单 / residue:kill 确认式清理，schema 见 residueRequestSchema） */
   invokeResidue: (req: ResidueRequest) => ipcRenderer.invoke("residue:ipc", req) as Promise<ResidueResult>,
+  /** #43：发送一条 diff:ipc 请求（工作区未提交变更一次读，schema 见 diffRequestSchema） */
+  invokeDiff: (req: DiffRequest) => ipcRenderer.invoke("diff:ipc", req) as Promise<DiffResult>,
   /** 订阅 Adapter 事件流（ChatEvent ∪ SkillObservation），返回注销函数 */
   onChatEvent: (handler: (event: AdapterEvent) => void): (() => void) => {
     const listener = (_e: unknown, event: AdapterEvent): void => handler(event);

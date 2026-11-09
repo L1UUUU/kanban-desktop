@@ -24,6 +24,8 @@ export interface AppConfig {
   cliExe: CliExeConfig;
   /** 当前项目 id（项目注册/切换时持久化，重启恢复；null=尚无项目） */
   currentProjectId: string | null;
+  /** #43：git 可执行手动覆盖路径（最高优先；null=未覆盖走 where 探测；解析失败 diff 面归 git-missing） */
+  gitExe: string | null;
   terminal: TerminalConfig;
   shutdown: ShutdownConfig;
 }
@@ -33,6 +35,7 @@ export function defaultConfig(): AppConfig {
   return {
     cliExe: { codex: null, claude: null, opencode: null },
     currentProjectId: null,
+    gitExe: null,
     terminal: { shell: null },
     shutdown: { graceMs: 3000 },
   };
@@ -60,6 +63,8 @@ export function loadConfig(path: string): AppConfig {
   }
   const current = (raw as { currentProjectId?: unknown }).currentProjectId;
   if (typeof current === "string" && current.length > 0) fallback.currentProjectId = current;
+  const gitExe = (raw as { gitExe?: unknown }).gitExe;
+  if (typeof gitExe === "string" && gitExe.length > 0) fallback.gitExe = gitExe;
   const termShell = (raw as { terminal?: { shell?: unknown } }).terminal?.shell;
   if (typeof termShell === "string" && termShell.length > 0) fallback.terminal.shell = termShell;
   const graceMs = (raw as { shutdown?: { graceMs?: unknown } }).shutdown?.graceMs;

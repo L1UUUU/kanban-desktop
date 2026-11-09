@@ -7,6 +7,7 @@ import { resolveCodexExe } from "./codex/exe";
 import { CodexRpcClient } from "./codex/rpc";
 import { parseRolloutTranscript } from "./codex/rollout";
 import { createDefaultModelResolver, type ModelResolver } from "./codex/model-probe";
+import { isAuthFailureText } from "./session-error";
 
 /** 可注入的 rpc 客户端面（生产 CodexRpcClient；测试 Fake 手动驱动协议消息） */
 export interface CodexRpcClientLike {
@@ -398,10 +399,11 @@ export class CodexAdapter implements CliAdapter {
       const s = this.byThread.get(threadId);
       if (!s || s.dead) return;
       if (s.currentTurnId && turn.id !== s.currentTurnId) return; // 陈旧通知防护
-      // failed 且 error 通知未覆盖 → 此处兜底报错
+      // failed 且 error 通知未覆盖 → 此处兜底报错（#41 枚举映射：认证类文本 → AUTH_EXPIRED，其余 INTERNAL）
       if (turn.status === "failed" && !s.turnErrorSent) {
         s.turnErrorSent = true;
-        this.emit(s, { type: "session_error", code: "E_CODEX_TURN", message: turn.error?.message ?? "turn 失败" });
+        const msg = turn.error?.message ?? "turn 失败";
+        this.emit(s, { type: "session_error", code: isAuthFailureText(msg) ? "AUTH_EXPIRED" : "INTERNAL", message: msg });
       }
       this.finishTurn(s, turn.status);
     });
@@ -412,7 +414,9 @@ export class CodexAdapter implements CliAdapter {
       if (!s || s.dead || willRetry) return;
       if (s.turnErrorSent) return;
       s.turnErrorSent = true;
-      this.emit(s, { type: "session_error", code: "E_CODEX_TURN", message: error?.message ?? "Codex 服务错误" });
+      // #41 枚举映射：error 通知为 turn 级服务错误，认证类文本归 AUTH_EXPIRED，其余 INTERNAL
+      const msg = error?.message ?? "Codex 服务错误";
+      this.emit(s, { type: "session_error", code: isAuthFailureText(msg) ? "AUTH_EXPIRED" : "INTERNAL", message: msg });
     });
 
     client.on("item/agentMessage/delta", (p) => {
@@ -531,12 +535,13 @@ export class CodexAdapter implements CliAdapter {
     try {
       await this.client!.request("turn/start", params);
     } catch (e) {
-      // 提交失败：turn 回滚到空闲并明确报错（不进入事件流重放）
+      // 提交失败：turn 回滚到空闲并明确报错（不进入事件流重放）；#41 rpc 401/登录态失效 → AUTH_EXPIRED
       s.turnActive = false;
       s.currentTurnId = null;
-      this.emit(s, { type: "session_error", code: "E_CODEX_TURN", message: e instanceof Error ? e.message : String(e) });
+      const msg = e instanceof Error ? e.message : String(e);
+      this.emit(s, { type: "session_error", code: isAuthFailureText(msg) ? "AUTH_EXPIRED" : "INTERNAL", message: msg });
       this.emit(s, { type: "session_status", status: "idle" });
-      throw new AdapterError("E_INTERNAL", `turn 提交失败：${e instanceof Error ? e.message : String(e)}`);
+      throw new AdapterError("E_INTERNAL", `turn 提交失败：${msg}`);
     }
   }
 

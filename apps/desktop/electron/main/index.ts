@@ -1,4 +1,4 @@
-// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc/memory:ipc/residue:ipc 路由）、CliHost 托管（utilityProcess 优先，进程内回退）与事件转发/状态落库、TrackerEngine（SkillObservation 落库 + 重启恢复）、PTY 终端宿主（node-pty，main 进程直接使用，t0-03 实证）、有序退出与残留进程检测一次性通知（#49 app:event）；初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
+// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc/memory:ipc/diff:ipc/residue:ipc 路由）、CliHost 托管（utilityProcess 优先，进程内回退）与事件转发/状态落库、TrackerEngine（SkillObservation 落库 + 重启恢复）、PTY 终端宿主（node-pty，main 进程直接使用，t0-03 实证）、有序退出与残留进程检测一次性通知（#49 app:event）；初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -30,7 +30,8 @@ import { defaultConfig, loadConfig, saveConfig, type AppConfig } from "./config"
 import { createAdapterEventHandler } from "./adapter-events";
 import { CliHostClient } from "./cli-host-client";
 import { SQLITE_ENTRY, openDatabase } from "./db";
-import { handleIpc, handleMemoryIpc, handleResidueIpc, TRACKER_CLI_BY_APP, type IpcDeps } from "./ipc";
+import { handleIpc, handleDiffIpc, handleMemoryIpc, handleResidueIpc, TRACKER_CLI_BY_APP, type IpcDeps } from "./ipc";
+import { defaultGitDiffDeps, readWorkspaceDiff } from "./git-diff-service";
 import { openMemoryService } from "./memory-service";
 import { createPtyHost } from "./pty-host";
 import { ProjectStore } from "./project-store";
@@ -287,6 +288,17 @@ app.whenReady().then(async () => {
   // #31：memory:ipc 单通道（入站 zod 强制校验 + 业务拒绝 ok:false+reason，spec #27 H 节）
   ipcMain.handle("memory:ipc", (_event, raw: unknown) =>
     handleMemoryIpc({ memory: memoryService, isShuttingDown: () => shutdown.isShuttingDown() }, raw),
+  );
+  // #43：diff:ipc 单通道（spec #40 D 节；git exe 解析 = config gitExe 覆盖 → env → where，解析失败归 git-missing）
+  ipcMain.handle("diff:ipc", (_event, raw: unknown) =>
+    handleDiffIpc(
+      {
+        projects,
+        readWorkspaceDiff: (cwd) => readWorkspaceDiff(cwd, defaultGitDiffDeps(appConfig.gitExe)),
+        isShuttingDown: () => shutdown.isShuttingDown(),
+      },
+      raw,
+    ),
   );
 
   // #49 残留治理装配（spec #40 A/D/F 节）：检测 = exe 匹配三 CLI 解析链候选并集 + 排除 #44 活跃集合 +
