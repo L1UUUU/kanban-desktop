@@ -36,6 +36,9 @@ export interface PendingApproval {
   suggestions: ApprovalSuggestion[];
 }
 
+/** #42 恢复引导条三态：idle=待恢复（无恢复进行）；resuming=恢复中（不可中断，D1）；failed=上次尝试失败（附 IPC 错误） */
+export type ResumeState = { phase: "idle" } | { phase: "resuming" } | { phase: "failed"; code: string; message: string };
+
 export interface SessionView {
   sessionId: string;
   cli: string;
@@ -59,6 +62,8 @@ export interface SessionView {
   skillConflicts: string[];
   /** #21：冲突提示条已关闭（关闭仅隐藏，不影响会话；再次创建会话重新出现） */
   skillConflictDismissed: boolean;
+  /** #42：恢复引导条状态（banner 三态数据源；成功收敛由 resume 后实时 session_status 驱动复位） */
+  resumeState: ResumeState;
 }
 
 export interface SessionMeta {
@@ -127,6 +132,7 @@ export class ChatStore {
       lastError: null,
       skillConflicts: meta.skillConflicts ?? [],
       skillConflictDismissed: false,
+      resumeState: { phase: "idle" },
     });
     this.activeId = meta.sessionId;
     this.changed();
@@ -152,6 +158,7 @@ export class ChatStore {
       // #21：检测仅在创建时一次（spec E 节），重启恢复的历史会话不再检测
       skillConflicts: [],
       skillConflictDismissed: false,
+      resumeState: { phase: "idle" },
     });
     this.changed();
   }
@@ -209,6 +216,22 @@ export class ChatStore {
     const s = this.sessions.get(id);
     if (!s) return;
     s.lastError = { code, message };
+    this.changed();
+  }
+
+  /** #42：恢复引导条进入「恢复中」（resume 发出后不可中断，D1） */
+  markResuming(id: string): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    s.resumeState = { phase: "resuming" };
+    this.changed();
+  }
+
+  /** #42：恢复引导条进入「失败」（readHistory/resume 的 IPC 错误，供重试与复制详情） */
+  markResumeFailed(id: string, code: string, message: string): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    s.resumeState = { phase: "failed", code, message };
     this.changed();
   }
 
@@ -307,6 +330,8 @@ export class ChatStore {
           s.pendingApproval = null;
         }
         s.status = event.status;
+        // #42：状态实时回流即生命周期翻页——恢复引导条收敛复位（resume 成功 → idle；再断开 → 重新待恢复，不残留旧失败态）
+        if (s.resumeState.phase !== "idle") s.resumeState = { phase: "idle" };
         break;
       case "session_error":
         s.lastError = { code: event.code, message: event.message };
@@ -357,6 +382,7 @@ export class ChatStore {
         lastError: null,
         skillConflicts: [],
         skillConflictDismissed: false,
+        resumeState: { phase: "idle" },
       };
       this.sessions.set(sessionId, s);
     }

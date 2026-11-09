@@ -136,16 +136,19 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
       },
       resumeSession: async (sessionId) => {
         if (!transport) return;
+        // #42：恢复引导条三态驱动——发出即「恢复中」（不可中断，D1），任一步 IPC 失败进「失败」态（重试/复制详情），
+        // 成功收敛由 resume 后实时 session_status 驱动（store 复位 resumeState + 状态徽标回 idle）
+        store.markResuming(sessionId);
         // 第一步：读原生历史（事件溯源快照）重建消息流；第二步：resume 重连，状态经实时事件流回 idle
         const r = await transport.invoke({ channel: "session:readHistory", sessionId });
         if (!r.ok) {
-          store.setError(sessionId, r.error.code, r.error.message);
+          store.markResumeFailed(sessionId, r.error.code, r.error.message);
           return;
         }
         store.applySnapshot(sessionId, r.events ?? []);
         const r2 = await transport.invoke({ channel: "session:resume", sessionId });
         if (!r2.ok) {
-          store.setError(sessionId, r2.error.code, r2.error.message);
+          store.markResumeFailed(sessionId, r2.error.code, r2.error.message);
         }
       },
     };

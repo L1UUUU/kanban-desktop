@@ -239,6 +239,60 @@ describe("chat-store 断开会话恢复（#9：readHistory 快照 + 实时增量
   });
 });
 
+describe("chat-store 恢复引导三态（#42：banner 状态机 idle/resuming/failed）", () => {
+  /** 断开会话登记（恢复引导条的数据源） */
+  function makeDisconnected(): ChatStore {
+    const store = new ChatStore();
+    store.registerRestored({
+      id: "s-1",
+      kind: "structured",
+      cli: "fake",
+      nativeSessionId: null,
+      projectId: null,
+      title: "历史会话",
+      cwd: null,
+      permMode: "auto",
+      status: "idle",
+      lastActiveAt: null,
+      dirIdentity: "none",
+      worktreeName: null,
+    });
+    return store;
+  }
+
+  it("登记即待恢复（idle）；markResuming → resuming；markResumeFailed → failed（附 IPC 错误码与消息）", () => {
+    const store = makeDisconnected();
+    expect(store.getSession("s-1")!.resumeState).toEqual({ phase: "idle" });
+    store.markResuming("s-1");
+    expect(store.getSession("s-1")!.resumeState).toEqual({ phase: "resuming" });
+    store.markResumeFailed("s-1", "E_SESSION_NOT_FOUND", "原生历史文件不可读");
+    expect(store.getSession("s-1")!.resumeState).toEqual({
+      phase: "failed",
+      code: "E_SESSION_NOT_FOUND",
+      message: "原生历史文件不可读",
+    });
+  });
+
+  it("恢复成功收敛：session_status 非 disconnected 实时事件到达 → resumeState 复位 idle（banner 消失依据）", () => {
+    const store = makeDisconnected();
+    store.markResuming("s-1");
+    store.markResumeFailed("s-1", "E_INTERNAL", "x");
+    store.markResuming("s-1"); // 失败后重试
+    store.applyEvent(ev(1, { type: "session_status", status: "idle" })); // resume 成功的实时回流
+    expect(store.getSession("s-1")!.resumeState).toEqual({ phase: "idle" });
+    expect(store.getSession("s-1")!.status).toBe("idle");
+    // 生命周期继续（再断开）：引导条重新从待恢复开始，不残留旧失败态
+    store.applyEvent(ev(2, { type: "session_status", status: "disconnected" }));
+    expect(store.getSession("s-1")!.resumeState).toEqual({ phase: "idle" });
+  });
+
+  it("未登记会话 markResuming/markResumeFailed 安全无操作", () => {
+    const store = new ChatStore();
+    expect(() => store.markResuming("s-none")).not.toThrow();
+    expect(() => store.markResumeFailed("s-none", "E_INTERNAL", "x")).not.toThrow();
+  });
+});
+
 describe("chat-store CLI 异常退出终态化（#13/spec H：不崩溃、不自动继续、不宣称运行中）", () => {
   it("session_exit：流式助手停光标、运行中工具置 interrupted、审批清理、明确报错；session_status disconnected 同样终态化", () => {
     const store = makeStore();

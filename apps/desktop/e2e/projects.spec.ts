@@ -93,9 +93,12 @@ test("注册项目 → 新建会话（主仓库徽标）→ 重启完整恢复�
     await expect(second.win.locator("aside").getByText(PROJECT_NAME, { exact: true })).toBeVisible({ timeout: 15_000 });
     await expect(second.win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
     await expect(second.win.getByText("已断开").first()).toBeVisible();
-    // 断开会话视图提示 + 当前项目过滤（boot 演示会话不再创建）
+    // 断开会话视图提示（#42 顶部恢复引导条）+ 当前项目过滤（boot 演示会话不再创建）
     await second.win.getByText("新会话 · Claude").first().click();
-    await expect(second.win.getByText("该会话来自上次运行（CLI 已退出）。缓存不替代原生历史。")).toBeVisible();
+    const resumeBanner = second.win.getByTestId("resume-banner");
+    await expect(resumeBanner).toBeVisible();
+    await expect(resumeBanner).toContainText("新会话 · Claude");
+    await expect(resumeBanner).toContainText("缓存消息不替代原生历史");
     await expect(second.win.getByText("演示会话 · Fake")).toHaveCount(0);
     await second.app.close();
   } finally {

@@ -26,6 +26,7 @@ function makeSession(partial: Partial<SessionView> = {}): SessionView {
     lastError: null,
     skillConflicts: [],
     skillConflictDismissed: false,
+    resumeState: { phase: "idle" },
     ...partial,
   };
 }
