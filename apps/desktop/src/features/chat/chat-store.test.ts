@@ -132,8 +132,8 @@ describe("chat-store 事件归并", () => {
 
   it("session_error 记录错误；下一 turn_started 清除", () => {
     const store = makeStore();
-    store.applyEvent(ev(1, { type: "session_error", code: "E_FAKE_CRASH", message: "进程退出" }));
-    expect(store.getSession("s-1")!.lastError).toEqual({ code: "E_FAKE_CRASH", message: "进程退出" });
+    store.applyEvent(ev(1, { type: "session_error", code: "CLI_EXIT", message: "进程退出" }));
+    expect(store.getSession("s-1")!.lastError).toEqual({ code: "CLI_EXIT", message: "进程退出" });
     store.applyEvent(ev(2, { type: "turn_started", turnId: "t-9" }));
     expect(store.getSession("s-1")!.lastError).toBeNull();
   });
@@ -223,6 +223,19 @@ describe("chat-store 断开会话恢复（#9：readHistory 快照 + 实时增量
     // resume 成功：实时 session_status(idle) 到达后转正常态
     store.applyEvent(ev(12, { type: "session_status", status: "idle" }));
     expect(store.getSession("s-1")!.status).toBe("idle");
+  });
+
+  it("applySnapshot 跳过 session_error/session_exit（#41 钉住）：历史错误不随快照重建复活", () => {
+    const store = makeRestored();
+    store.applySnapshot("s-1", [
+      ev(1, { type: "turn_started", turnId: "t-1" }),
+      ev(2, { type: "session_error", code: "AUTH_EXPIRED", message: "登录态失效" }),
+      ev(3, { type: "session_exit", exitCode: 1, reason: "崩溃" }),
+      ev(4, { type: "turn_completed" }),
+    ]);
+    // 快照中的错误/退出事件不冒充当前错误（实时错误经事件流到达；resume 后状态由实时 session_status 驱动）
+    expect(store.getSession("s-1")!.lastError).toBeNull();
+    expect(store.getSession("s-1")!.items).toHaveLength(0); // turn_started/completed 不产条目
   });
 });
 

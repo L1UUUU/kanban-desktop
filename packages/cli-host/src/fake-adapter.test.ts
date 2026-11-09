@@ -51,7 +51,7 @@ describe("FakeAdapter 专属场景", () => {
     col.off();
   });
 
-  it("错误脚本：session_error 携带 code/message，不宣称 turn_completed，状态回到空闲", async () => {
+  it("错误脚本：session_error 携带枚举 code（E_FAKE_CRASH→CLI_EXIT，#41），不宣称 turn_completed，状态回到空闲", async () => {
     const clock = new VirtualClock();
     const adapter = new FakeAdapter({ clock });
     const col = createCollector(adapter);
@@ -61,11 +61,26 @@ describe("FakeAdapter 专属场景", () => {
     const chat = col.chat(sessionId);
     const err = chat.find((e): e is Extract<ChatEvent, { type: "session_error" }> => e.type === "session_error");
     expect(err).toBeDefined();
-    expect(err!.code).toBe("E_FAKE_CRASH");
+    expect(err!.code).toBe("CLI_EXIT"); // 进程意外退出语义 → CLI_EXIT（#41 枚举映射）
     expect(err!.message.length).toBeGreaterThan(0);
     expect(chat.some((e) => e.type === "turn_completed")).toBe(false);
     const last = chat.at(-1);
     expect(last?.type === "session_status" && last.status === "idle").toBe(true);
+    col.off();
+  });
+
+  it("错误脚本枚举直通：自定义脚本 step.code 为任意枚举成员时原样发出（S4 错误演示入口）", async () => {
+    const clock = new VirtualClock();
+    const adapter = new FakeAdapter({
+      clock,
+      pickTurnScript: () => [{ t: "error", code: "AUTH_EXPIRED", message: "登录态失效（演示）" }],
+    });
+    const col = createCollector(adapter);
+    const { sessionId } = await adapter.createSession({ cwd: "C:\\demo" });
+    await adapter.sendTurn({ sessionId, text: "任意" });
+    clock.runToIdle();
+    const err = col.chat(sessionId).find((e): e is Extract<ChatEvent, { type: "session_error" }> => e.type === "session_error");
+    expect(err?.code).toBe("AUTH_EXPIRED");
     col.off();
   });
 
