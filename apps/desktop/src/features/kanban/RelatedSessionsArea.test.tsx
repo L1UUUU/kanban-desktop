@@ -423,6 +423,7 @@ describe("link 拒绝原因直达呈现（三类，#20）", () => {
     lastError: null,
     skillConflicts: [],
     skillConflictDismissed: false,
+    resumeState: { phase: "idle" },
   });
 
   const card = {

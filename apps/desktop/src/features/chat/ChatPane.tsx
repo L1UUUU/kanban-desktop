@@ -1,10 +1,11 @@
-// 用途：中央聊天区 —— 冲突提示条（主仓库 ≥2 活跃并行会话，spec I-4）+ 消息流 + 审批卡 + 取消/错误提示 + composer（flex 列：banner + 1fr 消息 + auto composer；无会话时降级占位）
+// 用途：中央聊天区 —— 会话级 banner 栈（冲突条 spec I-4 / 同名 skill 条 #21 / 恢复引导条 #42，自上而下）+ 消息流 + 审批卡 + 取消/错误提示 + composer（flex 列：banner + 1fr 消息 + auto composer；无会话时降级占位）
 import { useEffect, useRef } from "react";
 import type { ApprovalDecision } from "@kanban/ipc-schema";
 import type { SessionView } from "./chat-store";
 import { ApprovalCard } from "./components/ApprovalCard";
 import { Composer, type ComposerActions } from "./components/Composer";
 import { MessageList } from "./components/MessageList";
+import { ResumeBanner } from "./components/ResumeBanner";
 
 export interface ChatPaneActions extends ComposerActions {
   onResolveApproval(decision: ApprovalDecision): void;
@@ -84,6 +85,15 @@ export function ChatPane({
           </button>
         </div>
       ) : null}
+      {session.status === "disconnected" ? (
+        // #42 恢复引导条（会话级 banner 最下层，spec G 叠加顺序）：断开会话顶部常驻三态入口，
+        // 移除消息流底部弱入口（顶部条为唯一常驻入口；错误卡动作是同一动作的快捷方式，D4）
+        <ResumeBanner
+          title={session.title}
+          resumeState={session.resumeState}
+          onResume={() => actions.onResume(session.sessionId)}
+        />
+      ) : null}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
         <MessageList items={session.items} cli={session.cli} />
         {session.pendingApproval ? (
@@ -92,19 +102,6 @@ export function ChatPane({
         {session.status === "interrupted" ? (
           <div className="mx-auto mb-3.5 max-w-[860px] text-center text-xs text-muted-foreground">
             — 本轮已取消，会话保留，可继续发消息 —
-          </div>
-        ) : null}
-        {session.status === "disconnected" ? (
-          // 断开会话（重启恢复的历史会话）：缓存不替代原生历史（原型 L424 文案 + 恢复入口，一致项 5）
-          <div className="mx-auto mb-3.5 max-w-[860px] text-center text-xs text-muted-foreground">
-            <span>该会话来自上次运行（CLI 已退出）。缓存不替代原生历史。</span>
-            <button
-              type="button"
-              onClick={() => actions.onResume(session.sessionId)}
-              className="ml-2 rounded-md border border-primary/60 px-3 py-1 text-xs text-primary hover:bg-primary/10"
-            >
-              读取原生历史并恢复
-            </button>
           </div>
         ) : null}
         {session.lastError ? (
