@@ -1,10 +1,39 @@
-// 用途：恢复引导条三态流转整机 E2E（#42 验收 5 / spec I 一致项 3）—— 断开 → 点击恢复 → 恢复中（不可中断）→ 成功收敛；失败 → 重试 → 收敛；Fake 驱动（KANBAN_DISABLE_* 三件套 + Fake resume 注入钩子）
+// 用途：恢复引导条三态流转整机 E2E（#42 验收 5 / spec I 一致项 3）—— 断开 → 点击恢复 → 恢复中（不可中断）→ 成功收敛；失败 → 重试 → 收敛；
+// Fake 驱动（KANBAN_DISABLE_* 三件套 + Fake resume 注入钩子）
+// + #56（spec #52 验收 2 C 类）：resume 失败日志留痕断言（含会话标识；注入设施实际归属本 spec 与 stage4-acceptance-screenshots，M10）
 import { test, expect, _electron, type ElectronApplication, type Page } from "@playwright/test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const PROJECT_NAME = "kb-resume";
+
+/** 日志条目读取形状（#56：logger.ts 落盘 JSONL 格式） */
+interface LogEntry {
+  level: "error" | "warn" | "info" | "debug";
+  source: "main" | "worker" | "renderer";
+  scope: string;
+  message: string;
+  ctx?: Record<string, string | number | boolean | null>;
+}
+
+/** 读指定启动组（<pid> 前缀，含 .1/.2 分片按序合并）全部日志条目（#56 N17/M9：同 userData 多次 launch 只读本组，禁跨启动拼接） */
+function readRunEntries(userData: string, pid: number): LogEntry[] {
+  const dir = join(userData, "logs");
+  if (!existsSync(dir)) return [];
+  const prefix = readdirSync(dir)
+    .map((n) => /^(\d{8}-\d{6}-\d+)\.jsonl/.exec(n)?.[1])
+    .find((p) => p?.endsWith(`-${pid}`));
+  if (!prefix) return [];
+  const names = readdirSync(dir).filter((n) => n === `${prefix}.jsonl` || n === `${prefix}.jsonl.1` || n === `${prefix}.jsonl.2`);
+  const entries: LogEntry[] = [];
+  for (const name of names) {
+    for (const line of readFileSync(join(dir, name), "utf8").split("\n")) {
+      if (line.trim()) entries.push(JSON.parse(line) as LogEntry);
+    }
+  }
+  return entries;
+}
 
 /** 建隔离 fixture：独立 userData + 伪 git 主仓库目录 */
 function makeFixture(): { userData: string; repoDir: string; repoRoot: string } {
@@ -134,7 +163,20 @@ test("恢复条失败流转：恢复失败（IPC 错误原因/错误码 + 重试
     await banner.getByRole("button", { name: "重试" }).click();
     await expect(banner).toHaveCount(0, { timeout: 15_000 });
     await expect(second.win.getByText("空闲").first()).toBeVisible({ timeout: 15_000 });
+
+    // #56（spec #52 验收 2 C 类）：resume 失败在日志留 error 含会话标识（「文件含 error 条目」口径，非末条）——
+    // Main 侧 command-failed 白名单摘要（kind=resume + sessionId）；renderer 侧「会话恢复失败（resume）」ctx 带 sessionId/code/message
+    const pid = await second.app.evaluate(() => process.pid);
     await second.app.close();
+    const entries = readRunEntries(userData, pid);
+    const cmdFailed = entries.find((e) => e.level === "error" && e.scope === "cli-host" && e.message.includes("E_INTERNAL") && e.message.includes("kind=resume"));
+    expect(cmdFailed).toBeTruthy();
+    expect(cmdFailed?.message).toMatch(/sessionId=\S+/);
+    const rendererFailed = entries.find((e) => e.source === "renderer" && e.message === "会话恢复失败（resume）");
+    expect(rendererFailed).toBeTruthy();
+    expect(String(rendererFailed?.ctx?.sessionId ?? "")).not.toBe("");
+    expect(rendererFailed?.ctx?.code).toBe("E_INTERNAL");
+    expect(String(rendererFailed?.ctx?.message ?? "")).toContain("注入的恢复失败");
   } finally {
     await rmBestEffort(userData);
     await rmBestEffort(repoRoot);

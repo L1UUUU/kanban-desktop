@@ -1,11 +1,39 @@
 // 用途：错误提示五类卡整机 E2E（#46 验收 5 / spec I 一致项 2）—— Fake 驱动（KANBAN_DISABLE_* 三件套）：
 // 四类 + 未知兜底卡呈现与动作流转（重试重发 / 打开 PTY 终端 / 恢复会话 / 知道了）+ spawn 创建失败侧栏卡（KANBAN_FAKE_CREATE_FAIL_FIRST 注入，重试创建成功收敛）
+// + #56（spec #52 验收 2 C 类）：spawn 失败日志留痕断言（E_SPAWN_NOT_FOUND + kind/cli 关联标识）
 import { test, expect, _electron, type ElectronApplication, type Page } from "@playwright/test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const PROJECT_NAME = "kb-errcard";
+
+/** 日志条目读取形状（#56：logger.ts 落盘 JSONL 格式） */
+interface LogEntry {
+  level: "error" | "warn" | "info" | "debug";
+  source: "main" | "worker" | "renderer";
+  scope: string;
+  message: string;
+  ctx?: Record<string, string | number | boolean | null>;
+}
+
+/** 读指定启动组（<pid> 前缀，含 .1/.2 分片按序合并）全部日志条目（#56 N17/M9：同 userData 多次 launch 只读本组，禁跨启动拼接） */
+function readRunEntries(userData: string, pid: number): LogEntry[] {
+  const dir = join(userData, "logs");
+  if (!existsSync(dir)) return [];
+  const prefix = readdirSync(dir)
+    .map((n) => /^(\d{8}-\d{6}-\d+)\.jsonl/.exec(n)?.[1])
+    .find((p) => p?.endsWith(`-${pid}`));
+  if (!prefix) return [];
+  const names = readdirSync(dir).filter((n) => n === `${prefix}.jsonl` || n === `${prefix}.jsonl.1` || n === `${prefix}.jsonl.2`);
+  const entries: LogEntry[] = [];
+  for (const name of names) {
+    for (const line of readFileSync(join(dir, name), "utf8").split("\n")) {
+      if (line.trim()) entries.push(JSON.parse(line) as LogEntry);
+    }
+  }
+  return entries;
+}
 
 /** 建隔离 fixture：独立 userData + 伪 git 主仓库目录 */
 function makeFixture(): { userData: string; repoDir: string; repoRoot: string } {
@@ -154,7 +182,21 @@ test("spawn 创建失败侧栏卡：E_SPAWN_NOT_FOUND → 卡 3 形态呈现 →
     await card.getByRole("button", { name: "重试创建" }).click();
     await expect(card).toHaveCount(0, { timeout: 15_000 });
     await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
+
+    // #56（spec #52 验收 2 C 类）：spawn 失败在日志留 error 带关联标识（「文件含 error 条目」口径，非末条）——
+    // Main 侧 command-failed 白名单摘要（kind=createSession + cli=claude；createSession 失败时尚无 sessionId，属实）；
+    // renderer 侧「会话创建失败」条目带 code/cli（经真 log:write 桥，source 由 Main 强制）
+    const pid = await second.app.evaluate(() => process.pid);
     await second.app.close();
+    const entries = readRunEntries(userData, pid);
+    const cmdFailed = entries.find((e) => e.level === "error" && e.scope === "cli-host" && e.message.includes("E_SPAWN_NOT_FOUND"));
+    expect(cmdFailed).toBeTruthy();
+    expect(cmdFailed?.message).toContain("kind=createSession");
+    expect(cmdFailed?.message).toContain("cli=claude");
+    const rendererFailed = entries.find((e) => e.source === "renderer" && e.message === "会话创建失败");
+    expect(rendererFailed).toBeTruthy();
+    expect(rendererFailed?.ctx?.code).toBe("E_SPAWN_NOT_FOUND");
+    expect(rendererFailed?.ctx?.cli).toBe("claude");
   } finally {
     await rmBestEffort(userData);
     await rmBestEffort(repoRoot);
