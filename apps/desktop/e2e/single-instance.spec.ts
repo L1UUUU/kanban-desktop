@@ -1,4 +1,4 @@
-// 用途：#51 单实例锁整机验收 —— 二次启动立即退出（退出码 0 + 无 GPU cache 争抢 stderr）、首实例窗口前置聚焦（最小化还原）、锁随首实例退出释放（正常关与强杀后均可再启动）
+// 用途：#51 单实例锁整机验收 —— 二次启动立即退出（退出码 0 + 无 GPU cache 争抢 stderr）、首实例窗口最小化还原（second-instance 事件驱动）、锁随首实例退出释放（正常关与强杀后均可再启动）
 import { test, expect, _electron } from "@playwright/test";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
@@ -52,14 +52,14 @@ function killTree(pid: number): void {
   }
 }
 
-test("主实例运行时二次启动：立即退出且首实例窗口前置聚焦", async () => {
+test("主实例运行时二次启动：立即退出且首实例窗口最小化还原", async () => {
   // 首实例 A：正常起窗（真实持锁方）
   const appA = await _electron.launch({ args: [appDir], env: { ...process.env, KANBAN_USER_DATA: userData } });
   await appA.firstWindow();
 
   let childB: ChildProcess | null = null;
   try {
-    // 前置状态：最小化首实例窗口（聚焦断言须走 restore 路径，避免"本来就聚焦"假绿）
+    // 前置状态：最小化首实例窗口（还原断言须走 restore 路径，避免"本来就未最小化"假绿）
     await appA.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.minimize();
     });
