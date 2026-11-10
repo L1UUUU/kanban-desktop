@@ -411,4 +411,21 @@ describe("kind→level/scope 集中映射表（验收 9，spec E 节）", () => 
   it("未命中表的 kind 缺省 debug + cli-host scope（新增 kind 无需改表，消解 hand-synced list）", () => {
     expect(resolveKindLog("brand-new-kind")).toEqual({ level: "debug", scope: "cli-host" });
   });
+
+  it("#54 新增 kind：command-failed/worker-exit→error、worker-exit-pending→warn（scope 归 cli-host）", () => {
+    expect(resolveKindLog("command-failed")).toEqual({ level: "error", scope: "cli-host" });
+    expect(resolveKindLog("worker-exit")).toEqual({ level: "error", scope: "cli-host" });
+    expect(resolveKindLog("worker-exit-pending")).toEqual({ level: "warn", scope: "cli-host" });
+  });
+});
+
+describe("条目 source 按入口强制（#54 spec #52 C 节）", () => {
+  it("log 第 5 参指定 source=worker（worker {log} 分派 / 进程内 CLI stderr 口径）；缺省仍为 main", () => {
+    const { fs, logger } = bench();
+    logger.log("warn", "cli-host", "来自 worker 的 stderr", undefined, "worker");
+    logger.log("info", "main", "来自 Main 的直写");
+    const entries = readEntries(fs, MAIN);
+    expect(entries[0]).toMatchObject({ source: "worker", message: "来自 worker 的 stderr" });
+    expect(entries[1]).toMatchObject({ source: "main", message: "来自 Main 的直写" });
+  });
 });

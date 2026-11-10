@@ -43,12 +43,14 @@ export interface ShutdownOptions {
  */
 export class CliHost {
   private readonly router: AdapterRouter;
-  private readonly runOnceRunner = new RunOnceRunner();
+  private readonly runOnceRunner: RunOnceRunner;
   private readonly handlers = new Set<(event: AdapterEvent) => void>();
   private shuttingDown = false;
 
-  constructor(factory: AdapterFactory) {
+  /** log 可选：worker 形态注入 {log} 上报闭包（#54），进程内/测试缺省丢弃；不影响既有单参构造 */
+  constructor(factory: AdapterFactory, log?: (kind: string, detail: string) => void) {
     this.router = new AdapterRouter(factory);
+    this.runOnceRunner = new RunOnceRunner(log);
     this.router.subscribe((event) => {
       for (const h of this.handlers) h(event);
     });

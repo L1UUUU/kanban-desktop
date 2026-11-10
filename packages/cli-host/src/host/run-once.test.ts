@@ -145,3 +145,54 @@ describe("RunOnceRunner（C5 演进 run-once）", () => {
     });
   });
 });
+
+describe("run-once stderr 留痕（#54 spec #52 B 节 M8 口径 A）", () => {
+  let cwd: string;
+
+  beforeAll(() => {
+    cwd = mkdtempSync(path.join(tmpdir(), "kb-runonce-log-"));
+    process.env.KANBAN_CLAUDE_BIN = process.execPath;
+  });
+
+  afterAll(() => {
+    rmSync(cwd, { recursive: true, force: true });
+    delete process.env.KANBAN_CLAUDE_BIN;
+  });
+
+  it("成功（exit 0）也记：kind=stderr、detail 带 cli/runId 与 stderr 内容；stdout/stdin 正文不进日志（Q8）", async () => {
+    const logs: Array<[string, string]> = [];
+    const runner = new RunOnceRunner((kind, detail) => logs.push([kind, detail]));
+    const r = await runner.run({
+      runId: "r-log-ok",
+      cli: "claude",
+      args: nodeRun("ok", "L1"),
+      cwd,
+      stdin: "SECRET-STDIN-MARKER",
+    });
+    expect(r.status).toBe("completed");
+    const stderrLogs = logs.filter(([k]) => k === "stderr");
+    expect(stderrLogs.length).toBeGreaterThanOrEqual(1);
+    expect(stderrLogs[0][1]).toContain("fake-err:L1");
+    expect(stderrLogs[0][1]).toContain("claude");
+    expect(stderrLogs[0][1]).toContain("r-log-ok");
+    // Q8：日志只留标识与 stderr 本身，stdout 与 stdin 正文不得出现
+    for (const [, detail] of logs) {
+      expect(detail).not.toContain("fake-out");
+      expect(detail).not.toContain("SECRET-STDIN-MARKER");
+    }
+  });
+
+  it("失败（非零退出）同样记 stderr 留痕", async () => {
+    const logs: Array<[string, string]> = [];
+    const runner = new RunOnceRunner((kind, detail) => logs.push([kind, detail]));
+    const r = await runner.run({ runId: "r-log-fail", cli: "claude", args: nodeRun("fail", "L2"), cwd });
+    expect(r.status).toBe("failed");
+    expect(logs.some(([k, d]) => k === "stderr" && d.includes("boom:L2"))).toBe(true);
+  });
+
+  it("未注入 log 回调时静默丢弃（既有构造零回归）", async () => {
+    const runner = new RunOnceRunner();
+    const r = await runner.run({ runId: "r-log-nolog", cli: "claude", args: nodeRun("ok", "L3"), cwd });
+    expect(r.status).toBe("completed");
+  });
+});

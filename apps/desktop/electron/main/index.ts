@@ -1,4 +1,4 @@
-// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc/memory:ipc/diff:ipc/residue:ipc 路由）、CliHost 托管（utilityProcess 优先，进程内回退）与事件转发/状态落库、TrackerEngine（SkillObservation 落库 + 重启恢复）、PTY 终端宿主（node-pty，main 进程直接使用，t0-03 实证）、有序退出与残留进程检测一次性通知（#49 app:event）、#51 单实例锁（二次启动转发聚焦 + 持锁失败立即退出）、#53 日志地基（Logger 二实例守卫后创建 + 启动横幅 + 崩溃兜底 + 9 处 console 迁移 + log:getPath/log:openDir）；初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
+// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc/memory:ipc/diff:ipc/residue:ipc 路由）、CliHost 托管（utilityProcess 优先，进程内回退）与事件转发/状态落库、TrackerEngine（SkillObservation 落库 + 重启恢复）、PTY 终端宿主（node-pty，main 进程直接使用，t0-03 实证）、有序退出与残留进程检测一次性通知（#49 app:event）、#51 单实例锁（二次启动转发聚焦 + 持锁失败立即退出）、#53 日志地基（Logger 二实例守卫后创建 + 启动横幅 + 崩溃兜底 + 9 处 console 迁移 + log:getPath/log:openDir）、#54 worker {log} 消息与 CLI stderr 汇聚（onWorkerLog→worker source；进程内回退同目标）；初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -49,21 +49,29 @@ const logKind = (kind: string, detail: string): void => {
   logger.log(mapped.level, mapped.scope, detail);
 };
 
+/** #54（spec #52 C 节）：CLI 子进程 stderr 归 worker 口径 —— worker {log} 消息与进程内回退形态的 adapter 诊断同走 worker source（source 由 Main 入口强制，不信上游自报） */
+const logKindAsWorker = (kind: string, detail: string): void => {
+  const mapped = resolveKindLog(kind);
+  logger.log(mapped.level, mapped.scope, detail, undefined, "worker");
+};
+
 /** CliHost 托管形态（ADR-0001：utilityProcess 崩溃隔离 + Job Object）；worker 产物缺失/fork 失败回退 Main 进程内（C5 降级路径，seam 不变） */
 function createHostedAdapter(appConfig: AppConfig): CliAdapter {
   const dataDir = app.getPath("userData");
   const workerPath = join(__dirname, "cli-host-worker.js");
   if (existsSync(workerPath)) {
     try {
-      // log：Job guard 失败等治理事件不再静默（#29 复盘：guard 脚本缺陷曾长期无感知）；#53 起走集中 kind 映射进统一日志
-      return new CliHostClient({ workerPath, dataDir, codexExe: appConfig.cliExe.codex, claudeExe: appConfig.cliExe.claude, opencodeExe: appConfig.cliExe.opencode, fullDisposeWaitMs: appConfig.shutdown.graceMs, log: logKind });
+      // log：Job guard 失败等治理事件不再静默（#29 复盘：guard 脚本缺陷曾长期无感知）；#53 起走集中 kind 映射进统一日志；
+      // onWorkerLog：#54 —— worker 经 {log} 消息上报的 CLI stderr/协议异常分派进同一映射表（source 强制 worker）
+      return new CliHostClient({ workerPath, dataDir, codexExe: appConfig.cliExe.codex, claudeExe: appConfig.cliExe.claude, opencodeExe: appConfig.cliExe.opencode, fullDisposeWaitMs: appConfig.shutdown.graceMs, log: logKind, onWorkerLog: logKindAsWorker });
     } catch (e) {
       // 告警文本为 packaged-smoke.cjs 的 stderr 断言锚点，字面不可变；warn 级经 Logger 双写仍走 console.error/stderr
       logger.log("warn", "cli-host", `utilityProcess 托管不可用，回退进程内：${e instanceof Error ? e.message : String(e)}`);
     }
   }
   return new AdapterRouter(
-    createDesktopAdapterFactory({ codexExe: appConfig.cliExe.codex, claudeExe: appConfig.cliExe.claude, opencodeExe: appConfig.cliExe.opencode, cacheDir: dataDir, log: logKind }),
+    // #54：进程内回退形态同一工厂注入点同目标替换 —— CLI stderr 亦可达 Logger（归 worker source，spec #52 C 节）
+    createDesktopAdapterFactory({ codexExe: appConfig.cliExe.codex, claudeExe: appConfig.cliExe.claude, opencodeExe: appConfig.cliExe.opencode, cacheDir: dataDir, log: logKindAsWorker }),
   );
 }
 

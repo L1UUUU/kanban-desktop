@@ -4,7 +4,7 @@ import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AdapterEvent, ChatEvent, TranscriptEvent } from "@kanban/ipc-schema";
-import { utilityProcess, type UtilityProcess } from "electron";
+import { utilityProcess } from "electron";
 import { AdapterError, JOB_GUARD_PS, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type RunOnceResult, type SendTurnInput } from "@kanban/cli-host";
 
 export interface CliHostClientOptions {
@@ -22,6 +22,39 @@ export interface CliHostClientOptions {
   fullDisposeWaitMs?: number;
   /** 诊断日志 */
   log?: (kind: string, detail: string) => void;
+  /** worker {log} 消息分派目标（#54 spec #52 B 节）：worker 经 parentPort 上报的 (kind, detail) 2 参回调，Main 装配侧强制 source=worker；缺省丢弃（Logger 未就绪不抛错） */
+  onWorkerLog?: (kind: string, detail: string) => void;
+  /** fork 替身注入（#54 A 类测试 seam）：缺省走真实 utilityProcess.fork（env 传参行为不变）；注入替身时不绑 Job Object（无 OS 进程可绑） */
+  fork?: (options: CliHostClientOptions) => UtilityProcessLike;
+}
+
+/** utilityProcess 结构面（#54：真实 UtilityProcess 结构兼容；测试注入替身实现同一接口） */
+export interface UtilityProcessLike {
+  postMessage(message: unknown): boolean | void;
+  on(event: "message", listener: (msg: unknown) => void): unknown;
+  /** 真实 utilityProcess 只回 code（electron dts）；signal 位供替身/信号终止场景观察 */
+  on(event: "exit", listener: (code: number, signal?: string | null) => void): unknown;
+  kill(): boolean | void;
+  readonly pid?: number;
+}
+
+/** 缺省 fork：env 传参（worker 侧 createDesktopAdapterFactory 读取）→ 真实 utilityProcess.fork（utilityProcess 须在 app ready 后使用，由装配时机保证） */
+function forkUtilityProcess(options: CliHostClientOptions): UtilityProcessLike {
+  process.env.KANBAN_DATA_DIR = options.dataDir;
+  if (options.codexExe) process.env.KANBAN_CODEX_BIN = options.codexExe;
+  if (options.claudeExe) process.env.KANBAN_CLAUDE_BIN = options.claudeExe;
+  if (options.opencodeExe) process.env.KANBAN_OPENCODE_BIN = options.opencodeExe;
+  return utilityProcess.fork(options.workerPath, [], { serviceName: "cli-host" });
+}
+
+/** pending 命令白名单摘要（#54 spec #52 G 节 M5）：只取 kind/sessionId/cli/runId（createSession 的 cli 取自 init.cli）；禁止整包 JSON.stringify（run-once 的 stdin 含 chunk 正文，Q8） */
+function summarizeCommand(cmd: Record<string, unknown>): string {
+  const parts = [`kind=${String(cmd.kind)}`];
+  if (cmd.sessionId !== undefined) parts.push(`sessionId=${String(cmd.sessionId)}`);
+  const cli = cmd.cli ?? (cmd.init as { cli?: unknown } | undefined)?.cli;
+  if (cli !== undefined) parts.push(`cli=${String(cli)}`);
+  if (cmd.runId !== undefined) parts.push(`runId=${String(cmd.runId)}`);
+  return parts.join(" ");
 }
 
 /**
@@ -36,29 +69,26 @@ export class CliHostClient implements CliAdapter {
     readHistory: true,
     skillSignal: false,
   };
-  private proc: UtilityProcess;
+  private proc: UtilityProcessLike;
   private nextId = 1;
   private readonly fullDisposeWaitMs: number;
-  private readonly pending = new Map<number | string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+  /** #54（spec #52 F 节 M2）：dispose() 起始置位——此后的 worker 退出（含超时 kill 强杀）均为预期停机，不按崩溃误报 */
+  private expectingShutdown = false;
+  private readonly pending = new Map<number | string, { resolve: (v: unknown) => void; reject: (e: Error) => void; summary: string }>();
   private readonly handlers = new Set<(event: AdapterEvent) => void>();
   private readonly log: (kind: string, detail: string) => void;
+  private readonly workerLog: (kind: string, detail: string) => void;
 
   constructor(options: CliHostClientOptions) {
     this.log = options.log ?? (() => {});
+    this.workerLog = options.onWorkerLog ?? (() => {});
     this.fullDisposeWaitMs = options.fullDisposeWaitMs ?? 3000;
-    // env 传参：worker 侧 createDesktopAdapterFactory 读取（utilityProcess 继承父 env）
-    process.env.KANBAN_DATA_DIR = options.dataDir;
-    if (options.codexExe) process.env.KANBAN_CODEX_BIN = options.codexExe;
-    if (options.claudeExe) process.env.KANBAN_CLAUDE_BIN = options.claudeExe;
-    if (options.opencodeExe) process.env.KANBAN_OPENCODE_BIN = options.opencodeExe;
-    this.proc = utilityProcess.fork(options.workerPath, [], { serviceName: "cli-host" });
+    // fork 注入 seam（#54）：缺省 env 传参 + 真实 utilityProcess（与重构前行为一致）
+    this.proc = options.fork ? options.fork(options) : forkUtilityProcess(options);
     this.proc.on("message", (msg: unknown) => this.onMessage(msg));
-    this.proc.on("exit", (code) => {
-      const err = new Error(`CliHost worker 已退出：code=${code}`);
-      for (const [, p] of this.pending) p.reject(err);
-      this.pending.clear();
-    });
-    if (process.platform === "win32") this.attachJobGuard();
+    this.proc.on("exit", (code, signal) => this.onWorkerExit(code, signal));
+    // Job Object 只绑真实 utilityProcess（替身无 OS 进程可绑，亦免测试拉起 powershell）
+    if (process.platform === "win32" && !options.fork) this.attachJobGuard();
   }
 
   async createSession(init: CreateSessionInput): Promise<{ sessionId: string; nativeSessionId?: string | null }> {
@@ -121,6 +151,7 @@ export class CliHostClient implements CliAdapter {
       return;
     }
     // 全量有序停机：worker 内 shutdown（停止新命令→dispose 全部 adapter→有限等待）→ 等 worker 实际退出，超时 kill 兜底（Job Object 覆盖强杀场景）
+    this.expectingShutdown = true; // #54（spec #52 F 节 M2）：预期停机置位在先——超时后的无条件强杀非零退出不误报
     try {
       this.proc.postMessage({ shutdown: { reason: "dispose" } });
       await new Promise<void>((resolve) => {
@@ -159,13 +190,19 @@ export class CliHostClient implements CliAdapter {
   private command(cmd: Parameters<typeof Object>[0] extends never ? never : Record<string, unknown>): Promise<unknown> {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      // #54：pending 存白名单摘要（全部命令形状经此单入口，提取不丢字段）
+      this.pending.set(id, { resolve, reject, summary: summarizeCommand(cmd) });
       this.proc.postMessage({ id, cmd });
     });
   }
 
   private onMessage(msg: unknown): void {
-    const m = msg as { id?: number | string; ok?: boolean; result?: unknown; error?: { code: string; message: string }; event?: AdapterEvent };
+    const m = msg as { id?: number | string; ok?: boolean; result?: unknown; error?: { code: string; message: string }; event?: AdapterEvent; log?: { kind: string; detail: string } };
+    // #54（spec #52 B 节）：{log} 判别须先于事件分支与无 id 分支，否则被静默丢弃；未注入分派目标（Logger 未就绪）即丢弃不抛错
+    if (m.log !== undefined) {
+      this.workerLog(m.log.kind, m.log.detail);
+      return;
+    }
     if (m.event !== undefined) {
       for (const h of this.handlers) h(m.event);
       return;
@@ -175,7 +212,26 @@ export class CliHostClient implements CliAdapter {
     if (!p) return;
     this.pending.delete(m.id);
     if (m.ok) p.resolve(m.result);
-    else p.reject(new AdapterError((m.error?.code as never) ?? "E_INTERNAL", m.error?.message ?? "CliHost 命令失败"));
+    else {
+      // #54（spec #52 G 节）：命令失败记一条带白名单标识的 error（level 由 Main 集中映射表判）
+      this.log("command-failed", `CliHost 命令失败（${m.error?.code ?? "E_INTERNAL"}：${m.error?.message ?? "CliHost 命令失败"}）：${p.summary}`);
+      p.reject(new AdapterError((m.error?.code as never) ?? "E_INTERNAL", m.error?.message ?? "CliHost 命令失败"));
+    }
+  }
+
+  /** #54（spec #52 F 节）：worker 退出处置 —— pending 批量 reject 并汇总一条（不刷屏）；仅「非预期停机且退出码非零或由信号终止」记 worker-exit error（level 由 Main 映射表判） */
+  private onWorkerExit(code: number, signal?: string | null): void {
+    const summaries = [...this.pending.values()].map((p) => p.summary);
+    const err = new Error(`CliHost worker 已退出：code=${code}`);
+    for (const [, p] of this.pending) p.reject(err);
+    this.pending.clear();
+    const crashed = !this.expectingShutdown && (code !== 0 || (signal != null && signal !== ""));
+    if (crashed) {
+      const tail = summaries.length > 0 ? `；中止 ${summaries.length} 条进行中命令：${summaries.join("；")}` : "";
+      this.log("worker-exit", `CliHost worker 意外退出（code=${code}${signal ? `，signal=${signal}` : ""}）${tail}`);
+    } else if (summaries.length > 0) {
+      this.log("worker-exit-pending", `CliHost worker 退出，中止 ${summaries.length} 条进行中命令：${summaries.join("；")}`);
+    }
   }
 
   /** Windows Job Object：把 worker pid 绑进 KILL_ON_JOB_CLOSE job，guard 等 main pid 死亡后退出（宿主任何方式死亡→OS 全灭 CLI 子孙进程，无孤儿） */

@@ -234,3 +234,24 @@ describe("CliHost listChildPids 命令（C5 演进，#44）", () => {
 
 // HostCommand 类型形状冒烟（编译期断言用）
 void ({} as HostCommand);
+
+describe("CliHost 诊断 log 透传（#54 spec #52 B 节）", () => {
+  it("构造可选 log 转发 run-once：stderr 留痕经同一 2 参 (kind, detail) 回调上报；未注入时静默", async () => {
+    process.env.KANBAN_CLAUDE_BIN = process.execPath; // exe 解析链 env 分支 → node.exe（fake-cli 直连）
+    const cwd = mkdtempSync(path.join(tmpdir(), "kb-host-log-"));
+    const fakeCli = path.join(import.meta.dirname, "../../tests/fixtures/fake-cli.mjs");
+    try {
+      const logs: Array<[string, string]> = [];
+      const host = new CliHost(() => new BaseStubAdapter() as CliAdapter, (kind, detail) => logs.push([kind, detail]));
+      const r = await host.command({ kind: "run-once", runId: "h1", cli: "claude", args: [fakeCli, "ok", "H1"], cwd });
+      expect(r.runOnce!.status).toBe("completed");
+      expect(logs.some(([k, d]) => k === "stderr" && d.includes("fake-err:H1") && d.includes("h1"))).toBe(true);
+      // 未注入 log 的既有构造（单参）不受影响：同命令可执行
+      const bare = new CliHost(() => new BaseStubAdapter() as CliAdapter);
+      expect((await bare.command({ kind: "run-once", runId: "h2", cli: "claude", args: [fakeCli, "ok"], cwd })).runOnce!.status).toBe("completed");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+      delete process.env.KANBAN_CLAUDE_BIN;
+    }
+  });
+});

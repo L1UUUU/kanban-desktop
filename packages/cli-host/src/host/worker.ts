@@ -15,11 +15,17 @@ if (!port) {
   process.exit(1);
 }
 
+// #54（spec #52 B 节）：诊断上报目标 —— (kind, detail) 2 参回调签名不变，改为向父端口发 {log} 消息（与事件/命令响应/停机消息并列，不进 HostCommand；级别映射与落盘归 Main，本文件保持纯 Node，ADR-0001）
+const reportLog = (kind: string, detail: string): void => {
+  port.postMessage({ log: { kind, detail } });
+};
+
 const host = new CliHost(
   createDesktopAdapterFactory({
     cacheDir: process.env.KANBAN_DATA_DIR,
-    log: (k, d) => console.error(`[cli-host-worker:${k}] ${d}`),
+    log: reportLog,
   }),
+  reportLog,
 );
 
 // 事件流 → 宿主（worker→main 方向，ADR-0001 实测 34k+ events/s 余量充足）

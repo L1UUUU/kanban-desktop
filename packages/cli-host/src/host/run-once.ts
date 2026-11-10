@@ -95,6 +95,12 @@ interface ActiveRun {
 export class RunOnceRunner {
   private readonly active = new Map<string, ActiveRun>();
   private readonly exeCache = new Map<string, string>();
+  /** #54：诊断上报（2 参 kind 回调；worker 形态经 CliHost 透传到 {log} 消息，缺省丢弃） */
+  private readonly log: (kind: string, detail: string) => void;
+
+  constructor(log?: (kind: string, detail: string) => void) {
+    this.log = log ?? (() => {});
+  }
 
   async run(input: RunOnceInput): Promise<RunOnceResult> {
     if (this.active.has(input.runId)) {
@@ -141,7 +147,11 @@ export class RunOnceRunner {
       child.stdout!.setEncoding("utf8");
       child.stdout!.on("data", (d: string) => stdout.push(d));
       child.stderr!.setEncoding("utf8");
-      child.stderr!.on("data", (d: string) => stderr.push(d));
+      child.stderr!.on("data", (d: string) => {
+        stderr.push(d);
+        // #54（spec #52 B 节 M8 口径 A）：一次性执行 stderr 留痕——成功/失败都记（warn 级由 Main 映射表判），只带 stderr 与 cli/runId 标识，不带 stdout/stdin 正文（Q8）
+        this.log("stderr", `run-once[${input.cli}#${input.runId}] ${d.trimEnd().slice(0, 400)}`);
+      });
       child.on("error", (e) => {
         settle(reject, new AdapterError("E_INTERNAL", `run-once 进程启动失败（${input.cli}）：${e.message}`));
       });

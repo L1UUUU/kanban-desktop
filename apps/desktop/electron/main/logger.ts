@@ -21,6 +21,9 @@ export interface LoggingConfig {
   maxMessageChars: number;
 }
 
+/** 条目来源三枚举（spec #52 C 节）：由 Main 按入口强制写入——直接调用=main、worker {log} 分派/进程内 CLI stderr=worker、renderer 桥=renderer */
+export type LogSource = "main" | "worker" | "renderer";
+
 /** 条目附加上下文：标量 Record（嵌套对象/函数不收，防把 ChatEvent/聊天正文带进日志，spec #52 C 节 N14） */
 export type LogCtx = Record<string, string | number | boolean | null>;
 
@@ -76,8 +79,8 @@ export interface LoggerOptions {
 }
 
 export interface Logger {
-  /** 写一条日志：级别过滤 → 截断 → JSONL 落盘 + 控制台纯文本双写（source 由 Main 入口强制为 main） */
-  log(level: LogLevel, scope: string, message: string, ctx?: LogCtx): void;
+  /** 写一条日志：级别过滤 → 截断 → JSONL 落盘 + 控制台纯文本双写（source 由调用入口强制：缺省 main，worker/renderer 由对应装配入口显式传入，不信上游自报） */
+  log(level: LogLevel, scope: string, message: string, ctx?: LogCtx, source?: LogSource): void;
   /** 派生固定 scope 的子记录器 */
   child(scope: string): ScopedLogger;
   /** 本次启动主文件绝对路径（含横幅；轮转分片不作为对外路径，M9） */
@@ -90,7 +93,7 @@ export interface Logger {
 interface LogEntry {
   ts: string;
   level: LogLevel;
-  source: "main";
+  source: LogSource;
   scope: string;
   message: string;
   ctx?: LogCtx;
@@ -214,11 +217,11 @@ export function createLogger(options: LoggerOptions): Logger {
   };
 
   const logger: Logger = {
-    log(level, scope, message, ctx) {
+    log(level, scope, message, ctx, source) {
       if (LEVEL_ORDER[level] > LEVEL_ORDER[logging.level]) return; // 级别过滤（文件与控制台同口径）
       const truncated =
         message.length > logging.maxMessageChars ? message.slice(0, logging.maxMessageChars) : message;
-      const entry: LogEntry = { ts: now().toISOString(), level, source: "main", scope, message: truncated };
+      const entry: LogEntry = { ts: now().toISOString(), level, source: source ?? "main", scope, message: truncated };
       if (ctx && Object.keys(ctx).length > 0) entry.ctx = ctx;
       writeEntry(entry);
     },
@@ -282,6 +285,9 @@ const KIND_LOG_MAP: Record<string, { level: LogLevel; scope: string }> = {
   shutdown: { level: "info", scope: "lifecycle" },
   restore: { level: "info", scope: "lifecycle" },
   "job-guard": { level: "warn", scope: "cli-host" },
+  "command-failed": { level: "error", scope: "cli-host" },
+  "worker-exit": { level: "error", scope: "cli-host" },
+  "worker-exit-pending": { level: "warn", scope: "cli-host" },
 };
 
 /** kind 查表（cli-host `log(kind, detail)` 回调 / worker {log} 消息共用）：未命中缺省 debug（新增 kind 无需改表），scope 归 cli-host */
