@@ -187,8 +187,10 @@ test("徽标与断开恢复截图：主仓库绿/worktree 蓝 + 重开断开会�
     const second = await launchApp(userData, worktreeDir);
     await second.win.getByRole("button", { name: "＋ 注册", exact: true }).click();
     await expect(second.win.locator("aside").getByText("kb-shot-wt", { exact: true })).toBeVisible({ timeout: 15_000 });
-    await second.win.locator("aside").getByText("kb-shot-wt", { exact: true }).hover();
-    await second.win.getByRole("button", { name: "＋", exact: true }).click();
+    // 双项目并存：每项目行一个悬浮「＋」，须限定 kb-shot-wt 行内点击（strict mode；6ab2a88 悬浮按钮后引入）
+    const wtRow = second.win.locator("aside").locator("div.group").filter({ hasText: "kb-shot-wt" });
+    await wtRow.getByText("kb-shot-wt", { exact: true }).hover();
+    await wtRow.getByRole("button", { name: "＋", exact: true }).click();
     await second.win.getByRole("button", { name: "Claude", exact: true }).click();
     await expect(second.win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
     // 一致项 3（会话行徽标）：CLI 色点+标题+目录身份徽标+状态徽标；侧栏按当前项目过滤，两形态各截一张

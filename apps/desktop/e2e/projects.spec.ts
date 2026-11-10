@@ -123,7 +123,8 @@ test("多项目并存与切换、目录缺失标记", async () => {
     const b = await launchApp(userData, secondRepo);
     await registerProject(b.win, "e2e-repo-2");
     // 注册即切换：当前项目=e2e-repo-2（其会话列表为空；e2e-repo 的会话被过滤）
-    await expect(b.win.getByText("暂无会话")).toBeVisible();
+    //（限定 aside：主区 ChatPane 空态也有「暂无会话」文案，0f51f80 引入）
+    await expect(b.win.locator("aside").getByText("暂无会话")).toBeVisible();
     await expect(b.win.getByText("新会话 · Codex")).toHaveCount(0);
     // 点回第一个项目：会话恢复可见
     await b.win.locator("aside").getByText(PROJECT_NAME, { exact: true }).click();
