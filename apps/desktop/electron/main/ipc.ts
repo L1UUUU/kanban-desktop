@@ -20,6 +20,7 @@ import { AdapterError, detectSkillConflicts, resolveUserClaudeDir, type CliAdapt
 import { TrackerEngine, formatRequirementId, type Cli, type NormalizedEvent, type TrackerChange } from "@kanban/tracker";
 import { detectDirIdentity } from "./git-identity";
 import type { WorkspaceDiff } from "./git-diff-service";
+import type { LogFn } from "./logger";
 import { type MemoryService } from "./memory-service";
 import type { PtyHost } from "./pty-host";
 import type { ProjectStore } from "./project-store";
@@ -46,6 +47,8 @@ export interface IpcDeps {
   resolveUserClaudeDir?(): string;
   /** #35（spec #27 J 节）：memory 面（kanban:delete 需求删除级联清理）；index.ts 经 openMemoryService 装配注入，缺省无 memory 数据可清理（旧测试/降级装配） */
   memory?: MemoryService;
+  /** #53（spec #52 G 节）：诊断日志 —— safeParse 失败与 route 抛错记 error（error.code 原样）；业务拒绝 ok:false 不记；缺省 no-op 供既有装配夹具 */
+  log?: LogFn;
 }
 
 // CLI 显示名（新建会话默认标题「新会话 · {名}」，原型 §3.6）
@@ -60,6 +63,7 @@ const CLI_LABELS: Record<string, string> = {
 export async function handleIpc(deps: IpcDeps, raw: unknown): Promise<IpcResult> {
   const parsed = ipcRequestSchema.safeParse(raw);
   if (!parsed.success) {
+    deps.log?.("error", "kanban:ipc", `入站请求不符合契约（E_SCHEMA）：${summarizeIssues(parsed.error.issues)}`);
     return {
       ok: false,
       error: { code: "E_SCHEMA", message: summarizeIssues(parsed.error.issues) },
@@ -74,6 +78,9 @@ export async function handleIpc(deps: IpcDeps, raw: unknown): Promise<IpcResult>
   try {
     return await route(deps, parsed.data);
   } catch (err) {
+    // #53：catch 记一条 error（error.code 原样不造新码）；AdapterError 透传 / 其余 E_INTERNAL 的既有形状不变
+    const code = err instanceof AdapterError ? err.code : "E_INTERNAL";
+    deps.log?.("error", "kanban:ipc", `处理异常（${code}）：${err instanceof Error ? err.message : String(err)}`);
     if (err instanceof AdapterError) {
       return { ok: false, error: { code: err.code, message: err.message } };
     }
@@ -453,48 +460,57 @@ export interface MemoryIpcDeps {
   memory: MemoryService;
   /** 退出序列门闸（true=正在退出，拒绝新请求；缺省恒 false 供测试） */
   isShuttingDown?(): boolean;
+  /** #53（spec #52 G 节）：诊断日志 —— safeParse 失败记 error（reason 原样）；route 抛错记 error 后原样 rethrow；业务拒绝不记；缺省 no-op */
+  log?: LogFn;
 }
 
 /** 处理一条 memory:ipc 入站请求：zod 强制校验 → 退出门闸 → 八通道路由（业务拒绝直达调用方，不新增全局错误码） */
 export async function handleMemoryIpc(deps: MemoryIpcDeps, raw: unknown): Promise<MemoryResult> {
   const parsed = memoryRequestSchema.safeParse(raw);
   if (!parsed.success) {
+    deps.log?.("error", "memory:ipc", `入站请求不符合契约（invalid-request）：${summarizeIssues(parsed.error.issues)}`);
     return { ok: false, reason: "invalid-request", detail: summarizeIssues(parsed.error.issues) };
   }
   if (deps.isShuttingDown?.()) {
     return { ok: false, reason: "shutting-down", detail: "应用正在退出，已停止接收新请求" };
   }
   const req = parsed.data;
-  switch (req.channel) {
-    case "memory:extract": {
-      const r = deps.memory.extract(req.requirementId);
-      return r.ok ? { ok: true, started: true, batchId: r.batchId } : r;
+  try {
+    switch (req.channel) {
+      case "memory:extract": {
+        const r = deps.memory.extract(req.requirementId);
+        return r.ok ? { ok: true, started: true, batchId: r.batchId } : r;
+      }
+      case "memory:cancel": {
+        // #32：取消管线已接线（异步等待整批落定）
+        const r = await deps.memory.cancel(req.requirementId);
+        return r.ok ? { ok: true, cancelled: true } : r;
+      }
+      case "memory:reviewCandidate": {
+        const r = deps.memory.reviewCandidate(req.candidateId, req.action, req.edit);
+        return r.ok ? { ok: true, candidate: r.candidate } : r;
+      }
+      case "memory:resolveSummary": {
+        return await deps.memory.resolveSummary(req.requirementId, req.choice);
+      }
+      case "memory:requirementMemory": {
+        return await deps.memory.requirementMemory(req.requirementId);
+      }
+      case "memory:projectMemory": {
+        return await deps.memory.projectMemory(req.projectId, req.query);
+      }
+      case "memory:editAccepted": {
+        const r = deps.memory.editAccepted(req.candidateId, { claim: req.claim, scope: req.scope });
+        return r.ok ? { ok: true, candidate: r.candidate } : r;
+      }
+      case "memory:editSummary": {
+        return await deps.memory.editSummary(req.requirementId, req.content);
+      }
     }
-    case "memory:cancel": {
-      // #32：取消管线已接线（异步等待整批落定）
-      const r = await deps.memory.cancel(req.requirementId);
-      return r.ok ? { ok: true, cancelled: true } : r;
-    }
-    case "memory:reviewCandidate": {
-      const r = deps.memory.reviewCandidate(req.candidateId, req.action, req.edit);
-      return r.ok ? { ok: true, candidate: r.candidate } : r;
-    }
-    case "memory:resolveSummary": {
-      return deps.memory.resolveSummary(req.requirementId, req.choice);
-    }
-    case "memory:requirementMemory": {
-      return deps.memory.requirementMemory(req.requirementId);
-    }
-    case "memory:projectMemory": {
-      return deps.memory.projectMemory(req.projectId, req.query);
-    }
-    case "memory:editAccepted": {
-      const r = deps.memory.editAccepted(req.candidateId, { claim: req.claim, scope: req.scope });
-      return r.ok ? { ok: true, candidate: r.candidate } : r;
-    }
-    case "memory:editSummary": {
-      return deps.memory.editSummary(req.requirementId, req.content);
-    }
+  } catch (err) {
+    // #53：记一条 error 后原样 rethrow（既有异常向 ipcMain.handle 传播的行为不变，不吞不造码）
+    deps.log?.("error", "memory:ipc", `处理异常：${err instanceof Error ? err.message : String(err)}`);
+    throw err;
   }
 }
 
@@ -508,6 +524,8 @@ export interface ResidueIpcDeps {
   kill(pids: number[]): Promise<ResidueKillResult[]>;
   /** 退出序列门闸（true=正在退出，拒绝新请求；缺省恒 false 供测试） */
   isShuttingDown?(): boolean;
+  /** #53（spec #52 G 节）：诊断日志 —— safeParse 失败记 error（reason 原样）；deps 抛错记 error 后原样 rethrow；业务拒绝不记；缺省 no-op */
+  log?: LogFn;
 }
 
 // ============ #43 diff:ipc 通道（spec #40 D 节，对齐 memory:ipc 独立单通道先例：入站 zod 强制校验 + 退出门闸 + 经 project store 解析 cwd） ============
@@ -519,22 +537,31 @@ export interface DiffIpcDeps {
   readWorkspaceDiff(cwd: string): Promise<WorkspaceDiff>;
   /** 退出序列门闸（true=正在退出，拒绝新请求；缺省恒 false 供测试） */
   isShuttingDown?(): boolean;
+  /** #53（spec #52 G 节）：诊断日志 —— safeParse 失败记 error（E_SCHEMA 原码）；readWorkspaceDiff 抛错记 error 后原样 rethrow；业务拒绝不记；缺省 no-op */
+  log?: LogFn;
 }
 
 /** 处理一条 residue:ipc 入站请求：zod 强制校验 → 退出门闸 → 二通道路由（业务拒绝直达调用方，不新增全局错误码） */
 export async function handleResidueIpc(deps: ResidueIpcDeps, raw: unknown): Promise<ResidueResult> {
   const parsed = residueRequestSchema.safeParse(raw);
   if (!parsed.success) {
+    deps.log?.("error", "residue:ipc", `入站请求不符合契约（invalid-request）：${summarizeIssues(parsed.error.issues)}`);
     return { ok: false, reason: "invalid-request", detail: summarizeIssues(parsed.error.issues) };
   }
   if (deps.isShuttingDown?.()) {
     return { ok: false, reason: "shutting-down", detail: "应用正在退出，已停止接收新请求" };
   }
-  switch (parsed.data.channel) {
-    case "residue:detect":
-      return { ok: true, processes: await deps.detect() };
-    case "residue:kill":
-      return { ok: true, results: await deps.kill(parsed.data.pids) };
+  try {
+    switch (parsed.data.channel) {
+      case "residue:detect":
+        return { ok: true, processes: await deps.detect() };
+      case "residue:kill":
+        return { ok: true, results: await deps.kill(parsed.data.pids) };
+    }
+  } catch (err) {
+    // #53：记一条 error 后原样 rethrow（既有异常向 ipcMain.handle 传播的行为不变，不吞不造码）
+    deps.log?.("error", "residue:ipc", `处理异常：${err instanceof Error ? err.message : String(err)}`);
+    throw err;
   }
 }
 
@@ -542,18 +569,26 @@ export async function handleResidueIpc(deps: ResidueIpcDeps, raw: unknown): Prom
 export async function handleDiffIpc(deps: DiffIpcDeps, raw: unknown): Promise<DiffResult> {
   const parsed = diffRequestSchema.safeParse(raw);
   if (!parsed.success) {
+    deps.log?.("error", "diff:ipc", `入站请求不符合契约（E_SCHEMA）：${summarizeIssues(parsed.error.issues)}`);
     return { ok: false, error: { code: "E_SCHEMA", message: summarizeIssues(parsed.error.issues) } };
   }
   if (deps.isShuttingDown?.()) {
     return { ok: false, error: { code: "E_INTERNAL", message: "应用正在退出，已停止接收新请求" } };
   }
-  switch (parsed.data.channel) {
-    case "diff:get": {
-      const project = deps.projects.get(parsed.data.projectId);
-      if (!project) {
-        return { ok: false, error: { code: "E_PROJECT_NOT_FOUND", message: `项目不存在：${parsed.data.projectId}` } };
+  try {
+    switch (parsed.data.channel) {
+      case "diff:get": {
+        const project = deps.projects.get(parsed.data.projectId);
+        if (!project) {
+          return { ok: false, error: { code: "E_PROJECT_NOT_FOUND", message: `项目不存在：${parsed.data.projectId}` } };
+        }
+        // return await：让 readWorkspaceDiff 的拒绝进 catch（记日志后原样 rethrow），而非绕过 catch 直达调用方
+        return await deps.readWorkspaceDiff(project.canonicalPath);
       }
-      return deps.readWorkspaceDiff(project.canonicalPath);
     }
+  } catch (err) {
+    // #53：记一条 error 后原样 rethrow（既有异常向 ipcMain.handle 传播的行为不变，不吞不造码）
+    deps.log?.("error", "diff:ipc", `处理异常：${err instanceof Error ? err.message : String(err)}`);
+    throw err;
   }
 }

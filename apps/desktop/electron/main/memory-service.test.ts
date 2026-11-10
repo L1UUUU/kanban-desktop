@@ -364,6 +364,28 @@ describe("handleMemoryIpc 入站校验与路由（memory:ipc 通道）", () => {
     }
   });
 
+  it("#53 诊断日志：safeParse 失败记一条 error（invalid-request 原样）；service 抛错记一条后原样 rethrow；业务拒绝不记", async () => {
+    const ctx = makeService();
+    const entries: Array<{ level: string; scope: string; message: string }> = [];
+    const log = (level: string, scope: string, message: string): void => { entries.push({ level, scope, message }); };
+    // safeParse 失败：reason invalid-request 原样进日志，返回形状不变
+    const bad = await handleMemoryIpc({ memory: ctx.service, log }, { channel: "memory:nuke" });
+    expect(bad).toMatchObject({ ok: false, reason: "invalid-request" });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ level: "error", scope: "memory:ipc" });
+    expect(entries[0].message).toContain("invalid-request");
+    // service 抛错：记一条后原样 rethrow（不改既有向 ipcMain.handle 传播的行为）
+    const boom = { extract: (): never => { throw new Error("memory 爆炸"); } } as unknown as typeof ctx.service;
+    await expect(handleMemoryIpc({ memory: boom, log }, { channel: "memory:extract", requirementId: "REQ-001" })).rejects.toThrow("memory 爆炸");
+    expect(entries).toHaveLength(2);
+    expect(entries[1].level).toBe("error");
+    expect(entries[1].message).toContain("memory 爆炸");
+    // 业务拒绝（需求不存在 → ok:false reason）不记日志
+    const rej = await handleMemoryIpc({ memory: ctx.service, log }, { channel: "memory:extract", requirementId: "REQ-404" });
+    expect(rej.ok).toBe(false);
+    expect(entries).toHaveLength(2);
+  });
+
   it("八通道真实路由：requirementMemory / reviewCandidate / projectMemory / editAccepted / editSummary 往返 wire 形状", async () => {
     const ctx = makeService();
     const { candidates } = seedExtracted(ctx);

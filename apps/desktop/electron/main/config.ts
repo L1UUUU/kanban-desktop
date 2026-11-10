@@ -1,6 +1,7 @@
 // 用途：应用配置加载/保存 —— 三 CLI exe 路径等用户配置统一落 JSON 文件，不硬编码（spec J/G）；探测逻辑为占位，由后续 Adapter 工单接入
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { LOG_LEVELS, type LogLevel, type LoggingConfig } from "./logger";
 
 /** 三 CLI exe 配置：null = 未探测/未手动覆盖 */
 export interface CliExeConfig {
@@ -33,6 +34,13 @@ export interface DiffConfig {
 /** diff 上限各字段的防御上限（防配置写 absurd 值导致主进程超大缓冲） */
 const DIFF_LIMIT_BOUNDS = { maxBytes: 100_000_000, maxFiles: 100_000, maxUntrackedLines: 1_000_000 } as const;
 
+/** logging 数值字段的防御边界：下限防过小值致每条切文件/删当前文件/消息全空，上限防 absurd 值（spec #52 D 节；retainRuns 范围 1–100） */
+const LOGGING_BOUNDS = {
+  maxFileBytes: { min: 1024, max: 100_000_000 },
+  retainRuns: { min: 1, max: 100 },
+  maxMessageChars: { min: 1, max: 1_000_000 },
+} as const;
+
 export interface AppConfig {
   cliExe: CliExeConfig;
   /** 当前项目 id（项目注册/切换时持久化，重启恢复；null=尚无项目） */
@@ -42,9 +50,11 @@ export interface AppConfig {
   diff: DiffConfig;
   terminal: TerminalConfig;
   shutdown: ShutdownConfig;
+  /** #53（spec #52 D 节）：日志系统四参数（level 默认 info；env 覆盖另存 effectiveLevel 不落此处，M11） */
+  logging: LoggingConfig;
 }
 
-/** 默认配置：三 CLI exe 均为占位 null；diff 上限 2MB/200 文件/2000 行（覆盖日常大改动的审阅量级） */
+/** 默认配置：三 CLI exe 均为占位 null；diff 上限 2MB/200 文件/2000 行（覆盖日常大改动的审阅量级）；日志 info/5MB/10 次启动/单条 2000 字符 */
 export function defaultConfig(): AppConfig {
   return {
     cliExe: { codex: null, claude: null, opencode: null },
@@ -53,6 +63,7 @@ export function defaultConfig(): AppConfig {
     diff: { maxBytes: 2_000_000, maxFiles: 200, maxUntrackedLines: 2000 },
     terminal: { shell: null },
     shutdown: { graceMs: 3000 },
+    logging: { level: "info", maxFileBytes: 5_000_000, retainRuns: 10, maxMessageChars: 2000 },
   };
 }
 
@@ -96,6 +107,21 @@ export function loadConfig(path: string): AppConfig {
   if (typeof graceMs === "number" && Number.isFinite(graceMs) && graceMs > 0 && graceMs <= 60_000) {
     fallback.shutdown.graceMs = Math.floor(graceMs);
   }
+  const fileLogging = (raw as { logging?: Record<string, unknown> }).logging;
+  if (typeof fileLogging === "object" && fileLogging !== null) {
+    const lv = fileLogging.level;
+    if (typeof lv === "string" && (LOG_LEVELS as readonly string[]).includes(lv)) {
+      fallback.logging.level = lv as LogLevel;
+    }
+    for (const key of ["maxFileBytes", "retainRuns", "maxMessageChars"] as const) {
+      const v = fileLogging[key];
+      const bound = LOGGING_BOUNDS[key];
+      // 正整数且在防御边界内才采纳（对齐 diff 节的不信任文件数值惯例）
+      if (typeof v === "number" && Number.isInteger(v) && v >= bound.min && v <= bound.max) {
+        fallback.logging[key] = v;
+      }
+    }
+  }
   return fallback;
 }
 
@@ -103,6 +129,11 @@ export function loadConfig(path: string): AppConfig {
 export function saveConfig(path: string, config: AppConfig): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+}
+
+/** #53（spec #52 D 节）：KANBAN_LOG_LEVEL env 覆盖 config 级别 —— 合法四枚举才覆盖，非法/未设回退 config 值；返回 effectiveLevel，不写进 appConfig（切换项目 saveConfig 全量写回时不误持久化，M11） */
+export function resolveEffectiveLevel(configLevel: LogLevel, env: string | undefined): LogLevel {
+  return typeof env === "string" && (LOG_LEVELS as readonly string[]).includes(env) ? (env as LogLevel) : configLevel;
 }
 
 /** 三 CLI exe 探测占位：真实探测（PATH / npm 全局目录 / 手动覆盖 UI）由后续 Adapter 工单接入（spec G） */

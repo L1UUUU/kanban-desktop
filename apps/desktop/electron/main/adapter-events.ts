@@ -1,6 +1,7 @@
-// 用途：Adapter 事件流接线（#9；#16 起在 SkillObservation 分支注入会话项目，#17 起把 tracker 变更经 sendChange 推送 renderer）—— 出站 zod 校验 + session_status/turn_started 会话落库 + SkillObservation 进 TrackerEngine（stage_events 幂等落库 + 状态机驱动）+ 转发 renderer；从 index.ts 提取为可单测的纯接线
+// 用途：Adapter 事件流接线（#9；#16 起在 SkillObservation 分支注入会话项目，#17 起把 tracker 变更经 sendChange 推送 renderer，#53 起诊断走统一日志）—— 出站 zod 校验 + session_status/turn_started 会话落库 + SkillObservation 进 TrackerEngine（stage_events 幂等落库 + 状态机驱动）+ 转发 renderer；从 index.ts 提取为可单测的纯接线
 import { adapterEventSchema, type AdapterEvent } from "@kanban/ipc-schema";
 import type { TrackerChange, TrackerEngine } from "@kanban/tracker";
+import type { LogFn } from "./logger";
 import type { SessionStore } from "./session-store";
 
 export interface AdapterEventDeps {
@@ -10,6 +11,8 @@ export interface AdapterEventDeps {
   send(event: AdapterEvent): void;
   /** #17：tracker 变更推送（webContents.send("tracker:event")；可选，缺省不推送供旧接线/测试） */
   sendChange?(change: TrackerChange): void;
+  /** #53（spec #52 I 节）：诊断日志 —— 出站契约丢弃与 tracker 处理失败记 error；缺省 no-op 供旧测试（console 迁移至统一日志） */
+  log?: LogFn;
 }
 
 /** 构造 adapter.subscribe 的处理器：ChatEvent 落会话库、SkillObservation 进 tracker、全部事件转发 renderer；任何失败只记日志不抛出（不打断 adapter 事件泵，spec H 不崩溃） */
@@ -18,7 +21,7 @@ export function createAdapterEventHandler(deps: AdapterEventDeps): (event: Adapt
     try {
       adapterEventSchema.parse(event); // 出站也过 schema 校验（spec E，廉价全量）；不合契约的事件丢弃并记日志
     } catch (err) {
-      console.error("[kanban] 事件不符合契约，已丢弃", err);
+      deps.log?.("error", "adapter", `事件不符合契约，已丢弃：${err instanceof Error ? err.message : String(err)}`);
       return;
     }
     if ("type" in event) {
@@ -34,7 +37,7 @@ export function createAdapterEventHandler(deps: AdapterEventDeps): (event: Adapt
         const { changes } = deps.engine.process({ ...event, projectId: session?.projectId ?? null });
         if (deps.sendChange) for (const c of changes) deps.sendChange(c);
       } catch (err) {
-        console.error("[kanban] tracker 事件处理失败", err); // 落库/校验失败不阻断消息流转发
+        deps.log?.("error", "adapter", `tracker 事件处理失败：${err instanceof Error ? err.message : String(err)}`); // 落库/校验失败不阻断消息流转发
       }
     }
     deps.send(event);

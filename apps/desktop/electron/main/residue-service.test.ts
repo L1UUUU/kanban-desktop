@@ -197,4 +197,20 @@ describe("handleResidueIpc（residue:ipc 通道路由）", () => {
     const kill = await handleResidueIpc(base, { channel: "residue:kill", pids: [111] });
     expect(kill).toMatchObject({ ok: true, results: [{ pid: 111, status: "killed" }] });
   });
+
+  it("#53 诊断日志：safeParse 失败记一条 error（invalid-request 原样）；deps 抛错记一条后原样 rethrow（不改既有传播行为）", async () => {
+    const entries: Array<{ level: string; scope: string; message: string }> = [];
+    const log = (level: string, scope: string, message: string): void => { entries.push({ level, scope, message }); };
+    const bad = await handleResidueIpc({ ...base, log }, { channel: "residue:purge" });
+    expect(bad).toMatchObject({ ok: false, reason: "invalid-request" });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ level: "error", scope: "residue:ipc" });
+    expect(entries[0].message).toContain("invalid-request");
+    await expect(
+      handleResidueIpc({ ...base, detect: async (): Promise<ResidueProcess[]> => { throw new Error("探测爆炸"); }, log }, { channel: "residue:detect" }),
+    ).rejects.toThrow("探测爆炸");
+    expect(entries).toHaveLength(2);
+    expect(entries[1].level).toBe("error");
+    expect(entries[1].message).toContain("探测爆炸");
+  });
 });

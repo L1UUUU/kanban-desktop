@@ -18,7 +18,7 @@ afterAll(() => {
 });
 
 /** 组装 main 同款接线：FakeAdapter（verified skill 注入脚本）→ handler → sessions 表 + TrackerEngine（#17 起可挂变更推送 spy） */
-function makeWiring(dbPath: string, onChanges?: TrackerChange[]) {
+function makeWiring(dbPath: string, onChanges?: TrackerChange[], onLog?: (level: string, scope: string, message: string) => void) {
   const db = openDatabase(dbPath);
   openDbs.push(db);
   const sessions = new SessionStore(db);
@@ -30,6 +30,7 @@ function makeWiring(dbPath: string, onChanges?: TrackerChange[]) {
     engine,
     send: (e) => forwarded.push(e),
     sendChange: onChanges ? (c) => onChanges.push(c) : undefined,
+    log: onLog,
   });
   return { db, sessions, engine, handler, forwarded };
 }
@@ -134,6 +135,37 @@ describe("SkillObservation → Engine 落库（#9 接线）", () => {
     expect(row.status).toBe("idle"); // 错误不改写落库状态
     expect(row.last_active_at).toBeNull(); // 不触发活跃时间 touch
     expect(forwarded).toHaveLength(1); // renderer 呈现不受落库边界影响
+  });
+
+  it("#53 诊断日志：出站契约校验丢弃记一条 error（事件不转发不落库）；tracker 处理失败记一条 error（转发不断）；不传 log 时路径不抛错", () => {
+    const entries: Array<{ level: string; scope: string; message: string }> = [];
+    const log = (level: string, scope: string, message: string): void => { entries.push({ level, scope, message }); };
+    const { db, handler, forwarded } = makeWiring(":memory:", undefined, log);
+    db.prepare(
+      "INSERT INTO sessions (id, kind, cli, native_session_id, project_id, title, cwd, perm_mode, status, last_active_at) VALUES ('s-1','structured','claude',NULL,NULL,'t','C:\\p','auto','idle',NULL)",
+    ).run();
+    // 非法 SkillObservation（证据等级不在枚举）→ 出站契约校验丢弃，记一条 error
+    const bad = { ...verifiedDesignFeature("s-1", "2026-11-05T10:00:03.000Z", "sk-bad-log"), evidenceLevel: "guessed" };
+    expect(() => handler(bad as unknown as AdapterEvent)).not.toThrow();
+    expect(forwarded).toHaveLength(0);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].level).toBe("error");
+    expect(entries[0].message).toContain("事件不符合契约");
+    // 合法事件但 tracker 处理失败（注入抛错的 engine 驱动 catch 路径）→ 记 error 后仍转发
+    const forwarded2: AdapterEvent[] = [];
+    const handler2 = createAdapterEventHandler({
+      sessions: { get: () => null } as unknown as ReturnType<typeof makeWiring>["sessions"],
+      engine: { process: (): never => { throw new Error("tracker 爆炸"); } } as unknown as ReturnType<typeof makeWiring>["engine"],
+      send: (e) => forwarded2.push(e),
+      log,
+    });
+    handler2(verifiedDesignFeature("s-1", "2026-11-05T10:00:04.000Z", "sk-trk-bad"));
+    expect(forwarded2).toHaveLength(1); // tracker 失败不断消息流
+    expect(entries).toHaveLength(2);
+    expect(entries[1].message).toContain("tracker 事件处理失败");
+    // 不传 log（缺省 no-op）：两条失败路径均不抛错
+    const silent = makeWiring(":memory:");
+    expect(() => silent.handler(bad as unknown as AdapterEvent)).not.toThrow();
   });
 
   it("应用级重启恢复：建卡/关联/事件经 SQLite 往返一致，恢复后新事件继续驱动（REQ-002）", () => {

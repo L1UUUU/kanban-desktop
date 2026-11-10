@@ -1,5 +1,5 @@
-// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc/memory:ipc/diff:ipc/residue:ipc 路由）、CliHost 托管（utilityProcess 优先，进程内回退）与事件转发/状态落库、TrackerEngine（SkillObservation 落库 + 重启恢复）、PTY 终端宿主（node-pty，main 进程直接使用，t0-03 实证）、有序退出与残留进程检测一次性通知（#49 app:event）、#51 单实例锁（二次启动转发聚焦 + 持锁失败立即退出）；初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc/memory:ipc/diff:ipc/residue:ipc 路由）、CliHost 托管（utilityProcess 优先，进程内回退）与事件转发/状态落库、TrackerEngine（SkillObservation 落库 + 重启恢复）、PTY 终端宿主（node-pty，main 进程直接使用，t0-03 实证）、有序退出与残留进程检测一次性通知（#49 app:event）、#51 单实例锁（二次启动转发聚焦 + 持锁失败立即退出）、#53 日志地基（Logger 二实例守卫后创建 + 启动横幅 + 崩溃兜底 + 9 处 console 迁移 + log:getPath/log:openDir）；初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -26,12 +26,13 @@ import {
   type CliAdapter,
 } from "@kanban/cli-host";
 import { TrackerEngine, type TrackerChange } from "@kanban/tracker";
-import { defaultConfig, loadConfig, saveConfig, type AppConfig } from "./config";
+import { defaultConfig, loadConfig, resolveEffectiveLevel, saveConfig, type AppConfig } from "./config";
 import { createAdapterEventHandler } from "./adapter-events";
 import { CliHostClient } from "./cli-host-client";
 import { SQLITE_ENTRY, openDatabase } from "./db";
 import { handleIpc, handleDiffIpc, handleMemoryIpc, handleResidueIpc, TRACKER_CLI_BY_APP, type IpcDeps } from "./ipc";
 import { defaultGitDiffDeps, readWorkspaceDiff } from "./git-diff-service";
+import { createLogger, registerCrashHandlers, resolveKindLog, type Logger } from "./logger";
 import { openMemoryService } from "./memory-service";
 import { createPtyHost } from "./pty-host";
 import { ProjectStore } from "./project-store";
@@ -39,20 +40,30 @@ import { detectResidue, killResidue, type ResidueServiceDeps } from "./residue-s
 import { SessionStore } from "./session-store";
 import { adoptRestoredSessions, createShutdownOrchestrator } from "./shutdown";
 
+// #53：Main 侧唯一日志深模块实例（whenReady 二实例守卫后创建；模块级因 createHostedAdapter/loadResidueSeed 等闭包引用）
+let logger: Logger;
+
+/** #53（spec #52 E 节）：cli-host/shutdown/restore 的 (kind, detail) 2 参回调 → 集中映射表 → Logger（签名不变，只换注入目标） */
+const logKind = (kind: string, detail: string): void => {
+  const mapped = resolveKindLog(kind);
+  logger.log(mapped.level, mapped.scope, detail);
+};
+
 /** CliHost 托管形态（ADR-0001：utilityProcess 崩溃隔离 + Job Object）；worker 产物缺失/fork 失败回退 Main 进程内（C5 降级路径，seam 不变） */
 function createHostedAdapter(appConfig: AppConfig): CliAdapter {
   const dataDir = app.getPath("userData");
   const workerPath = join(__dirname, "cli-host-worker.js");
   if (existsSync(workerPath)) {
     try {
-      // log：Job guard 失败等治理事件不再静默（#29 复盘：guard 脚本缺陷曾长期无感知）
-      return new CliHostClient({ workerPath, dataDir, codexExe: appConfig.cliExe.codex, claudeExe: appConfig.cliExe.claude, opencodeExe: appConfig.cliExe.opencode, fullDisposeWaitMs: appConfig.shutdown.graceMs, log: (k, d) => console.error(`[cli-host:${k}] ${d}`) });
+      // log：Job guard 失败等治理事件不再静默（#29 复盘：guard 脚本缺陷曾长期无感知）；#53 起走集中 kind 映射进统一日志
+      return new CliHostClient({ workerPath, dataDir, codexExe: appConfig.cliExe.codex, claudeExe: appConfig.cliExe.claude, opencodeExe: appConfig.cliExe.opencode, fullDisposeWaitMs: appConfig.shutdown.graceMs, log: logKind });
     } catch (e) {
-      console.error(`[cli-host] utilityProcess 托管不可用，回退进程内：${e instanceof Error ? e.message : String(e)}`);
+      // 告警文本为 packaged-smoke.cjs 的 stderr 断言锚点，字面不可变；warn 级经 Logger 双写仍走 console.error/stderr
+      logger.log("warn", "cli-host", `utilityProcess 托管不可用，回退进程内：${e instanceof Error ? e.message : String(e)}`);
     }
   }
   return new AdapterRouter(
-    createDesktopAdapterFactory({ codexExe: appConfig.cliExe.codex, claudeExe: appConfig.cliExe.claude, opencodeExe: appConfig.cliExe.opencode, cacheDir: dataDir, log: (k, d) => console.error(`[cli-host:${k}] ${d}`) }),
+    createDesktopAdapterFactory({ codexExe: appConfig.cliExe.codex, claudeExe: appConfig.cliExe.claude, opencodeExe: appConfig.cliExe.opencode, cacheDir: dataDir, log: logKind }),
   );
 }
 
@@ -119,7 +130,17 @@ function pickDirectory(): Promise<string | null> {
 
 app.whenReady().then(async () => {
   // 二实例兜底：quit 已在模块顶层发起，但 ready 仍可能触发——此处直接返回，不初始化任何资源
+  //（含 #53 Logger：二实例不建日志文件、不注册崩溃兜底，保持「一次运行一份」与保留计数语义）
   if (!gotSingleInstanceLock) return;
+
+  // #53（spec #52 A 节）：Logger 创建 —— 二实例守卫后、config 加载前（启动早期 config 首写/DB/worker fork 异常可取证、
+  // 无就绪前缓冲）；先用默认参数（config 尚未加载），崩溃兜底同处注册；config 加载后经 start 应用最终参数并写启动横幅
+  const bootLogging = defaultConfig().logging;
+  logger = createLogger({
+    dir: join(app.getPath("userData"), "logs"),
+    logging: { ...bootLogging, level: resolveEffectiveLevel(bootLogging.level, process.env.KANBAN_LOG_LEVEL) },
+  });
+  registerCrashHandlers(process, logger, (code) => app.exit(code));
 
   // 配置初始化：当前项目 id 持久化在同一 JSON（spec J：不硬编码、落应用数据目录）
   const configPath = join(app.getPath("userData"), "config.json");
@@ -127,6 +148,22 @@ app.whenReady().then(async () => {
   if (!existsSync(configPath)) {
     saveConfig(configPath, appConfig);
   }
+
+  // #53（spec #52 D 节）：env 覆盖只进 effectiveLevel 不落 appConfig（M11：切换项目 saveConfig 全量写回不误持久化）；
+  // start 应用最终 logging 四项 + 按新 retainRuns 重跑清理 + 写启动横幅（正常路径严格首条 info）
+  const effectiveLevel = resolveEffectiveLevel(appConfig.logging.level, process.env.KANBAN_LOG_LEVEL);
+  logger.start({ ...appConfig.logging, level: effectiveLevel }, {
+    app: app.getName(),
+    electron: process.versions.electron,
+    node: process.versions.node,
+    chrome: process.versions.chrome,
+    platform: process.platform,
+    cliExeOverridden: {
+      codex: appConfig.cliExe.codex != null,
+      claude: appConfig.cliExe.claude != null,
+      opencode: appConfig.cliExe.opencode != null,
+    },
+  });
 
   // SQLite：打开应用数据目录下的数据库并按 C3 建五表（D2 冒烟已验证 node:sqlite 在 Electron 44 主进程可用）
   const db = openDatabase(join(app.getPath("userData"), "kanban.db"));
@@ -205,7 +242,7 @@ app.whenReady().then(async () => {
   );
 
   // 重开恢复编排（#13/spec H）：DB 中 status 非 disconnected 的结构化会话收养登记 disconnected（readHistory/resume 可续），PTY 统一断开
-  await adoptRestoredSessions({ adapter, sessions, log: (k, d) => console.error(`[kanban:${k}] ${d}`) });
+  await adoptRestoredSessions({ adapter, sessions, log: logKind });
 
   // PTY 宿主装配：平台能力注入（shell/CLI exe 覆盖来自 config，不硬编码）；事件出站过 schema 校验并转发 renderer，
   // started/exit 顺带落 sessions 状态（PTY 活=空闲徽标，退出=已断开徽标）
@@ -259,7 +296,7 @@ app.whenReady().then(async () => {
       }
     },
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-    log: (k, d) => console.error(`[kanban:${k}] ${d}`),
+    log: logKind,
   });
   app.on("before-quit", (event) => {
     if (shutdown.isShuttingDown()) return; // 序列已执行完毕，放行真实退出
@@ -288,6 +325,8 @@ app.whenReady().then(async () => {
       saveConfig(configPath, appConfig);
     },
     isShuttingDown: () => shutdown.isShuttingDown(),
+    // #53：入站校验失败/内部异常记统一日志（业务拒绝不记）
+    log: logger.log,
   };
 
   // 注册 IPC 处理器：app:getInfo 冒烟通道 + kanban:ipc 单通道路由（入站强制 zod 校验，spec E）
@@ -308,7 +347,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("kanban:ipc", (_event, raw: unknown) => handleIpc(deps, raw));
   // #31：memory:ipc 单通道（入站 zod 强制校验 + 业务拒绝 ok:false+reason，spec #27 H 节）
   ipcMain.handle("memory:ipc", (_event, raw: unknown) =>
-    handleMemoryIpc({ memory: memoryService, isShuttingDown: () => shutdown.isShuttingDown() }, raw),
+    handleMemoryIpc({ memory: memoryService, isShuttingDown: () => shutdown.isShuttingDown(), log: logger.log }, raw),
   );
   // #43：diff:ipc 单通道（spec #40 D 节；git exe 解析 = config gitExe 覆盖 → env → where，解析失败归 git-missing）
   // #47：三类截断上限来自 config.diff（采集字节/文件数/untracked 行数，超限置 truncated）
@@ -318,6 +357,7 @@ app.whenReady().then(async () => {
         projects,
         readWorkspaceDiff: (cwd) => readWorkspaceDiff(cwd, defaultGitDiffDeps(appConfig.gitExe, appConfig.diff), appConfig.diff),
         isShuttingDown: () => shutdown.isShuttingDown(),
+        log: logger.log,
       },
       raw,
     ),
@@ -367,10 +407,18 @@ app.whenReady().then(async () => {
         detect: detectResidueOnce,
         kill: (pids) => killResidue(residueDeps, pids),
         isShuttingDown: () => shutdown.isShuttingDown(),
+        log: logger.log,
       },
       raw,
     ),
   );
+
+  // #53（spec #52 H 节）：日志最小入口 Main 侧 —— getLogPath 返回当前启动主文件路径（currentFilePath=含横幅主文件，分片不对外）；
+  // openLogDir 用 shell.showItemInFolder 传主文件（在资源管理器中定位/选中该文件，M9：文案「打开」实现为定位）
+  ipcMain.handle("log:getPath", () => logger.currentFilePath);
+  ipcMain.handle("log:openDir", () => {
+    shell.showItemInFolder(logger.currentFilePath);
+  });
 
   createWindow();
 
@@ -380,7 +428,7 @@ app.whenReady().then(async () => {
       .then((list) => {
         if (list.length > 0) sendAppEvent({ type: "residue-detected", processes: list });
       })
-      .catch((e) => console.error(`[kanban:residue] 检测失败：${e instanceof Error ? e.message : String(e)}`));
+      .catch((e) => logger.child("residue").log("error", `检测失败：${e instanceof Error ? e.message : String(e)}`));
   });
 });
 
@@ -391,7 +439,7 @@ function loadResidueSeed(seedPath: string | undefined): ResidueProcess[] | null 
     const raw = JSON.parse(readFileSync(seedPath, "utf8")) as unknown[];
     return raw.filter((r): r is ResidueProcess => residueProcessSchema.safeParse(r).success);
   } catch (e) {
-    console.error(`[kanban:residue] 种子文件不可读（${seedPath}）：${e instanceof Error ? e.message : String(e)}`);
+    logger.child("residue").log("error", `种子文件不可读（${seedPath}）：${e instanceof Error ? e.message : String(e)}`);
     return null;
   }
 }

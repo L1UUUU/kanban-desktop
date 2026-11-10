@@ -9,6 +9,7 @@ import { TrackerEngine, type TrackerChange } from "@kanban/tracker";
 import { openDatabase } from "./db";
 import { handleDiffIpc, handleIpc, type DiffIpcDeps, type IpcDeps } from "./ipc";
 import { openMemoryService } from "./memory-service";
+import type { LogFn, LogLevel } from "./logger";
 import type { PtyHost } from "./pty-host";
 import { ProjectStore } from "./project-store";
 import { SessionStore } from "./session-store";
@@ -204,6 +205,82 @@ describe("Main 入站强制校验", () => {
     const ghostResume = await handle({ channel: "session:resume", sessionId: "ghost" });
     expect(ghostResume.ok).toBe(false);
     if (!ghostResume.ok) expect(ghostResume.error.code).toBe("E_SESSION_NOT_FOUND");
+  });
+
+  it("装配夹具不传 log（可选成员）零回归（#53：缺省 no-op）", async () => {
+    const { handle } = makeRouter();
+    const res = await handle({ channel: "project:list" });
+    expect(res.ok).toBe(true);
+  });
+});
+
+describe("IPC 通道诊断日志（#53 spec #52 G 节：safeParse 失败与 catch 记 error、业务拒绝不记；error.code 原样不造新码）", () => {
+  /** 收集日志条目的 spy */
+  function spyLog(): { log: LogFn; entries: Array<{ level: LogLevel; scope: string; message: string }> } {
+    const entries: Array<{ level: LogLevel; scope: string; message: string }> = [];
+    return { log: (level, scope, message) => entries.push({ level, scope, message }), entries };
+  }
+
+  it("kanban:ipc safeParse 失败记一条 error（含 E_SCHEMA 原码）；返回形状不变", async () => {
+    const spy = spyLog();
+    const deps: IpcDeps = { ...makeDeps(new FakeAdapter({ clock: new VirtualClock() })), log: spy.log };
+    const res = await handleIpc(deps, { channel: "session:nuke" });
+    expect(res).toMatchObject({ ok: false, error: { code: "E_SCHEMA" } });
+    expect(spy.entries).toHaveLength(1);
+    expect(spy.entries[0]).toMatchObject({ level: "error", scope: "kanban:ipc" });
+    expect(spy.entries[0].message).toContain("E_SCHEMA");
+  });
+
+  it("kanban:ipc route 抛错（非 AdapterError）记一条 error（E_INTERNAL 原码）并保持既有收敛形状", async () => {
+    const spy = spyLog();
+    const base = new FakeAdapter({ clock: new VirtualClock() });
+    const adapter = { ...base, sendTurn: async () => { throw new Error("adapter 内部爆炸"); } } as unknown as CliAdapter;
+    const deps: IpcDeps = { ...makeDeps(adapter), log: spy.log };
+    const res = await handleIpc(deps, { channel: "session:send", sessionId: "s-1", text: "hi" });
+    expect(res).toMatchObject({ ok: false, error: { code: "E_INTERNAL" } });
+    expect(spy.entries).toHaveLength(1);
+    expect(spy.entries[0].level).toBe("error");
+    expect(spy.entries[0].message).toContain("E_INTERNAL");
+    expect(spy.entries[0].message).toContain("adapter 内部爆炸");
+  });
+
+  it("kanban:ipc 业务拒绝（E_SESSION_NOT_FOUND 的 ok:false 返回）不记日志", async () => {
+    const spy = spyLog();
+    const deps: IpcDeps = { ...makeDeps(new FakeAdapter({ clock: new VirtualClock() })), log: spy.log };
+    const res = await handleIpc(deps, { channel: "terminal:write", terminalId: "t-404", data: "x" });
+    expect(res).toMatchObject({ ok: false, error: { code: "E_SESSION_NOT_FOUND" } });
+    expect(spy.entries).toHaveLength(0);
+  });
+
+  it("diff:ipc safeParse 失败记一条 error（E_SCHEMA 原码）", async () => {
+    const spy = spyLog();
+    const db = openDatabase(":memory:");
+    const projects = new ProjectStore(db);
+    const handle = (raw: unknown) =>
+      handleDiffIpc({ projects, readWorkspaceDiff: (async () => ({ ok: true, files: [], truncated: false })) as DiffIpcDeps["readWorkspaceDiff"], log: spy.log }, raw);
+    const res = await handle({ channel: "diff:get", projectId: "" });
+    expect(res).toMatchObject({ ok: false, error: { code: "E_SCHEMA" } });
+    expect(spy.entries).toHaveLength(1);
+    expect(spy.entries[0]).toMatchObject({ level: "error", scope: "diff:ipc" });
+    expect(spy.entries[0].message).toContain("E_SCHEMA");
+  });
+
+  it("diff:ipc readWorkspaceDiff 抛错：记一条 error 后原样 rethrow（不改既有传播行为）", async () => {
+    const spy = spyLog();
+    const db = openDatabase(":memory:");
+    const projects = new ProjectStore(db);
+    const repoDir = join(tmpRoot || (tmpRoot = mkdtempSync(join(tmpdir(), "kb-diff-log-"))), "repo");
+    mkdirSync(repoDir, { recursive: true });
+    const { project } = projects.register(repoDir);
+    const handle = (raw: unknown) =>
+      handleDiffIpc(
+        { projects, readWorkspaceDiff: (async () => { throw new Error("git died"); }) as DiffIpcDeps["readWorkspaceDiff"], log: spy.log },
+        raw,
+      );
+    await expect(handle({ channel: "diff:get", projectId: project.id })).rejects.toThrow("git died");
+    expect(spy.entries).toHaveLength(1);
+    expect(spy.entries[0].level).toBe("error");
+    expect(spy.entries[0].message).toContain("git died");
   });
 });
 
