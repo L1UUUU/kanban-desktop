@@ -31,6 +31,7 @@ const PERM_CHIP_CLS: Record<PermMode, string> = {
   full: "text-muted-foreground border-border",
 };
 
+// 用途：composer 模型下拉候选项（当前为固定选项；「默认模型」= 不指定，由后端按各 CLI 探测链自选）
 const MODELS = ["默认模型", "gpt-5.6-luna"];
 
 export interface ComposerActions {
@@ -93,7 +94,7 @@ export function Composer({ session, actions }: { session: SessionView; actions: 
               </div>
             ) : null}
           </span>
-          {/* 模型选择（演示值；真实模型列表来自各 CLI） */}
+          {/* 模型选择：选定值随新建会话下发，作用于该会话（已建会话不动态改模型） */}
           <select
             aria-label="模型选择"
             className="h-7 cursor-pointer rounded-full border border-border bg-transparent px-3 text-xs text-muted-foreground hover:border-primary hover:text-foreground"

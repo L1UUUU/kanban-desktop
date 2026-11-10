@@ -382,6 +382,38 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("gpt-5.6-luna");
   });
 
+  it("composer 模型选择：选定值随新建会话下发，默认模型占位不下发", async () => {
+    const seen: IpcRequest[] = [];
+    const base = makeTransport(new FakeAdapter({ clock: new VirtualClock() }));
+    const spy: ChatTransport = { ...base, invoke: (req) => { seen.push(req); return base.invoke(req); } };
+    const t = mount(spy);
+    await t.flush();
+    const creates = () => seen.filter((r) => r.channel === "session:create") as Array<IpcRequest & { model?: string; title?: string }>;
+    // 启动演示会话用默认模型：占位值不下发（后端按各 CLI 探测链自选）
+    const boot = creates().find((r) => r.title === "演示会话 · Fake");
+    expect(boot, "启动演示会话应存在").toBeTruthy();
+    expect(boot!.model, "默认模型为占位值，不下发").toBeUndefined();
+
+    // 选具体模型 → 新建会话：随 session:create 下发，且新会话 composer 回显该值
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "gpt-5.6-luna" } });
+    await act(async () => {
+      await t.ctl().createSession("fake", { cwd: DEMO_CWD, title: "带模型的会话" });
+    });
+    const withModel = creates().find((r) => r.title === "带模型的会话");
+    expect(withModel, "新建会话应发出 session:create").toBeTruthy();
+    expect(withModel!.model).toBe("gpt-5.6-luna");
+    expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("gpt-5.6-luna");
+
+    // 切回默认模型 → 再新建：占位值仍不下发
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "默认模型" } });
+    await act(async () => {
+      await t.ctl().createSession("fake", { cwd: DEMO_CWD, title: "默认模型会话" });
+    });
+    const withoutModel = creates().find((r) => r.title === "默认模型会话");
+    expect(withoutModel, "默认模型会话应发出 session:create").toBeTruthy();
+    expect(withoutModel!.model).toBeUndefined();
+  });
+
   it("composer：OpenCode 会话明示权限档位为 server 级（同项目共享）；其他 CLI 无此说明（spec B UI 明示）", async () => {
     const t = mount();
     await t.flush();

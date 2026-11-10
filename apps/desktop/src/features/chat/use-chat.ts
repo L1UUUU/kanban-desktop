@@ -197,12 +197,17 @@ export async function createCliSession(
   cli: CliKind,
   opts: CreateSessionOptions,
 ): Promise<void> {
+  // 模型：继承当前激活会话在 composer 的选定值；「默认模型」是 UI 占位串，不下发（后端按各 CLI 探测链自选）
+  const activeId = store.getSnapshot().activeId;
+  const selected = (activeId ? store.getSession(activeId)?.model : undefined) ?? DEFAULT_MODEL;
+  const model = selected === DEFAULT_MODEL ? undefined : selected;
   const r = await transport.invoke({
     channel: "session:create",
     cli,
     cwd: opts.cwd,
     projectId: opts.projectId ?? undefined,
     title: opts.title,
+    ...(model ? { model } : {}),
     permMode: opts.permMode ?? "auto",
     requirementId: opts.requirementId,
   });
@@ -218,7 +223,7 @@ export async function createCliSession(
       cli: r.cli ?? cli,
       title: r.title ?? opts.title ?? `新会话 · ${cli}`,
       permMode: opts.permMode ?? "auto",
-      model: DEFAULT_MODEL,
+      model: selected,
       projectId: opts.projectId ?? null,
       cwd: opts.cwd,
       dirIdentity: r.dirIdentity ?? "none",
