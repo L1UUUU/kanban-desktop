@@ -69,7 +69,7 @@ export function useKanban(transport: ChatTransport | null): KanbanController {
     async (projectId: string, title?: string) => {
       if (!transport) return;
       const r = await transport.invoke({ channel: "kanban:create", projectId, ...(title ? { title } : {}) });
-      if (!r.ok) console.error("[kanban] 建卡失败", r.error);
+      if (!r.ok) window.api?.log?.("error", "kanban", "建卡失败", { code: r.error.code, message: r.error.message, projectId });
     },
     [transport],
   );
@@ -78,7 +78,7 @@ export function useKanban(transport: ChatTransport | null): KanbanController {
     async (requirementId: string, title: string) => {
       if (!transport) return;
       const r = await transport.invoke({ channel: "kanban:rename", requirementId, title });
-      if (!r.ok) console.error("[kanban] 重命名失败", r.error);
+      if (!r.ok) window.api?.log?.("error", "kanban", "重命名失败", { code: r.error.code, message: r.error.message, requirementId });
     },
     [transport],
   );
@@ -87,7 +87,7 @@ export function useKanban(transport: ChatTransport | null): KanbanController {
     async (requirementId: string, stage: KanbanStageInput) => {
       if (!transport) return;
       const r = await transport.invoke({ channel: "kanban:setStage", requirementId, stage });
-      if (!r.ok) console.error("[kanban] 阶段修正失败", r.error);
+      if (!r.ok) window.api?.log?.("error", "kanban", "阶段修正失败", { code: r.error.code, message: r.error.message, requirementId, stage });
     },
     [transport],
   );
@@ -96,7 +96,7 @@ export function useKanban(transport: ChatTransport | null): KanbanController {
     async (requirementId: string) => {
       if (!transport) return;
       const r = await transport.invoke({ channel: "kanban:delete", requirementId });
-      if (!r.ok) console.error("[kanban] 删除需求失败", r.error);
+      if (!r.ok) window.api?.log?.("error", "kanban", "删除需求失败", { code: r.error.code, message: r.error.message, requirementId });
     },
     [transport],
   );
@@ -117,7 +117,7 @@ export function useKanban(transport: ChatTransport | null): KanbanController {
     async (sessionId: string) => {
       if (!transport) return;
       const r = await transport.invoke({ channel: "kanban:unlink", sessionId });
-      if (!r.ok) console.error("[kanban] 解除关联失败", r.error);
+      if (!r.ok) window.api?.log?.("error", "kanban", "解除关联失败", { code: r.error.code, message: r.error.message, sessionId });
     },
     [transport],
   );

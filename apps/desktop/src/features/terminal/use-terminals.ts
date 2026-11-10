@@ -53,7 +53,11 @@ export function useTerminals(transport: ChatTransport | null, chat: ChatControll
         });
         if (r.ok && r.sessionId) {
           // #20：卡片建终端的自动关联由 Main 原子完成（session_linked 推送回流看板 store）；拒绝仅报告不阻断终端
-          if (r.linked === false) console.error("[kanban] 终端创建后自动关联被拒绝", r.reason);
+          if (r.linked === false)
+            window.api?.log?.("error", "terminal", "终端创建后自动关联被拒绝", {
+              sessionId: r.sessionId,
+              ...(r.reason ? { reason: r.reason } : {}),
+            });
           chat.store.registerSession({
             sessionId: r.sessionId,
             cli: "pty",
@@ -66,7 +70,7 @@ export function useTerminals(transport: ChatTransport | null, chat: ChatControll
             worktreeName: r.worktreeName ?? null,
           });
         } else if (!r.ok) {
-          console.error("[kanban] 终端创建失败", r.error);
+          window.api?.log?.("error", "terminal", "终端创建失败", { code: r.error.code, message: r.error.message });
         }
       },
       kill: (terminalId) => {

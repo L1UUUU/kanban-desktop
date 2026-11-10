@@ -117,6 +117,15 @@ describe("按启动建文件与首条写入（验收 4）", () => {
     expect(b.fs.files.has(join(DIR, `20260102-030406-${PID}.jsonl`))).toBe(true);
   });
 
+  it("#55：可选 source 参数写入条目来源（renderer/worker 经 Main 入口强制传入），缺省仍为 main", () => {
+    const { fs, logger } = bench();
+    logger.log("warn", "chat", "来自 renderer 的条目", { sessionId: "run-1" }, "renderer");
+    logger.log("warn", "cli-host", "来自 worker 的条目", undefined, "worker");
+    logger.log("warn", "main", "未声明来源的条目");
+    const sources = readEntries(fs, MAIN).map((e) => e.source);
+    expect(sources).toEqual(["renderer", "worker", "main"]);
+  });
+
   it("currentFilePath 指向主文件（getLogPath/openLogDir 数据源；分片不作为对外路径）", () => {
     const { logger } = bench();
     expect(logger.currentFilePath).toBe(MAIN);

@@ -32,6 +32,7 @@ import { CliHostClient } from "./cli-host-client";
 import { SQLITE_ENTRY, openDatabase } from "./db";
 import { handleIpc, handleDiffIpc, handleMemoryIpc, handleResidueIpc, TRACKER_CLI_BY_APP, type IpcDeps } from "./ipc";
 import { defaultGitDiffDeps, readWorkspaceDiff } from "./git-diff-service";
+import { handleLogWrite } from "./log-write";
 import { createLogger, registerCrashHandlers, resolveKindLog, type Logger } from "./logger";
 import { openMemoryService } from "./memory-service";
 import { createPtyHost } from "./pty-host";
@@ -427,6 +428,10 @@ app.whenReady().then(async () => {
   ipcMain.handle("log:openDir", () => {
     shell.showItemInFolder(logger.currentFilePath);
   });
+
+  // #55（spec #52 B/C 节）：Renderer 日志单向通道（全仓首个 ipcMain.on send 形态）——
+  // fire-and-forget 无回执；入站 safeParse 失败丢弃记 warn、source 强制 renderer、ts 由 Logger 生成
+  ipcMain.on("log:write", (_event, raw: unknown) => handleLogWrite(logger, raw));
 
   createWindow();
 

@@ -123,7 +123,7 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
         // cwd 必须显式携带，或（仅 fake）回落注入的演示目录；真实 CLI 缺 cwd 直接拒绝，不以任何隐式路径创建
         const resolved = opts ?? (cli === "fake" && demoCwd ? { cwd: demoCwd } : null);
         if (!resolved) {
-          console.error("[kanban] 会话创建失败：缺少 cwd（真实会话须挂已注册项目，演示目录未注入）");
+          window.api?.log?.("error", "chat", "会话创建失败：缺少 cwd（真实会话须挂已注册项目，演示目录未注入）");
           return;
         }
         await createCliSession(transport, store, cli, resolved);
@@ -148,12 +148,15 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
         const r = await transport.invoke({ channel: "session:readHistory", sessionId });
         if (!r.ok) {
           store.markResumeFailed(sessionId, r.error.code, r.error.message);
+          // #55（spec #52 G 节）：恢复失败留痕（带会话标识；jsdom 无桥可选链降级）
+          window.api?.log?.("error", "chat", "会话恢复失败（readHistory）", { sessionId, code: r.error.code, message: r.error.message });
           return;
         }
         store.applySnapshot(sessionId, r.events ?? []);
         const r2 = await transport.invoke({ channel: "session:resume", sessionId });
         if (!r2.ok) {
           store.markResumeFailed(sessionId, r2.error.code, r2.error.message);
+          window.api?.log?.("error", "chat", "会话恢复失败（resume）", { sessionId, code: r2.error.code, message: r2.error.message });
         }
       },
     };
@@ -205,7 +208,11 @@ export async function createCliSession(
   });
   if (r.ok && r.sessionId) {
     // #20：卡片建会话的自动关联由 Main 原子完成（session_linked 推送回流看板 store）；拒绝仅报告不阻断会话
-    if (r.linked === false) console.error("[kanban] 会话创建后自动关联被拒绝", r.reason);
+    if (r.linked === false)
+      window.api?.log?.("error", "chat", "会话创建后自动关联被拒绝", {
+        sessionId: r.sessionId,
+        ...(r.reason ? { reason: r.reason } : {}),
+      });
     store.registerSession({
       sessionId: r.sessionId,
       cli: r.cli ?? cli,
@@ -221,6 +228,15 @@ export async function createCliSession(
     });
   } else if (!r.ok) {
     // #46：创建失败无会话视图可挂——记录到 store（侧栏创建入口错误卡呈现，携带原参数供「重试创建」；spec #40 F1）
+    // #55（spec #52 G 节）：创建失败留痕（带会话标识与关键参数；requirementId 可选键条件携带，防 ctx 出现 undefined）
+    window.api?.log?.("error", "chat", "会话创建失败", {
+      cli,
+      code: r.error.code,
+      message: r.error.message,
+      cwd: opts.cwd,
+      projectId: opts.projectId ?? null,
+      ...(opts.requirementId ? { requirementId: opts.requirementId } : {}),
+    });
     store.setCreateFailure({
       cli,
       code: r.error.code,

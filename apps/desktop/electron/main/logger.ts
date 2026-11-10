@@ -21,7 +21,7 @@ export interface LoggingConfig {
   maxMessageChars: number;
 }
 
-/** 条目来源三枚举（spec #52 C 节）：由 Main 按入口强制写入——直接调用=main、worker {log} 分派/进程内 CLI stderr=worker、renderer 桥=renderer */
+/** 条目来源三枚举（spec #52 C 节 / #55）：由 Main 按入口强制写入——直接调用=main、worker {log} 分派/进程内 CLI stderr=worker、renderer 桥=renderer；与 @kanban/ipc-schema LOG_SOURCES 同枚举 */
 export type LogSource = "main" | "worker" | "renderer";
 
 /** 条目附加上下文：标量 Record（嵌套对象/函数不收，防把 ChatEvent/聊天正文带进日志，spec #52 C 节 N14） */
@@ -79,7 +79,7 @@ export interface LoggerOptions {
 }
 
 export interface Logger {
-  /** 写一条日志：级别过滤 → 截断 → JSONL 落盘 + 控制台纯文本双写（source 由调用入口强制：缺省 main，worker/renderer 由对应装配入口显式传入，不信上游自报） */
+  /** 写一条日志：级别过滤 → 截断 → JSONL 落盘 + 控制台纯文本双写（source 缺省 main；worker/renderer 条目由对应 Main 装配入口强制传入，不信上游自报） */
   log(level: LogLevel, scope: string, message: string, ctx?: LogCtx, source?: LogSource): void;
   /** 派生固定 scope 的子记录器 */
   child(scope: string): ScopedLogger;
