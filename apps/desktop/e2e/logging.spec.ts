@@ -6,9 +6,10 @@
 // 分片按 <pid> 前缀合并全部 .1/.2 再按到达顺序读取（M9：分片属同次运行续写）。
 import { test, expect, _electron, type ElectronApplication, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { readRunEntries, runPrefixOf, type LogEntry } from "./log-run";
 
 const PROJECT_NAME = "kb-logging";
 
@@ -17,16 +18,6 @@ const SHOT_DIR = resolve(__dirname, "../../../docs/acceptance/logging");
 
 /** run-once 假 exe：Windows 自带 where.exe，对 claude headless 参数（-p --session-id <uuid>）必然写 stderr 且非零退出（本地化文本不定，断言只认 run-once[ 前缀） */
 const FAKE_CLAUDE_EXE = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "where.exe");
-
-/** JSONL 条目读取形状（logger.ts 落盘格式；ts 为 Main 生成 ISO 串） */
-interface Entry {
-  ts: string;
-  level: "error" | "warn" | "info" | "debug";
-  source: "main" | "worker" | "renderer";
-  scope: string;
-  message: string;
-  ctx?: Record<string, string | number | boolean | null>;
-}
 
 /** 建隔离 fixture：独立 userData + 伪 git 主仓库目录 */
 function makeFixture(): { userData: string; repoDir: string; repoRoot: string } {
@@ -72,36 +63,8 @@ function mainPid(app: ElectronApplication): Promise<number> {
   return app.evaluate(() => process.pid);
 }
 
-/** 读指定启动组（<pid> 前缀）全部日志条目：主文件 + .1/.2 分片按序拼接（N17/M9；写入口径 = 到达顺序） */
-function readRunEntries(userData: string, pid: number): Entry[] {
-  const dir = join(userData, "logs");
-  if (!existsSync(dir)) return [];
-  const names = readdirSync(dir).filter((n) => new RegExp(`^\\d{8}-\\d{6}-${pid}\\.jsonl(?:\\.\\d+)?$`).test(n));
-  const ordered = [`${prefixOf(names, pid)}.jsonl`, `${prefixOf(names, pid)}.jsonl.1`, `${prefixOf(names, pid)}.jsonl.2`].filter((n) => names.includes(n));
-  const entries: Entry[] = [];
-  for (const name of ordered) {
-    for (const line of readFileSync(join(dir, name), "utf8").split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        entries.push(JSON.parse(trimmed) as Entry);
-      } catch {
-        // 追加写入中途读到的半行：跳过（下一轮轮询补全）
-      }
-    }
-  }
-  return entries;
-}
-
-/** 取该 pid 启动组文件名前缀（YYYYMMDD-HHmmss-<pid>） */
-function prefixOf(names: string[], pid: number): string {
-  const main = names.find((n) => new RegExp(`^\\d{8}-\\d{6}-${pid}\\.jsonl$`).test(n));
-  const any = names.find((n) => n.includes(`-${pid}.jsonl`));
-  return (main ?? any ?? "").replace(/\.jsonl.*$/, "");
-}
-
-/** 轮询等待条目出现（fire-and-forget renderer 条目 / 异步提取批次需要等落盘） */
-async function waitForEntry(userData: string, pid: number, predicate: (e: Entry) => boolean, timeoutMs = 15_000): Promise<Entry> {
+/** 轮询等待条目出现（fire-and-forget renderer 条目 / 异步提取批次需要等落盘；读档口径见 ./log-run） */
+async function waitForEntry(userData: string, pid: number, predicate: (e: LogEntry) => boolean, timeoutMs = 15_000): Promise<LogEntry> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const hit = readRunEntries(userData, pid).find(predicate);
@@ -345,10 +308,10 @@ test("验收 7：浮层两项展开态截图 + getLogPath 返回含横幅主文�
       if (!api) throw new Error("window.api 不可用");
       return api.getLogPath();
     });
-    expect(logPath).toBe(join(userData, "logs", `${prefixOf(readdirSync(join(userData, "logs")), pid)}.jsonl`));
+    expect(logPath).toBe(join(userData, "logs", `${runPrefixOf(readdirSync(join(userData, "logs")), pid)}.jsonl`));
     expect(/^[0-9]{8}-[0-9]{6}-\d+\.jsonl$/.test(logPath.split(/[\\/]/).pop() ?? "")).toBe(true);
     const firstLine = readFileSync(logPath, "utf8").split("\n", 1)[0];
-    expect((JSON.parse(firstLine) as Entry).message).toBe("启动横幅");
+    expect((JSON.parse(firstLine) as LogEntry).message).toBe("启动横幅");
 
     // openLogDir：invoke 成功（Main 侧 shell.showItemInFolder 传主文件，在资源管理器中定位/选中）
     const opened = await win.evaluate(async () => {

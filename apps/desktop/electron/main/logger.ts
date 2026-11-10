@@ -1,10 +1,11 @@
 // 用途：Main 侧唯一日志深模块（spec #52 A 节）—— 级别过滤、单条截断、JSONL 落盘、控制台纯文本双写、按启动建文件、启动横幅、大小切分、保留清理、写失败自保护与崩溃兜底；四来源（Main/worker/Renderer/CLI stderr）诊断事件唯一汇聚点
 import { mkdirSync, appendFileSync, existsSync, readdirSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import { LOG_LEVELS, type LogCtx, type LogLevel, type LogSource } from "@kanban/ipc-schema";
 
-/** 日志级别四枚举（spec #52 Q4：error/warn/info/debug，默认 info） */
-export const LOG_LEVELS = ["error", "warn", "info", "debug"] as const;
-export type LogLevel = (typeof LOG_LEVELS)[number];
+// 枚举与 ctx 类型单源（main→ipc-schema，方向先例 log-write.ts）：@kanban/ipc-schema 是 wire 契约唯一来源，此处 re-export 维持 main 内既有 import 路径
+export { LOG_LEVELS };
+export type { LogCtx, LogLevel, LogSource };
 
 /** 级别严重度序（数值越小越严重；条目级别 ≤ 生效级别才记录） */
 const LEVEL_ORDER: Record<LogLevel, number> = { error: 0, warn: 1, info: 2, debug: 3 };
@@ -17,15 +18,9 @@ export interface LoggingConfig {
   maxFileBytes: number;
   /** 保留的最近启动组数（主文件+分片一起清理） */
   retainRuns: number;
-  /** 单条消息字符上限（超出截断，防大段 CLI 输出冲爆文件） */
+  /** 单条字符上限（message 与 ctx 各字符串值超出截断，防大段 CLI 输出冲爆文件） */
   maxMessageChars: number;
 }
-
-/** 条目来源三枚举（spec #52 C 节 / #55）：由 Main 按入口强制写入——直接调用=main、worker {log} 分派/进程内 CLI stderr=worker、renderer 桥=renderer；与 @kanban/ipc-schema LOG_SOURCES 同枚举 */
-export type LogSource = "main" | "worker" | "renderer";
-
-/** 条目附加上下文：标量 Record（嵌套对象/函数不收，防把 ChatEvent/聊天正文带进日志，spec #52 C 节 N14） */
-export type LogCtx = Record<string, string | number | boolean | null>;
 
 /** 单条日志写入函数形状（Logger.log 的独立引用形态；ipc/adapter-events 等 deps 注入用） */
 export type LogFn = (level: LogLevel, scope: string, message: string, ctx?: LogCtx) => void;
@@ -219,10 +214,14 @@ export function createLogger(options: LoggerOptions): Logger {
   const logger: Logger = {
     log(level, scope, message, ctx, source) {
       if (LEVEL_ORDER[level] > LEVEL_ORDER[logging.level]) return; // 级别过滤（文件与控制台同口径）
-      const truncated =
-        message.length > logging.maxMessageChars ? message.slice(0, logging.maxMessageChars) : message;
-      const entry: LogEntry = { ts: now().toISOString(), level, source: source ?? "main", scope, message: truncated };
-      if (ctx && Object.keys(ctx).length > 0) entry.ctx = ctx;
+      // 单条截断（US11）：message 与 ctx 各字符串值同口径按 maxMessageChars 截断（数值/布尔原样），防大段输出冲爆文件
+      const truncate = (s: string): string => (s.length > logging.maxMessageChars ? s.slice(0, logging.maxMessageChars) : s);
+      const entry: LogEntry = { ts: now().toISOString(), level, source: source ?? "main", scope, message: truncate(message) };
+      if (ctx && Object.keys(ctx).length > 0) {
+        const ctxOut: LogCtx = {};
+        for (const [k, v] of Object.entries(ctx)) ctxOut[k] = typeof v === "string" ? truncate(v) : v;
+        entry.ctx = ctxOut;
+      }
       writeEntry(entry);
     },
     child(scope) {
@@ -259,8 +258,8 @@ export interface CrashTarget {
 }
 
 /**
- * Main 崩溃兜底（spec #52 F 节）：未捕获异常/未处理 rejection 各记一条 error；
- * uncaughtException 记录后按既有崩溃语义退出（exit 注入，生产传 app.exit）；unhandledRejection 记录后放行（既有非致命语义）。
+ * Main 崩溃兜底（spec #52 F 节）：未捕获异常/未处理 rejection 各记一条 error 后按既有崩溃语义退出（exit 注入，生产传 app.exit）。
+ * unhandledRejection 与 uncaughtException 同口径：基线（引入本模块前）无任何 process.on 处理器，Node≥15/Electron 默认将未处理 rejection 升格为未捕获异常致进程退出，兜底只补取证不改变致命性。
  * 仅首实例注册（装配层在二实例守卫 return 之后调用）。
  */
 export function registerCrashHandlers(target: CrashTarget, logger: Pick<Logger, "log">, exit: (code: number) => void): void {
@@ -271,6 +270,7 @@ export function registerCrashHandlers(target: CrashTarget, logger: Pick<Logger, 
   });
   target.on("unhandledRejection", (reason) => {
     logger.log("error", "crash", `未处理 Promise rejection：${describe(reason)}`);
+    exit(1);
   });
 }
 

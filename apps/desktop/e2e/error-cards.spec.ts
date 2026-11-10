@@ -2,38 +2,12 @@
 // 四类 + 未知兜底卡呈现与动作流转（重试重发 / 打开 PTY 终端 / 恢复会话 / 知道了）+ spawn 创建失败侧栏卡（KANBAN_FAKE_CREATE_FAIL_FIRST 注入，重试创建成功收敛）
 // + #56（spec #52 验收 2 C 类）：spawn 失败日志留痕断言（E_SPAWN_NOT_FOUND + kind/cli 关联标识）
 import { test, expect, _electron, type ElectronApplication, type Page } from "@playwright/test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readRunEntries } from "./log-run";
 
 const PROJECT_NAME = "kb-errcard";
-
-/** 日志条目读取形状（#56：logger.ts 落盘 JSONL 格式） */
-interface LogEntry {
-  level: "error" | "warn" | "info" | "debug";
-  source: "main" | "worker" | "renderer";
-  scope: string;
-  message: string;
-  ctx?: Record<string, string | number | boolean | null>;
-}
-
-/** 读指定启动组（<pid> 前缀，含 .1/.2 分片按序合并）全部日志条目（#56 N17/M9：同 userData 多次 launch 只读本组，禁跨启动拼接） */
-function readRunEntries(userData: string, pid: number): LogEntry[] {
-  const dir = join(userData, "logs");
-  if (!existsSync(dir)) return [];
-  const prefix = readdirSync(dir)
-    .map((n) => /^(\d{8}-\d{6}-\d+)\.jsonl/.exec(n)?.[1])
-    .find((p) => p?.endsWith(`-${pid}`));
-  if (!prefix) return [];
-  const names = readdirSync(dir).filter((n) => n === `${prefix}.jsonl` || n === `${prefix}.jsonl.1` || n === `${prefix}.jsonl.2`);
-  const entries: LogEntry[] = [];
-  for (const name of names) {
-    for (const line of readFileSync(join(dir, name), "utf8").split("\n")) {
-      if (line.trim()) entries.push(JSON.parse(line) as LogEntry);
-    }
-  }
-  return entries;
-}
 
 /** 建隔离 fixture：独立 userData + 伪 git 主仓库目录 */
 function makeFixture(): { userData: string; repoDir: string; repoRoot: string } {

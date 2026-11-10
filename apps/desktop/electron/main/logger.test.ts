@@ -183,6 +183,13 @@ describe("单条截断（验收 5，spec Q8/US11）", () => {
     const entries = readEntries(fs, MAIN);
     expect(entries[entries.length - 1].message).toBe("abcd");
   });
+
+  it("ctx 各字符串值同样按 maxMessageChars 截断（单条日志整体按上限截断，#53 AC/US11）；数值/布尔原样", () => {
+    const { fs, logger } = bench({ maxMessageChars: 10 });
+    logger.log("warn", "cli-host", "m", { detail: "0123456789ABCDEF", attempt: 3, ok: false });
+    const [entry] = readEntries(fs, MAIN);
+    expect(entry.ctx).toEqual({ detail: "0123456789", attempt: 3, ok: false });
+  });
 });
 
 describe("控制台纯文本双写（验收 4/spec US17）", () => {
@@ -198,10 +205,10 @@ describe("控制台纯文本双写（验收 4/spec US17）", () => {
 
   it("ctx 落盘为标量 Record；空 ctx 不落键", () => {
     const { fs, logger } = bench();
-    logger.log("error", "s", "m", { sessionId: "s-1", retry: 2, ok: false, extra: null });
+    logger.log("error", "s", "m", { sessionId: "s-1", retry: 2, ok: false });
     logger.log("info", "s", "m2", {});
     const entries = readEntries(fs, MAIN);
-    expect(entries[0].ctx).toEqual({ sessionId: "s-1", retry: 2, ok: false, extra: null });
+    expect(entries[0].ctx).toEqual({ sessionId: "s-1", retry: 2, ok: false });
     expect(entries[1].ctx).toBeUndefined();
   });
 });
@@ -394,7 +401,7 @@ describe("Main 崩溃兜底（验收 8，spec F 节/Q10）", () => {
     expect(exit).toHaveBeenCalledWith(1);
   });
 
-  it("unhandledRejection：记一条 error 后放行（既有非致命语义），不退出、不二次抛出", () => {
+  it("unhandledRejection：记一条 error 后退出（对齐 uncaughtException；基线无处理器时 Node≥15/Electron 默认升格为未捕获异常退出），exit(1)、不二次抛出", () => {
     const { handlers, target } = fakeTarget();
     const logged: Array<{ level: string; message: string }> = [];
     const exit = vi.fn<(code: number) => void>();
@@ -403,7 +410,7 @@ describe("Main 崩溃兜底（验收 8，spec F 节/Q10）", () => {
     expect(logged).toHaveLength(1);
     expect(logged[0].level).toBe("error");
     expect(logged[0].message).toContain("rejected");
-    expect(exit).not.toHaveBeenCalled();
+    expect(exit).toHaveBeenCalledWith(1);
   });
 });
 

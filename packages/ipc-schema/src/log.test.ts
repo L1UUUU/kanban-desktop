@@ -1,4 +1,4 @@
-// 用途：日志 wire 契约密封单测（#55 spec #52 C 节）—— logLevelSchema/logEntrySchema 往返、ctx 标量校验（嵌套丢弃）、scope 边界、message 无长度上限（N12：截断只在 Logger 按 config 生效）
+// 用途：日志 wire 契约密封单测（#55 spec #52 C 节）—— logLevelSchema/logEntrySchema 往返、ctx 逐键标量剥离（嵌套对象丢弃 = 逐键剥、条目保留）、scope 边界、message 无长度上限（N12：截断只在 Logger 按 config 生效）
 import { describe, expect, it } from "vitest";
 import { logCtxSchema, logEntrySchema, logLevelSchema, logSourceSchema, type LogEntryWire } from "./log";
 
@@ -9,7 +9,7 @@ const validInput: LogEntryWire = {
   scope: "chat",
   message: "会话创建后自动关联被拒绝",
   ts: 1762748400000,
-  ctx: { sessionId: "run-1", attempt: 2, ok: false, detail: null },
+  ctx: { sessionId: "run-1", attempt: 2, ok: false },
 };
 
 describe("logLevelSchema / logSourceSchema 枚举", () => {
@@ -35,9 +35,14 @@ describe("logEntrySchema 往返与边界", () => {
     expect(logEntrySchema.parse(noCtx)).toEqual(noCtx);
   });
 
-  it("ctx 嵌套对象/数组被拒绝（标量校验生效，嵌套到不了日志）", () => {
-    expect(() => logEntrySchema.parse({ ...validInput, ctx: { error: { code: "E_X" } } })).toThrow();
-    expect(() => logEntrySchema.parse({ ...validInput, ctx: { list: [1, 2] } })).toThrow();
+  it("ctx 嵌套键被剥、标量键保留、message 不丢（spec #52 C 节「嵌套对象丢弃」为逐键剥离，条目本身保留）", () => {
+    const parsed = logEntrySchema.parse({
+      ...validInput,
+      message: "关键消息不能丢",
+      ctx: { error: { code: "E_X" }, list: [1, 2], n: null, sessionId: "run-1" },
+    });
+    expect(parsed.message).toBe("关键消息不能丢");
+    expect(parsed.ctx).toEqual({ sessionId: "run-1" });
   });
 
   it("字段类型错误被拒绝（level/source/scope/message/ts）", () => {
@@ -64,12 +69,14 @@ describe("logEntrySchema 往返与边界", () => {
   });
 });
 
-describe("logCtxSchema（标量 Record）", () => {
-  it("仅收 string/number/boolean/null", () => {
-    expect(logCtxSchema.parse({ a: "x", b: 1, c: true, d: null })).toEqual({ a: "x", b: 1, c: true, d: null });
+describe("logCtxSchema（标量 Record，逐键剥离）", () => {
+  it("仅保留 string/number/boolean 标量键", () => {
+    expect(logCtxSchema.parse({ a: "x", b: 1, c: true })).toEqual({ a: "x", b: 1, c: true });
   });
 
-  it("undefined 值被拒绝（调用方不得以 { k: undefined } 形态携带可选键）", () => {
-    expect(() => logCtxSchema.parse({ a: undefined })).toThrow();
+  it("嵌套对象/数组/null/undefined 值逐键剥离，标量键不受牵连（不整条丢弃）", () => {
+    expect(
+      logCtxSchema.parse({ err: { code: "E_X" }, list: [1, 2], n: null, u: undefined, keep: "x", cnt: 3, ok: false }),
+    ).toEqual({ keep: "x", cnt: 3, ok: false });
   });
 });

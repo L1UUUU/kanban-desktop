@@ -1,4 +1,4 @@
-// 用途：日志系统 wire 契约（#55 spec #52 B/C 节）—— renderer→main 单向通道 log:write 的条目形状；ctx 收敛标量防聊天对象入日志（N14）；maxMessageChars 截断不进 schema 常量、只在 Logger 按 config 运行期值生效（N12）
+// 用途：日志系统 wire 契约（#55 spec #52 B/C 节）—— renderer→main 单向通道 log:write 的条目形状；ctx 逐键收敛标量防聊天对象入日志（N14），嵌套对象丢弃 = 逐键剥离、条目与 message 保留；maxMessageChars 截断不进 schema 常量、只在 Logger 按 config 运行期值生效（N12）
 import { z } from "zod";
 
 /** 日志级别四枚举（Q4：error/warn/info/debug，默认 info） */
@@ -11,8 +11,18 @@ export const LOG_SOURCES = ["main", "worker", "renderer"] as const;
 export const logSourceSchema = z.enum(LOG_SOURCES);
 export type LogSource = (typeof LOG_SOURCES)[number];
 
-/** ctx 标量 Record：仅收 string/number/boolean/null，嵌套对象/数组/undefined 被拒（N14） */
-export const logCtxSchema = z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]));
+/** ctx 标量 Record：逐键收敛，仅保留 string/number/boolean，嵌套对象/数组/null/undefined 值剥键不弃条目（N14） */
+export const logCtxSchema = z.preprocess(
+  (raw) => {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return raw;
+    const scalars: Record<string, string | number | boolean> = {};
+    for (const [key, value] of Object.entries(raw)) {
+      if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") scalars[key] = value;
+    }
+    return scalars;
+  },
+  z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])),
+);
 export type LogCtx = z.infer<typeof logCtxSchema>;
 
 /**

@@ -59,9 +59,8 @@ describe("handleLogWrite（log:write 入站）", () => {
 
   it("safeParse 失败丢弃并记一条 warn、不抛错、不回 Renderer（send 语义）", () => {
     const logger = makeLogger();
-    // 嵌套 ctx / 非法 level / 缺字段 / 非对象 四类非法输入
+    // 非法 level / 缺字段 / 非对象 三类非法输入（ctx 嵌套已改为逐键剥离，不再整条丢弃，见下用例）
     const badInputs: unknown[] = [
-      { ...validEntry, ctx: { error: { code: "E_X" } } },
       { ...validEntry, level: "fatal" },
       { level: "warn", source: "renderer", scope: "chat", message: "缺 ts" },
       "not-an-object",
@@ -69,12 +68,20 @@ describe("handleLogWrite（log:write 入站）", () => {
     for (const raw of badInputs) {
       expect(() => handleLogWrite(logger, raw)).not.toThrow();
     }
-    expect(logger.calls.length).toBe(4);
+    expect(logger.calls.length).toBe(3);
     for (const call of logger.calls) {
       expect(call.level).toBe("warn");
       expect(call.scope).toBe("log");
       expect(call.message).toContain("不符合 schema");
     }
+  });
+
+  it("ctx 逐键剥离：嵌套键被剥、标量键保留、message 不丢（条目仍入 Logger，不整条丢弃）", () => {
+    const logger = makeLogger();
+    handleLogWrite(logger, { ...validEntry, ctx: { error: { code: "E_X" }, reason: "跨项目" } });
+    expect(logger.calls).toEqual([
+      { level: "error", scope: "chat", message: "会话创建后自动关联被拒绝", ctx: { reason: "跨项目" }, source: "renderer" },
+    ]);
   });
 });
 

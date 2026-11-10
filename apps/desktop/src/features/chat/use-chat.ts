@@ -234,7 +234,7 @@ export async function createCliSession(
       code: r.error.code,
       message: r.error.message,
       cwd: opts.cwd,
-      projectId: opts.projectId ?? null,
+      ...(opts.projectId ? { projectId: opts.projectId } : {}),
       ...(opts.requirementId ? { requirementId: opts.requirementId } : {}),
     });
     store.setCreateFailure({
