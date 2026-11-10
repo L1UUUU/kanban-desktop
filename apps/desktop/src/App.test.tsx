@@ -31,7 +31,8 @@ describe("App 三区布局骨架（原型一致项 1）", () => {
 
   it("聊天区：占位说明与 composer 占位可见，IPC 不可用时降级", () => {
     render(<App />);
-    expect(screen.getByText(/聊天区占位/)).toBeTruthy();
+    expect(screen.getAllByText(/暂无会话/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/项目行悬浮「＋」/)).toBeTruthy();
     expect(screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…")).toBeTruthy();
     expect(screen.getAllByText(/运行信息不可用|运行信息：/).length).toBeGreaterThan(0);
   });

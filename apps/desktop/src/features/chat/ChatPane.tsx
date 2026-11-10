@@ -48,8 +48,8 @@ export function ChatPane({
       <section className="grid min-h-0 min-w-0 grid-rows-[1fr_auto] bg-background">
         <div className="overflow-y-auto px-6 py-4">
           <div className="mx-auto max-w-[860px]">
-            <p className="text-sm text-muted-foreground">聊天区占位 —— 会话由 Fake 链路（#6）接入，IPC 桥接不可用</p>
-            <p className="mt-2 text-[11px] text-fg-faint">运行信息不可用（window.api 未暴露）</p>
+            <p className="text-sm text-muted-foreground">暂无会话</p>
+            <p className="mt-2 text-[11px] text-fg-faint">在左侧注册项目后，项目行悬浮「＋」选择 CLI 新建会话，或从会话列表选择已有会话</p>
           </div>
         </div>
         <footer className="border-t border-border bg-card px-6 pb-4 pt-3">
