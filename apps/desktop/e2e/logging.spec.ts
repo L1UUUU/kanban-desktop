@@ -63,6 +63,27 @@ function mainPid(app: ElectronApplication): Promise<number> {
   return app.evaluate(() => process.pid);
 }
 
+/** worker 被外杀后收口 app.close()：事件驱动竞速，谁先到谁收口，不再无条件白等 5s。
+ *  Electron utilityProcess 内部 teardown 挂死是平台限制，非产品缺陷（应用侧 CliHostClient.dispose() 已有
+ *  3s 超时 + kill 兜底）。close 一发起立即挂双分支接住 reject；5s 兜底 timer 先到即 taskkill /T 强杀整树
+ *  （Job guard 随 main 死亡全灭子孙，无孤儿；transport 断开使 close 立即 settle），随后仍 await close settle，
+ *  不留悬挂 promise。 */
+async function closeAfterWorkerKilled(app: ElectronApplication, pid: number): Promise<void> {
+  await new Promise((r) => setTimeout(r, 1000));
+  const closing = app.close().then(
+    () => "closed" as const,
+    () => "closed" as const,
+  );
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), 5000);
+  });
+  const raced = await Promise.race([closing, timeout]);
+  if (raced === "timeout") execFileSync("taskkill", ["/T", "/F", "/PID", String(pid)], { stdio: "pipe" });
+  clearTimeout(timer!);
+  await closing; // timer 先到时 close 可能仍未 settle：继续等到收口，杜绝悬挂 promise
+}
+
 /** 轮询等待条目出现（fire-and-forget renderer 条目 / 异步提取批次需要等落盘；读档口径见 ./log-run） */
 async function waitForEntry(userData: string, pid: number, predicate: (e: LogEntry) => boolean, timeoutMs = 15_000): Promise<LogEntry> {
   const deadline = Date.now() + timeoutMs;
@@ -197,22 +218,7 @@ test("验收 2：worker 意外退出留 error（文件含 error 条目，非末�
     expect(hit.level).toBe("error");
     expect(hit.source).toBe("main");
     expect(hit.scope).toBe("cli-host");
-    // 收尾：worker 被外杀后 app.close() 的退出序列实测可能被 Electron utilityProcess 内部清理挂住
-    //（残留子进程挡住进程树退出）——close 发起后 5s 未收口即 taskkill /T 强杀整树（Job guard 随 main
-    // 死亡全灭子孙，无孤儿；transport 断开使 close 立即 resolve，免 worker teardown 挂 60s）
-    await new Promise((r) => setTimeout(r, 1000));
-    let settled = false;
-    const closing = app.close().then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
-    await new Promise((r) => setTimeout(r, 5000));
-    if (!settled) execFileSync("taskkill", ["/T", "/F", "/PID", String(pid)], { stdio: "pipe" });
-    await closing;
+    await closeAfterWorkerKilled(app, pid);
   } finally {
     await rmBestEffort(userData);
     await rmBestEffort(repoRoot);

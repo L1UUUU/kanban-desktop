@@ -48,12 +48,24 @@ async function launchApp(userData: string, repoDir?: string, extraEnv?: Record<s
   return { app, win };
 }
 
+/** 打开项目行的悬浮「＋」新建会话菜单（两处入口同口径）
+ *  ＋ 按钮 opacity-0 pointer-events-none，仅 group-hover 时可交互（#51 修布局抖动的一致项，产品 UI 不改）：
+ *  hover 项目行使按钮可交互 → 过渡断言消除竞态 → 再对按钮本身 hover 保持 group-hover → click，
+ *  避免「hover 行后指针移动离开行一瞬」按钮立即回 pointer-events-none 导致 click 被拦截。 */
+async function openCreateMenu(win: Page): Promise<void> {
+  await win.locator("aside").getByText(PROJECT_NAME, { exact: true }).hover();
+  const plus = win.getByRole("button", { name: "＋", exact: true });
+  await expect(plus).toBeVisible();
+  await expect(plus).toBeEnabled();
+  await plus.hover();
+  await plus.click();
+}
+
 /** 注册项目 + 建首个 Claude（Fake）会话 */
 async function registerAndCreate(win: Page): Promise<void> {
   await win.getByRole("button", { name: "＋ 注册", exact: true }).click();
   await expect(win.locator("aside").getByText(PROJECT_NAME, { exact: true })).toBeVisible({ timeout: 15_000 });
-  await win.locator("aside").getByText(PROJECT_NAME, { exact: true }).hover();
-  await win.getByRole("button", { name: "＋", exact: true }).click();
+  await openCreateMenu(win);
   await win.getByRole("button", { name: "Claude", exact: true }).click();
   await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
 }
@@ -139,8 +151,7 @@ test("spawn 创建失败侧栏卡：E_SPAWN_NOT_FOUND → 卡 3 形态呈现 →
     // 第二次运行注入：Fake 前一次 createSession 抛 E_SPAWN_NOT_FOUND（协议级同码）→ 侧栏创建入口错误卡
     const second = await launchApp(userData, undefined, { KANBAN_FAKE_CREATE_FAIL_FIRST: "1" });
     const win = second.win;
-    await win.locator("aside").getByText(PROJECT_NAME, { exact: true }).hover();
-    await win.getByRole("button", { name: "＋", exact: true }).click();
+    await openCreateMenu(win);
     await win.getByRole("button", { name: "Claude", exact: true }).click();
 
     // 无会话视图可挂：卡在侧栏创建入口（info 槽）呈现，对齐原型 d2 卡 3 信息结构
