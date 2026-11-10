@@ -124,18 +124,18 @@ export function Sidebar({
             key={p.id}
             className={`group relative flex items-center gap-2 px-3.5 py-1.5 ${p.id === currentProjectId ? "bg-muted" : ""}`}
           >
-            <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => onSelectProject(p.id)}>
+            <button type="button" className="flex min-w-0 flex-1 items-center gap-2 pr-8 text-left" onClick={() => onSelectProject(p.id)}>
               <span aria-hidden>📁</span>
               <span className="truncate text-[13px]" title={p.canonicalPath}>
                 {p.name}
               </span>
               {p.status === "missing" ? <span className="flex-none text-[11px] text-warn">目录缺失</span> : null}
             </button>
-            {/* 悬浮显示「＋」：点击弹 CLI 新建菜单（原型一致项 2） */}
+            {/* 悬浮「＋」：absolute 脱离文档流 + 透明度切换，避免 hover 时 display:none→block 撑高行、挤窄项目名并下移下方内容（原型一致项 2） */}
             <button
               type="button"
               title="新建会话（选择 CLI）"
-              className="hidden h-6 w-6 shrink-0 rounded-md text-fg-faint hover:text-primary group-hover:block"
+              className="absolute right-3.5 top-1/2 h-6 w-6 -translate-y-1/2 rounded-md text-fg-faint opacity-0 pointer-events-none hover:text-primary group-hover:pointer-events-auto group-hover:opacity-100"
               onClick={() => {
                 setMenuProjectId(menuProjectId === p.id ? null : p.id);
               }}
@@ -208,11 +208,11 @@ export function Sidebar({
             key={s.sessionId}
             data-testid="session-row"
             data-active={s.sessionId === activeId ? "true" : "false"}
-            className={`group flex w-full items-center gap-1 border-l-2 px-3.5 py-1.5 hover:bg-muted ${
+            className={`group relative flex w-full items-center gap-1 border-l-2 px-3.5 py-1.5 hover:bg-muted ${
               s.sessionId === activeId ? "border-l-primary bg-muted" : "border-l-transparent"
             }`}
           >
-            <button type="button" className="flex min-w-0 flex-1 items-center gap-1 text-left" onClick={() => onSelect(s.sessionId)}>
+            <button type="button" className="flex min-w-0 flex-1 items-center gap-1 pr-6 text-left" onClick={() => onSelect(s.sessionId)}>
               <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-pty" />
               <span className="min-w-0 flex-1 truncate text-[13px]">{s.title}</span>
               <DirBadge identity={s.dirIdentity} worktreeName={s.worktreeName} cwd={s.cwd} />
@@ -223,7 +223,7 @@ export function Sidebar({
               <button
                 type="button"
                 title="停止终端（终止进程，保留会话记录）"
-                className="hidden h-5 w-5 shrink-0 rounded-md text-[11px] text-fg-faint hover:text-destructive group-hover:block"
+                className="absolute right-3.5 top-1/2 h-5 w-5 -translate-y-1/2 rounded-md text-[11px] text-fg-faint opacity-0 pointer-events-none hover:text-destructive group-hover:pointer-events-auto group-hover:opacity-100"
                 onClick={() => onKillTerminal(s.sessionId)}
               >
                 ⏹
