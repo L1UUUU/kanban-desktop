@@ -1,4 +1,4 @@
-// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc/memory:ipc/diff:ipc/residue:ipc 路由）、CliHost 托管（utilityProcess 优先，进程内回退）与事件转发/状态落库、TrackerEngine（SkillObservation 落库 + 重启恢复）、PTY 终端宿主（node-pty，main 进程直接使用，t0-03 实证）、有序退出与残留进程检测一次性通知（#49 app:event）；初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
+// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc/memory:ipc/diff:ipc/residue:ipc 路由）、CliHost 托管（utilityProcess 优先，进程内回退）与事件转发/状态落库、TrackerEngine（SkillObservation 落库 + 重启恢复）、PTY 终端宿主（node-pty，main 进程直接使用，t0-03 实证）、有序退出与残留进程检测一次性通知（#49 app:event）、#51 单实例锁（二次启动转发聚焦 + 持锁失败立即退出）；初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -66,6 +66,22 @@ if (process.env.KANBAN_USER_DATA) {
   app.setPath("userData", process.env.KANBAN_USER_DATA);
 }
 
+// #51 单实例锁：锁 key 随 userData（须在上方 setPath 覆盖之后请求，E2E 隔离环境各自独立锁）。
+// 持锁失败（已有实例运行）→ app.quit 立即退出。实测 quit 前置调用并不能阻止 ready 触发，
+// 故 whenReady 回调顶部再设同款守卫（等价官方文档"启动逻辑收进 else 分支"，免整体重排）：
+// 二实例不创建窗口、不触碰 SQLite/CLI Host/残留检测（双开曾致 GPU cache 拒绝访问 0x5 + DB 竞争）
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  // 二次启动转发：首实例窗口前置聚焦（最小化则还原）；窗口未建（首实例尚在启动）时静默
+  app.on("second-instance", () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  });
+}
+
 /** 创建主窗口（暗色底色，防白闪）并加载 renderer：dev 走 electron-vite dev server，生产加载构建产物 */
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -102,6 +118,9 @@ function pickDirectory(): Promise<string | null> {
 }
 
 app.whenReady().then(async () => {
+  // 二实例兜底：quit 已在模块顶层发起，但 ready 仍可能触发——此处直接返回，不初始化任何资源
+  if (!gotSingleInstanceLock) return;
+
   // 配置初始化：当前项目 id 持久化在同一 JSON（spec J：不硬编码、落应用数据目录）
   const configPath = join(app.getPath("userData"), "config.json");
   const appConfig: AppConfig = existsSync(configPath) ? loadConfig(configPath) : defaultConfig();
