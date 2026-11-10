@@ -38,6 +38,15 @@ async function rmBestEffort(target: string): Promise<void> {
   console.warn(`[e2e] 临时目录仍被占用，跳过清理：${target}`);
 }
 
+/** 主工作区（侧栏 + 中央区）须铺满顶部条之下的全部剩余高度：底部与视口齐平，不露应用底色 */
+async function expectWorkspaceFillsViewport(win: Page): Promise<void> {
+  const workspace = win.locator("#root > div > .grid.min-h-0").first();
+  await expect.poll(async () => {
+    const box = await workspace.boundingBox();
+    return box ? Math.round(box.y + box.height) : -1;
+  }).toBeGreaterThanOrEqual(await win.evaluate(() => innerHeight - 2));
+}
+
 /** 启动应用（Fake 演示链路 + userData 隔离；种子模式下 Main 检测直接返回种子清单、kill 统一回报 killed） */
 async function launchApp(userData: string, seedPath?: string): Promise<{ app: ElectronApplication; win: Page }> {
   const app = await _electron.launch({
@@ -76,10 +85,12 @@ test("预置检测结果：通知条 + 进程表呈现，「无会话记录」�
     await expect(win.getByLabel("勾选 PID 28432")).toBeChecked();
     await expect(win.getByLabel("勾选 PID 29004")).not.toBeChecked();
     await expect(win.getByLabel("勾选 PID 29512")).not.toBeChecked();
+    await expectWorkspaceFillsViewport(win);
 
-    // 忽略本次：条消失（下次启动重新检测）
+    // 忽略本次：条消失（下次启动重新检测），主工作区仍须铺满剩余高度（回归：条件渲染条消失后 1fr 行错位露底色）
     await win.getByRole("button", { name: "忽略本次" }).click();
     await expect(banner).toBeHidden();
+    await expectWorkspaceFillsViewport(win);
     await app.close();
   } finally {
     for (const r of roots) await rmBestEffort(r);

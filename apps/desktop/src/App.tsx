@@ -116,7 +116,7 @@ export function AppShell({
   const diff = useWorkspaceDiff(diffTransport_, projects.currentProjectId);
 
   return (
-    <div className="grid h-screen grid-rows-[42px_auto_1fr] overflow-hidden bg-background text-foreground">
+    <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
       <TopBar currentProject={projects.currentProject} />
       {shutdownNotice ? (
         <div data-testid="shutdown-banner" className="flex-none border-b border-warn/40 bg-warn/10 px-4 py-1.5 text-xs text-warn">

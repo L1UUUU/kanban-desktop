@@ -79,7 +79,7 @@ export function ChatWorkspace({
   };
 
   return (
-    <div className="grid min-h-0 grid-cols-[240px_1fr]">
+    <div className="grid min-h-0 flex-1 grid-cols-[240px_1fr]">
       <Sidebar
         projects={projects.projects}
         currentProjectId={projects.currentProjectId}

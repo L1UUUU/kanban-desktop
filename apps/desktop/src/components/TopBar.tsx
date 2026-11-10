@@ -23,7 +23,7 @@ export function TopBar({ currentProject }: { currentProject: ProjectRow | null }
   };
 
   return (
-    <header className="relative flex items-center gap-3 border-b border-border bg-card px-3.5">
+    <header className="relative flex h-[42px] shrink-0 items-center gap-3 border-b border-border bg-card px-3.5">
       <span className="text-[13px] font-bold">Kanban Desktop</span>
       {/* 当前项目名徽标（无项目=注册引导态提示） */}
       <span className="rounded border border-border px-1.5 text-[11px] text-muted-foreground">
