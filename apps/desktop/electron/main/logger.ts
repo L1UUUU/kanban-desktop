@@ -24,6 +24,9 @@ export interface LoggingConfig {
 /** 条目附加上下文：标量 Record（嵌套对象/函数不收，防把 ChatEvent/聊天正文带进日志，spec #52 C 节 N14） */
 export type LogCtx = Record<string, string | number | boolean | null>;
 
+/** 条目来源三执行体（#55：renderer/worker 经 Main 入口强制传入，与 @kanban/ipc-schema LOG_SOURCES 同枚举） */
+export type LogSource = "main" | "worker" | "renderer";
+
 /** 单条日志写入函数形状（Logger.log 的独立引用形态；ipc/adapter-events 等 deps 注入用） */
 export type LogFn = (level: LogLevel, scope: string, message: string, ctx?: LogCtx) => void;
 
@@ -76,8 +79,8 @@ export interface LoggerOptions {
 }
 
 export interface Logger {
-  /** 写一条日志：级别过滤 → 截断 → JSONL 落盘 + 控制台纯文本双写（source 由 Main 入口强制为 main） */
-  log(level: LogLevel, scope: string, message: string, ctx?: LogCtx): void;
+  /** 写一条日志：级别过滤 → 截断 → JSONL 落盘 + 控制台纯文本双写；source 缺省 main，renderer/worker 条目由对应 Main 入口强制传入（不信上游自报） */
+  log(level: LogLevel, scope: string, message: string, ctx?: LogCtx, source?: LogSource): void;
   /** 派生固定 scope 的子记录器 */
   child(scope: string): ScopedLogger;
   /** 本次启动主文件绝对路径（含横幅；轮转分片不作为对外路径，M9） */
@@ -90,7 +93,7 @@ export interface Logger {
 interface LogEntry {
   ts: string;
   level: LogLevel;
-  source: "main";
+  source: LogSource;
   scope: string;
   message: string;
   ctx?: LogCtx;
@@ -214,11 +217,11 @@ export function createLogger(options: LoggerOptions): Logger {
   };
 
   const logger: Logger = {
-    log(level, scope, message, ctx) {
+    log(level, scope, message, ctx, source = "main" as LogSource) {
       if (LEVEL_ORDER[level] > LEVEL_ORDER[logging.level]) return; // 级别过滤（文件与控制台同口径）
       const truncated =
         message.length > logging.maxMessageChars ? message.slice(0, logging.maxMessageChars) : message;
-      const entry: LogEntry = { ts: now().toISOString(), level, source: "main", scope, message: truncated };
+      const entry: LogEntry = { ts: now().toISOString(), level, source, scope, message: truncated };
       if (ctx && Object.keys(ctx).length > 0) entry.ctx = ctx;
       writeEntry(entry);
     },

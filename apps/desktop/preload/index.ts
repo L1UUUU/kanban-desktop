@@ -1,4 +1,4 @@
-// 用途：contextBridge 薄层 —— 向 renderer 暴露最小 IPC 面（app:getInfo + kanban:ipc/memory:ipc/residue:ipc/diff:ipc 单通道 invoke + chat:event/terminal:event/tracker:event/memory:event/app:event/app:shutdown 订阅）；全部通道形状由 @kanban/ipc-schema 契约化，preload 不做校验（两端校验，spec E）
+// 用途：contextBridge 薄层 —— 向 renderer 暴露最小 IPC 面（app:getInfo + kanban:ipc/memory:ipc/residue:ipc/diff:ipc 单通道 invoke + chat:event/terminal:event/tracker:event/memory:event/app:event/app:shutdown 订阅 + log:write 单向日志/log:getPath/log:openDir）；全部通道形状由 @kanban/ipc-schema 契约化，preload 不做校验（两端校验，spec E）
 import { contextBridge, ipcRenderer } from "electron";
 import type {
   AdapterEvent,
@@ -8,6 +8,8 @@ import type {
   DiffResult,
   IpcRequest,
   IpcResult,
+  LogCtx,
+  LogLevel,
   MemoryEventWire,
   MemoryRequest,
   MemoryResult,
@@ -29,6 +31,17 @@ const api = {
   invokeResidue: (req: ResidueRequest) => ipcRenderer.invoke("residue:ipc", req) as Promise<ResidueResult>,
   /** #43：发送一条 diff:ipc 请求（工作区未提交变更一次读，schema 见 diffRequestSchema） */
   invokeDiff: (req: DiffRequest) => ipcRenderer.invoke("diff:ipc", req) as Promise<DiffResult>,
+  /**
+   * #55：发送一条 renderer 日志（fire-and-forget：send 不等待回执，不用 invoke；Main 侧强制 source=renderer、
+   * 落盘 ts 由 Main 生成，两者不信自报；jsdom 无桥时调用方以 window.api?.log?.() 可选链降级）
+   */
+  log: (level: LogLevel, scope: string, message: string, ctx?: LogCtx): void => {
+    ipcRenderer.send("log:write", { level, source: "renderer", scope, message, ts: Date.now(), ctx });
+  },
+  /** #55：取当前启动主日志文件绝对路径（「复制日志文件路径」数据源） */
+  getLogPath: (): Promise<string> => ipcRenderer.invoke("log:getPath") as Promise<string>,
+  /** #55：在资源管理器中定位当前启动主日志文件（「打开日志文件」动作） */
+  openLogDir: (): Promise<void> => ipcRenderer.invoke("log:openDir").then(() => undefined),
   /** 订阅 Adapter 事件流（ChatEvent ∪ SkillObservation），返回注销函数 */
   onChatEvent: (handler: (event: AdapterEvent) => void): (() => void) => {
     const listener = (_e: unknown, event: AdapterEvent): void => handler(event);

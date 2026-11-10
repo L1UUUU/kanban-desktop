@@ -45,7 +45,7 @@ export function useMemory(transport: MemoryTransport | null, projectId: string |
       });
       if (seq !== seqRef.current) return null; // 过期响应丢弃
       if (!res.ok) {
-        console.error("[memory] 拉取项目记忆失败", res.reason, res.detail ?? "");
+        window.api?.log?.("error", "memory", "拉取项目记忆失败", { projectId, reason: res.reason, ...(res.detail ? { detail: res.detail } : {}) });
         return null;
       }
       return { knowledge: res.knowledge ?? [], summaries: res.summaries ?? [] };
