@@ -13,9 +13,7 @@ import {
   shutdownNoticeSchema,
   terminalEventSchema,
   trackerChangeSchema,
-  type AppEventWire,
   type AutoArchiveScanSummary,
-  type MemoryEventWire,
   type ResidueProcess,
 } from "@kanban/ipc-schema";
 import {
@@ -26,12 +24,13 @@ import {
   listOpenCodeExeCandidates,
   type CliAdapter,
 } from "@kanban/cli-host";
-import { TrackerEngine, type TrackerChange } from "@kanban/tracker";
+import { TrackerEngine } from "@kanban/tracker";
 import { defaultConfig, loadConfig, resolveEffectiveLevel, saveConfig, type AppConfig } from "./config";
 import { runAutoArchiveScan } from "./auto-archive";
 import { createAdapterEventHandler } from "./adapter-events";
 import { CliHostClient } from "./cli-host-client";
 import { SQLITE_ENTRY, openDatabase } from "./db";
+import { createValidatedSender } from "./event-sender";
 import { handleIpc, handleConfigIpc, handleDiffIpc, handleMemoryIpc, handleResidueIpc, TRACKER_CLI_BY_APP, type IpcDeps } from "./ipc";
 import { defaultGitDiffDeps, readWorkspaceDiff } from "./git-diff-service";
 import { handleLogWrite } from "./log-write";
@@ -83,6 +82,9 @@ function createHostedAdapter(appConfig: AppConfig): CliAdapter {
 let adapter: CliAdapter;
 
 let mainWindow: BrowserWindow | null = null;
+
+/** 出站事件目标窗口（未建/已销毁 → null = 静默丢弃；#72 C1 Step3：五处事件发送器样板共用的窗口判定） */
+const getMainWindow = () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
 
 // E2E 隔离：测试用 env 指定独立 userData（app.setPath 须在 ready 前调用）
 if (process.env.KANBAN_USER_DATA) {
@@ -194,12 +196,8 @@ app.whenReady().then(async () => {
   // dataRoot=<userData>/memory（D 节布局根，亦是提取临时 cwd 根）；需求关联会话/标题/项目归属/存在性由 Main 查 tracker 后传入（memory 不依赖 tracker）
   // #32 提取双桥：readTranscript 经 CliAdapter 契约（托管/进程内皆有）；runOnce/cancelRunOnce 仅 utilityProcess 托管形态具备
   //（进程内回退无该能力——extract 落 cli-unavailable 业务拒绝，C5 降级路径如实声明边界）
-  const sendMemoryEvent = (event: MemoryEventWire): void => {
-    memoryEventSchema.parse(event);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("memory:event", event);
-    }
-  };
+  // #72 C1 Step3：事件发送器经共享工厂（出站过 schema 校验失败 throw；窗口不在时静默丢弃转发）
+  const sendMemoryEvent = createValidatedSender(memoryEventSchema, "memory:event", getMainWindow);
   const hostedAdapter = adapter instanceof CliHostClient ? adapter : null;
   // 需求当前关联会话查询（两闭包同形遍历的共享形状）：按 kind 过滤收集，structured 附加 CLI 名（pty 侧仅取 sessionId）
   const listLinkedSessions = (
@@ -234,12 +232,7 @@ app.whenReady().then(async () => {
 
   // Adapter 事件流：出站校验 + 会话状态落库 + SkillObservation 进 tracker 落库（#9）→ 转发 renderer；窗口不在时静默丢弃转发
   // #17：tracker 变更出站过 schema 校验后经 tracker:event 转发 renderer（看板事件驱动刷新；与 chat:event/terminal:event 同模式）
-  const sendTrackerChange = (change: TrackerChange): void => {
-    trackerChangeSchema.parse(change);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("tracker:event", change);
-    }
-  };
+  const sendTrackerChange = createValidatedSender(trackerChangeSchema, "tracker:event", getMainWindow);
   adapter.subscribe(
     createAdapterEventHandler({
       sessions,
@@ -256,12 +249,7 @@ app.whenReady().then(async () => {
   // PTY 宿主装配：平台能力注入（shell/CLI exe 覆盖来自 config，不硬编码）；事件出站过 schema 校验并转发 renderer，
   // started/exit 的 sessions 状态落库与 #58/#62 迟到守卫统一经 lifecycle.onTerminalEvent（#70 C2 唯一写入口；
   // 已归档/已删除终端的迟到事件不落库不转发，spec #57 D 节）——四回调退化为「问 lifecycle → 转发」
-  const sendTerminalEvent = (event: unknown): void => {
-    terminalEventSchema.parse(event);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("terminal:event", event);
-    }
-  };
+  const sendTerminalEvent = createValidatedSender(terminalEventSchema, "terminal:event", getMainWindow);
   const ptyHost = createPtyHost(
     {
       pty: nodePty,
@@ -311,6 +299,8 @@ app.whenReady().then(async () => {
 
   // 统一退出序列（#13/spec H §6.1）：停新请求（IPC 拒新 + UI 提示）→ 有序取消 → 有限等待（config.shutdown.graceMs）→
   // Session 粒度受控终止 → 全量 dispose（worker shutdown/kill 兜底）→ PTY 全停；Job Object 覆盖强杀残留
+  // #72 C1 Step3：退出通知经事件发送器工厂（parse 提前到窗口判定之前——reason 恒为内部字符串，该 schema 无失败路径，顺序等价）
+  const sendShutdownNotice = createValidatedSender(shutdownNoticeSchema, "app:shutdown", getMainWindow);
   const shutdown = createShutdownOrchestrator({
     adapter,
     pty: ptyHost,
@@ -318,11 +308,7 @@ app.whenReady().then(async () => {
     graceMs: appConfig.shutdown.graceMs,
     // #32（spec #27 C 节）：退出序列第 7 步停止 memory 提取（running 批次 → cancelled；adapter/PTY 后、DB 关闭前）
     memory: memoryService,
-    notifyShutdown: (reason) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send("app:shutdown", shutdownNoticeSchema.parse({ reason }));
-      }
-    },
+    notifyShutdown: (reason) => sendShutdownNotice({ reason }),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     log: logKind,
   });
@@ -450,12 +436,7 @@ app.whenReady().then(async () => {
     return () =>
       (p ??= residueSeed ? Promise.resolve(residueSeed) : residueE2eSkip ? Promise.resolve([]) : detectResidue(residueDeps));
   })();
-  const sendAppEvent = (event: AppEventWire): void => {
-    appEventSchema.parse(event);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("app:event", event);
-    }
-  };
+  const sendAppEvent = createValidatedSender(appEventSchema, "app:event", getMainWindow);
   ipcMain.handle("residue:ipc", (_event, raw: unknown) =>
     handleResidueIpc(
       {
