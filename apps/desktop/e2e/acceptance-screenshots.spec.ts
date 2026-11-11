@@ -3,6 +3,7 @@ import { test, expect, _electron, type ElectronApplication, type Page } from "@p
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { shot } from "./helpers/acceptance-artifacts";
 
 const PROJECT_NAME = "kb-shot-repo";
 const SHOT_DIR = resolve(__dirname, "../../../docs/acceptance/stage1/screenshots");
@@ -49,12 +50,6 @@ async function launchApp(userData: string, pickDir?: string): Promise<{ app: Ele
   return { app, win };
 }
 
-/** 截图到验收目录并断言可见性（截图本身即证据；断言兼作交互记录） */
-async function shot(win: Page, name: string): Promise<void> {
-  mkdirSync(SHOT_DIR, { recursive: true });
-  await win.screenshot({ path: join(SHOT_DIR, name) });
-  console.log(`[shot] ${name}`);
-}
 
 /** 在 composer 输入并发送 */
 async function send(win: Page, text: string): Promise<void> {
@@ -78,7 +73,7 @@ test("原型一致项截图集：布局/新建菜单/聊天区三卡/composer/�
     // 一致项 1（三区布局）：空态引导 —— 顶栏（应用名+未注册徽标+设置）+ 左侧空列表 + 中央空态
     await expect(win.getByRole("button", { name: "＋ 注册", exact: true })).toBeVisible({ timeout: 15_000 });
     await expect(win.getByText("设置")).toBeVisible();
-    await shot(win, "01-empty-state.png");
+    await shot(win, SHOT_DIR, "01-empty-state.png");
 
     // 注册项目后的默认三区布局：顶栏项目名徽标 + 左侧项目/会话分组 + 中央聊天区
     await win.getByRole("button", { name: "＋ 注册", exact: true }).click();
@@ -90,17 +85,17 @@ test("原型一致项截图集：布局/新建菜单/聊天区三卡/composer/�
     for (const item of ["Codex", "Claude", "OpenCode", /PTY 终端/]) {
       await expect(win.getByRole("button", { name: item, exact: false }).first()).toBeVisible();
     }
-    await shot(win, "02-new-session-menu.png");
+    await shot(win, SHOT_DIR, "02-new-session-menu.png");
     await win.getByRole("button", { name: "Claude", exact: true }).click();
     await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
 
     // 一致项 1 完整形态截图（已注册+会话行+空聊天区）
-    await shot(win, "03-layout-three-panes.png");
+    await shot(win, SHOT_DIR, "03-layout-three-panes.png");
 
     // 一致项 6（composer Running 态）：流式中发送键替换为「⏹ 停止输出」
     await send(win, "拆类型");
     await expect(win.getByRole("button", { name: "⏹ 停止输出" })).toBeVisible({ timeout: 10_000 });
-    await shot(win, "09-composer-running-stop.png");
+    await shot(win, SHOT_DIR, "09-composer-running-stop.png");
 
     // 一致项 5（聊天区消息流+工具卡）：多轮流式 + 工具卡终态（状态流转/输出/时长）
     await expect(win.getByText("好的，我先跑一遍现有测试确认基线，然后开始拆分。")).toBeVisible({ timeout: 30_000 });
@@ -111,7 +106,7 @@ test("原型一致项截图集：布局/新建菜单/聊天区三卡/composer/�
     // 一致项 6（权限 chip 三档）：菜单展开含档位与说明（截图），并实测切换（🔒 请求 → 恢复默认）
     await win.getByText("⚡ 权限：自动 ▾").click();
     await expect(win.getByText("所有工具调用前弹出审批卡片")).toBeVisible();
-    await shot(win, "10-composer-permission-menu.png");
+    await shot(win, SHOT_DIR, "10-composer-permission-menu.png");
     await win.getByText("🔒 请求").click();
     await expect(win.getByText("🔒 权限：请求 ▾")).toBeVisible();
     await win.getByText("🔒 权限：请求 ▾").click();
@@ -125,7 +120,7 @@ test("原型一致项截图集：布局/新建菜单/聊天区三卡/composer/�
     await expect(win.getByRole("button", { name: "总是允许" })).toBeVisible();
     await expect(win.getByRole("button", { name: "拒绝" })).toBeVisible();
     await expect(win.getByText("等待审批").first()).toBeVisible();
-    await shot(win, "05-chat-approval-card.png");
+    await shot(win, SHOT_DIR, "05-chat-approval-card.png");
     // 审批交互实测：拒绝 → 工具被拒 + 回空闲
     await win.getByRole("button", { name: "拒绝" }).click();
     await expect(win.getByText("已拒绝")).toBeVisible({ timeout: 20_000 });
@@ -140,7 +135,7 @@ test("原型一致项截图集：布局/新建菜单/聊天区三卡/composer/�
     const banner = win.getByTestId("conflict-banner");
     await expect(banner).toBeVisible({ timeout: 15_000 });
     await expect(banner).toContainText("主仓库并行会话（2 个）");
-    await shot(win, "04-conflict-banner.png");
+    await shot(win, SHOT_DIR, "04-conflict-banner.png");
 
     // 一致项 7（取消）：停止输出 → 「本轮已取消」+ 已中断，会话保留
     await createSession(win, "Claude", 2);
@@ -148,7 +143,7 @@ test("原型一致项截图集：布局/新建菜单/聊天区三卡/composer/�
     await win.getByRole("button", { name: "⏹ 停止输出" }).click({ timeout: 10_000 });
     await expect(win.getByText("— 本轮已取消，会话保留，可继续发消息 —")).toBeVisible({ timeout: 10_000 });
     await expect(win.getByText("已中断").first()).toBeVisible();
-    await shot(win, "08-interrupted-cancelled.png");
+    await shot(win, SHOT_DIR, "08-interrupted-cancelled.png");
     // 取消后可继续（实测记录）
     await send(win, "中断后继续");
     await expect(win.getByText("基线全绿。现在把 chat 与 session 两个命名空间拆成独立文件，并在 index 里保持原导出面不变。")).toBeVisible({ timeout: 30_000 });
@@ -162,7 +157,7 @@ test("原型一致项截图集：布局/新建菜单/聊天区三卡/composer/�
     await win.keyboard.type("echo kb-shot-pty");
     await win.keyboard.press("Enter");
     await expect(win.getByText(/kb-shot-pty/).first()).toBeVisible({ timeout: 20_000 });
-    await shot(win, "11-pty-terminal.png");
+    await shot(win, SHOT_DIR, "11-pty-terminal.png");
 
     await app.close();
   } finally {
@@ -195,10 +190,10 @@ test("徽标与断开恢复截图：主仓库绿/worktree 蓝 + 重开断开会�
     await expect(second.win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
     // 一致项 3（会话行徽标）：CLI 色点+标题+目录身份徽标+状态徽标；侧栏按当前项目过滤，两形态各截一张
     await expect(second.win.getByText(/worktree: kb-shot-wt/).first()).toBeVisible({ timeout: 10_000 });
-    await shot(second.win, "06-session-badges-worktree.png");
+    await shot(second.win, SHOT_DIR, "06-session-badges-worktree.png");
     await second.win.locator("aside").getByText(PROJECT_NAME, { exact: true }).click();
     await expect(second.win.getByText("主仓库", { exact: true }).first()).toBeVisible({ timeout: 10_000 });
-    await shot(second.win, "06-session-badges-main.png");
+    await shot(second.win, SHOT_DIR, "06-session-badges-main.png");
     await second.app.close();
 
     // 第三段：重开（同一 userData）→ 断开会话顶部恢复引导条（#42）→ 恢复后可续聊
@@ -210,7 +205,7 @@ test("徽标与断开恢复截图：主仓库绿/worktree 蓝 + 重开断开会�
     await expect(resumeBanner).toContainText("新会话 · Claude");
     await expect(resumeBanner).toContainText("缓存消息不替代原生历史");
     // 一致项 5（断开会话恢复入口，#42 顶部条形态）截图
-    await shot(third.win, "07-disconnected-recovery.png");
+    await shot(third.win, SHOT_DIR, "07-disconnected-recovery.png");
     await third.win.getByRole("button", { name: "读取原生历史并恢复" }).click();
     await expect(third.win.getByText("空闲").first()).toBeVisible({ timeout: 15_000 });
     await expect(resumeBanner).toHaveCount(0); // 恢复成功 banner 收敛

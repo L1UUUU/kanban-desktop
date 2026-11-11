@@ -12,6 +12,15 @@ Issues and specs for this repo live as GitHub issues in `L1UUUU/kanban-desktop`.
 - **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
 - **Close**: `gh issue close <number> --comment "..."`
 
+### Spec issue 关闭惯例
+
+`implement-spec` 收尾时，除逐张关闭 ticket 外还须**单独关闭父 spec issue**，判定如下：
+
+- **单阶段 spec**：其全部 ticket 闭环即关闭（如 #23/#27/#40/#52）。合 main / push 不是关闭前置条件。
+- **伞形多阶段 spec**（一个 spec 承载多个阶段、当前只完成其中若干阶段）：保持 OPEN，在评论里追记本阶段契约演进（v1 总 Spec #1 的做法）。
+
+历史上曾因只按字面「resolve each ticket」而漏关父 spec，导致用户两次纠正；勿沿用「先例」自行推断。
+
 Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
 
 ## Pull requests as a triage surface

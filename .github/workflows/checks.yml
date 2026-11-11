@@ -1,0 +1,28 @@
+# 用途：CI 门禁 —— push/PR 时跑仓库已有检查命令（lint 含 --deny-warnings、typecheck、test、机械检查脚本）
+name: checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 真实 codex 测试模型白名单：CI 全局注入，子进程（Electron/utilityProcess worker）经 env 继承生效
+env:
+  KANBAN_CODEX_MODEL: gpt-6-luna,gpt-5.6-luna
+
+jobs:
+  checks:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # 改动 docs/acceptance 归档 PNG 或新增 workspace 包时，契约检查先拦
+      - run: node scripts/check-gates.mjs
+      - run: pnpm lint:strict
+      - run: pnpm typecheck
+      - run: pnpm test

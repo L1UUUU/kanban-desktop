@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { execSync } from "node:child_process";
 import { join, relative, resolve } from "node:path";
+import { artifactPath, shot, writeArtifact } from "./helpers/acceptance-artifacts";
 
 const REAL = process.env.KANBAN_REAL_E2E === "1";
 test.skip(!REAL, "真实验收：需 KANBAN_REAL_E2E=1 且本机 Claude/Codex 已装已认证");
@@ -81,12 +82,6 @@ async function launchApp(userData: string, repoDir?: string): Promise<{ app: Ele
   return { app, win };
 }
 
-/** 截图留证（调用前自行断言目标状态可见） */
-async function shot(win: Page, name: string): Promise<void> {
-  mkdirSync(EVIDENCE_DIR, { recursive: true });
-  await win.screenshot({ path: join(EVIDENCE_DIR, name) });
-  console.log(`[real-shot] ${name}`);
-}
 
 /** 在 composer 输入并发送 */
 async function send(win: Page, text: string): Promise<void> {
@@ -181,9 +176,7 @@ function findExtractionTranscripts(userData: string, since: number): Array<{ fil
 
 /** 台账与报告落盘 helper（真实证据直写验收目录） */
 function writeEvidenceJson(name: string, data: unknown): void {
-  mkdirSync(EVIDENCE_DIR, { recursive: true });
-  writeFileSync(join(EVIDENCE_DIR, name), JSON.stringify(data, null, 2), "utf8");
-  console.log(`[real-e2e] 证据写入 ${name}`);
+  writeArtifact(EVIDENCE_DIR, name, JSON.stringify(data, null, 2));
 }
 
 /** CLI 版本留证（写入 real-evidence/cli-versions.txt） */
@@ -197,8 +190,7 @@ function recordVersions(): void {
     }
   }
   const text = `${new Date().toISOString()}（阶段 3 真实验收）\n${lines.join("\n")}\n`;
-  mkdirSync(EVIDENCE_DIR, { recursive: true });
-  writeFileSync(join(EVIDENCE_DIR, "cli-versions.txt"), text, "utf8");
+  writeArtifact(EVIDENCE_DIR, "cli-versions.txt", text);
   console.log(`[real-e2e] CLI 版本：\n${text}`);
 }
 
@@ -309,7 +301,7 @@ test("阶段 3 真实验收全链：双 CLI 真实会话 → GUI 提取（2 段�
     // 进行中态（US8 四步进度）：extracting 段进度运行态真实可见（既有 Playwright 未覆盖的进行中 UI，真链路补证）
     await expect(win.getByTestId("memory-extract-progress")).toBeVisible({ timeout: 30_000 });
     await expect(win.getByTestId("memory-step-extracting")).toHaveAttribute("data-state", "run", { timeout: 120_000 });
-    await shot(win, "real-00-extract-progress.png");
+    await shot(win, EVIDENCE_DIR, "real-00-extract-progress.png");
     const batch1 = await waitBatchStatus(win, "completed");
     const batch1Id = await batch1.getAttribute("data-batch-id");
     expect(batch1Id).toBeTruthy();
@@ -319,7 +311,7 @@ test("阶段 3 真实验收全链：双 CLI 真实会话 → GUI 提取（2 段�
     await expect(batch1.getByTestId("memory-batch-meta")).toContainText("分段 2");
     await expect(batch1.getByTestId("memory-batch-meta")).toContainText("模型调用 2 次");
     logCall("claude", `提取批次① 段1+段2 临时 headless 会话（2 次模型调用，实测 UI 计数）`, `batchId=${batch1Id}`);
-    await shot(win, "real-01-extract-completed.png");
+    await shot(win, EVIDENCE_DIR, "real-01-extract-completed.png");
 
     // ---- ⑤ 三层隔离复核：开发会话原生历史 sha256 前后不变 + 临时会话独立（新 session id + extract-tmp cwd）----
     const post1 = fingerprintDevHistories(repoDir, runStart);
@@ -366,7 +358,7 @@ test("阶段 3 真实验收全链：双 CLI 真实会话 → GUI 提取（2 段�
       await expect(panel.getByTestId("memory-candidate")).toHaveCount(pendingCount - (editDone ? 2 : 1) - 1, { timeout: 15_000 });
       ignoreDone = true;
     }
-    await shot(win, "real-02-candidates-reviewed.png");
+    await shot(win, EVIDENCE_DIR, "real-02-candidates-reviewed.png");
 
     // ---- ⑦ 记忆视图：检索命中 + 复制路径（文件真实可读）----
     await win.getByTestId("memory-entry").click();
@@ -380,7 +372,7 @@ test("阶段 3 真实验收全链：双 CLI 真实会话 → GUI 提取（2 段�
     const search = win.getByTestId("memory-search");
     await search.fill(firstClaim.slice(0, 8));
     await expect(knowledgeCard).toBeVisible();
-    await shot(win, "real-03-memory-search-hit.png");
+    await shot(win, EVIDENCE_DIR, "real-03-memory-search-hit.png");
     await search.fill("");
     // 复制路径反馈 + 落盘文件真实可读（复制值本环境剪贴板不可读回——#36 已知边界，以 fs 直读侧证）
     await knowledgeCard.getByTestId("memory-knowledge-copy-path").click();
@@ -389,7 +381,7 @@ test("阶段 3 真实验收全链：双 CLI 真实会话 → GUI 提取（2 段�
     await expect(summaryRow).toContainText(REQ_TITLE);
     await summaryRow.getByTestId("memory-summary-copy-path").click();
     await expect(win.getByTestId("memory-copy-notice")).toContainText("已复制路径");
-    await shot(win, "real-04-memory-workspace.png");
+    await shot(win, EVIDENCE_DIR, "real-04-memory-workspace.png");
 
     // 磁盘直读：accepted md 真实存在且内容含 claim 与溯源头（复制路径可供 CLI 按需读取的实证）
     const acceptedDir = join(userData, "memory");
@@ -414,7 +406,7 @@ test("阶段 3 真实验收全链：双 CLI 真实会话 → GUI 提取（2 段�
     await expect(panel2.locator('[data-testid="memory-batch-card"][data-status="completed"]')).toHaveCount(1, { timeout: 15_000 });
     // 已处置候选按批次折叠（accepted/edited 知识与 ignored 保持终态）
     await expect(panel2.getByTestId("memory-disposed-group").first()).toBeVisible({ timeout: 15_000 });
-    await shot(win2, "real-05-restart-kept.png");
+    await shot(win2, EVIDENCE_DIR, "real-05-restart-kept.png");
     // 记忆视图：已接受知识与总结保持
     await win2.getByTestId("memory-entry").click();
     await expect(win2.getByText(`已接受知识（${expectedKnowledge}）`)).toBeVisible({ timeout: 15_000 });
@@ -428,7 +420,7 @@ test("阶段 3 真实验收全链：双 CLI 真实会话 → GUI 提取（2 段�
     const manualMarker = "人工修订标记：防覆盖闭环验收（issue 37）";
     const base = await win2.getByTestId("memory-summary-textarea").inputValue();
     await win2.getByTestId("memory-summary-textarea").fill(`${base}\n\n${manualMarker}\n`);
-    await shot(win2, "real-06-summary-manual-edit.png");
+    await shot(win2, EVIDENCE_DIR, "real-06-summary-manual-edit.png");
     await win2.getByTestId("memory-summary-save").click();
     await expect(editSummaryDialog).toHaveCount(0, { timeout: 15_000 });
     // 查看弹层读回人工版（写盘生效）
@@ -457,12 +449,12 @@ test("阶段 3 真实验收全链：双 CLI 真实会话 → GUI 提取（2 段�
     // 防覆盖：人工版未被覆盖 + proposed 提示条 + 对比弹层两栏并排
     await expect(panel2.getByTestId("memory-proposed-bar")).toBeVisible({ timeout: 15_000 });
     await expect(panel2.getByTestId("memory-proposed-bar")).toContainText("新版已暂存");
-    await shot(win2, "real-07-proposed-bar.png");
+    await shot(win2, EVIDENCE_DIR, "real-07-proposed-bar.png");
     await panel2.getByTestId("memory-compare-button").click();
     const compareDialog = win2.getByTestId("memory-compare-dialog");
     await expect(compareDialog).toBeVisible();
     await expect(compareDialog.getByTestId("memory-compare-human")).toContainText(manualMarker);
-    await shot(win2, "real-08-compare-dialog.png");
+    await shot(win2, EVIDENCE_DIR, "real-08-compare-dialog.png");
     // 二选一收尾：保留人工版 → 指针清除、磁盘仍是人工版
     await compareDialog.getByTestId("memory-compare-keep").click();
     await expect(compareDialog).toHaveCount(0, { timeout: 15_000 });
@@ -567,7 +559,7 @@ test("阶段 3 真实验收·续跑收尾：忽略待审 → 记忆检索/复制
     },
   ];
   // 首跑隔离基线（run 3 提取前指纹）——续跑全程与批次② 后均须与其一致
-  const prePrints: FingerprintMap = JSON.parse(readFileSync(join(EVIDENCE_DIR, "isolation-pre-fingerprints.json"), "utf8")).prints;
+  const prePrints: FingerprintMap = JSON.parse(readFileSync(artifactPath(EVIDENCE_DIR, "isolation-pre-fingerprints.json"), "utf8")).prints;
   const fingerprintFiles = (): FingerprintMap => Object.fromEntries(Object.keys(prePrints).map((f) => [f, sha256(f)]));
   const isolation = {
     devHistories: Object.keys(prePrints).map((file) => ({
@@ -609,7 +601,7 @@ test("阶段 3 真实验收·续跑收尾：忽略待审 → 记忆检索/复制
     await expect(panel.getByTestId("memory-disposed-toggle").first()).toContainText("已接受 1", { timeout: 15_000 });
     await expect(panel.getByTestId("memory-disposed-toggle").first()).toContainText("已编辑 1");
     await expect(panel.getByTestId("memory-disposed-toggle").first()).toContainText("已忽略 1");
-    await shot(win, "real-02-candidates-reviewed.png");
+    await shot(win, EVIDENCE_DIR, "real-02-candidates-reviewed.png");
 
     // ---- ② 记忆视图：检索命中 + 复制路径 + 磁盘直读 ----
     await win.getByTestId("memory-entry").click();
@@ -621,7 +613,7 @@ test("阶段 3 真实验收·续跑收尾：忽略待审 → 记忆检索/复制
     const search = win.getByTestId("memory-search");
     await search.fill("PNPM");
     await expect(knowledgeCard).toBeVisible();
-    await shot(win, "real-03-memory-search-hit.png");
+    await shot(win, EVIDENCE_DIR, "real-03-memory-search-hit.png");
     await search.fill("");
     await knowledgeCard.getByTestId("memory-knowledge-copy-path").click();
     await expect(win.getByTestId("memory-copy-notice")).toContainText("已复制路径");
@@ -629,7 +621,7 @@ test("阶段 3 真实验收·续跑收尾：忽略待审 → 记忆检索/复制
     await expect(summaryRow).toContainText(REQ_TITLE);
     await summaryRow.getByTestId("memory-summary-copy-path").click();
     await expect(win.getByTestId("memory-copy-notice")).toContainText("已复制路径");
-    await shot(win, "real-04-memory-workspace.png");
+    await shot(win, EVIDENCE_DIR, "real-04-memory-workspace.png");
     // 磁盘直读：accepted md ×2 真实存在且含 claim 与溯源头；summary.md 含需求标题（复制路径可供 CLI 按需读取的实证）
     const acceptedFiles = listAcceptedFiles(join(userData, "memory"));
     expect(acceptedFiles.length).toBe(2);
@@ -651,7 +643,7 @@ test("阶段 3 真实验收·续跑收尾：忽略待审 → 记忆检索/复制
     await expect(panel2.locator('[data-testid="memory-batch-card"][data-status="completed"]')).toHaveCount(1, { timeout: 15_000 });
     await expect(panel2.getByTestId("memory-candidate")).toHaveCount(0); // 无遗留待审（处置状态重启不复活）
     await expect(panel2.getByTestId("memory-disposed-toggle").first()).toContainText("已忽略 1", { timeout: 15_000 });
-    await shot(win2, "real-05-restart-kept.png");
+    await shot(win2, EVIDENCE_DIR, "real-05-restart-kept.png");
     await win2.getByTestId("memory-entry").click();
     await expect(win2.getByText("已接受知识（2）")).toBeVisible({ timeout: 15_000 });
     await expect(win2.getByTestId("memory-summary-row")).toContainText(REQ_TITLE);
@@ -663,7 +655,7 @@ test("阶段 3 真实验收·续跑收尾：忽略待审 → 记忆检索/复制
     const cancelledCards = panel2.locator('[data-testid="memory-batch-card"][data-status="cancelled"]');
     await expect(cancelledCards).toHaveCount(1, { timeout: 15_000 });
     await expect(cancelledCards).toBeVisible();
-    await shot(win2, "real-07-cancelled-batch.png");
+    await shot(win2, EVIDENCE_DIR, "real-07-cancelled-batch.png");
     // 4b. 批次② 整批丢弃：候选仍 3 条无新增（无 pending 复活）、批次历史 = 1 completed + 1 cancelled
     await expect(panel2.getByTestId("memory-candidate")).toHaveCount(0);
     await expect(panel2.getByTestId("memory-proposed-bar")).toHaveCount(0); // 未达写库阶段 → 无 proposed 残留
@@ -753,7 +745,7 @@ function listSummaryFiles(memoryRoot: string): string[] {
 /** 拷贝存储快照到留证目录（accepted md / summary.md / 相对路径保持，真实产物不随临时 userData 清理丢失） */
 function copyStoreSnapshot(userData: string): void {
   const memoryRoot = join(userData, "memory");
-  const destRoot = join(EVIDENCE_DIR, "store-snapshot");
+  const destRoot = artifactPath(EVIDENCE_DIR, "store-snapshot");
   for (const file of [...listAcceptedFiles(memoryRoot), ...listSummaryFiles(memoryRoot)]) {
     const rel = relative(memoryRoot, file);
     const dest = join(destRoot, rel);

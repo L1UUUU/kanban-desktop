@@ -4,6 +4,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { execSync } from "node:child_process";
 import { join, resolve } from "node:path";
+import { artifactPath, shot, writeArtifact } from "./helpers/acceptance-artifacts";
 
 const REAL = process.env.KANBAN_REAL_E2E === "1";
 test.skip(!REAL, "真实最小集：需 KANBAN_REAL_E2E=1 且本机三 CLI 已装已认证");
@@ -67,12 +68,6 @@ async function launchApp(userData: string, repoDir?: string): Promise<{ app: Ele
   return { app, win };
 }
 
-/** 截图留证（调用前自行断言目标状态可见） */
-async function shot(win: Page, name: string): Promise<void> {
-  mkdirSync(EVIDENCE_DIR, { recursive: true });
-  await win.screenshot({ path: join(EVIDENCE_DIR, name) });
-  console.log(`[real-shot] ${name}`);
-}
 
 /** 在 composer 输入并发送 */
 async function send(win: Page, text: string): Promise<void> {
@@ -97,8 +92,7 @@ function recordVersions(): void {
     }
   }
   const text = `${new Date().toISOString()}（真实最小集验收）\n${lines.join("\n")}\n`;
-  mkdirSync(EVIDENCE_DIR, { recursive: true });
-  writeFileSync(join(EVIDENCE_DIR, "cli-versions.txt"), text, "utf8");
+  writeArtifact(EVIDENCE_DIR, "cli-versions.txt", text);
   console.log(`[real-e2e] CLI 版本：\n${text}`);
 }
 
@@ -112,7 +106,8 @@ function collectHookLogs(runStart: number): string[] {
     const file = join(base, entry.name, "hook-events.jsonl");
     if (!existsSync(file)) continue;
     if (statSync(file).mtimeMs < runStart) continue; // 只取本次运行（旧会话日志不掺入）
-    const dest = join(EVIDENCE_DIR, `hook-events-${entry.name}.jsonl`);
+    const dest = artifactPath(EVIDENCE_DIR, `hook-events-${entry.name}.jsonl`);
+    mkdirSync(join(dest, ".."), { recursive: true });
     copyFileSync(file, dest);
     copied.push(dest);
   }
@@ -145,7 +140,7 @@ test("真实最小集全链：Claude hook verified design-feature 自动建卡 �
     await expect(designCol.getByText("◍ 1 会话")).toBeVisible();
     await expect(designCol.getByTestId("verified-badge").first()).toBeVisible();
     await expect(designCol.getByText(/design-feature · Claude/).first()).toBeVisible(); // 卡片依据行（verified 驱动）
-    await shot(win, "real-01-claude-verified-card.png");
+    await shot(win, EVIDENCE_DIR, "real-01-claude-verified-card.png");
 
     // [B1] OpenCode self_reported：详情「＋新建会话」OpenCode（真实 server 拉起，session:create 原子关联）
     await designCol.getByText("待命名需求").click();
@@ -166,7 +161,7 @@ test("真实最小集全链：Claude hook verified design-feature 自动建卡 �
     const implCol = win.getByTestId("kanban-col-Implement");
     await expect(implCol.getByText("待命名需求")).toBeVisible({ timeout: 60_000 });
     await expect(implCol.getByTestId("uncertain-badge").first()).toBeVisible();
-    await shot(win, "real-02-self-reported-uncertain.png");
+    await shot(win, EVIDENCE_DIR, "real-02-self-reported-uncertain.png");
 
     // [B3] UI 手动确认：详情「确认当前阶段」→ 待确认徽标清除、阶段保持 Implement（面板自 B1 起保持打开）
     await expect(win.getByTestId("detail-panel")).toBeVisible();
@@ -174,7 +169,7 @@ test("真实最小集全链：Claude hook verified design-feature 自动建卡 �
     await win.getByTestId("confirm-stage-button").click();
     await expect(implCol.getByTestId("uncertain-badge")).toHaveCount(0, { timeout: 15_000 });
     await expect(implCol.getByText("待命名需求")).toBeVisible();
-    await shot(win, "real-03-manual-confirmed.png");
+    await shot(win, EVIDENCE_DIR, "real-03-manual-confirmed.png");
 
     // [B4] 后续 Claude verified 转正：真实 Skill 调用 implement-spec → hook verified（更新发生）→ 依据转 verified、uncertain 保持 false
     await win.getByTestId("kanban-entry").click();
@@ -188,7 +183,7 @@ test("真实最小集全链：Claude hook verified design-feature 自动建卡 �
     await expect(implCol.getByText(/implement-spec · Claude/).first()).toBeVisible();
     await expect(win.getByTestId("detail-panel")).toBeVisible();
     await expect(win.getByText(/implement-spec · Claude · verified ·/)).toBeVisible(); // 详情当前依据：证据等级 verified
-    await shot(win, "real-04-verified-promoted.png");
+    await shot(win, EVIDENCE_DIR, "real-04-verified-promoted.png");
 
     // hook 捕获日志留证（verified 信号的真实来源：PreToolUse(Skill) JSONL）
     const logs = collectHookLogs(runStart);

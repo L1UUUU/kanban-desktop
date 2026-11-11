@@ -13,6 +13,8 @@
     "test": "pnpm -r test",
     "test:e2e": "pnpm --filter @kanban/desktop test:e2e",
     "lint": "oxlint apps packages",
+    "lint:strict": "oxlint --deny-warnings apps packages",
+    "check:gates": "node scripts/check-gates.mjs",
     "typecheck": "pnpm -r typecheck"
   },
   "devDependencies": {

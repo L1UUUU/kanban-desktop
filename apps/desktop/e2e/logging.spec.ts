@@ -10,6 +10,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { readRunEntries, runPrefixOf, type LogEntry } from "./log-run";
+import { shot } from "./helpers/acceptance-artifacts";
 
 const PROJECT_NAME = "kb-logging";
 
@@ -304,9 +305,7 @@ test("验收 7：浮层两项展开态截图 + getLogPath 返回含横幅主文�
     await win.getByRole("button", { name: "设置", exact: true }).click();
     await expect(win.getByRole("button", { name: "打开日志文件", exact: true })).toBeVisible();
     await expect(win.getByRole("button", { name: "复制日志文件路径", exact: true })).toBeVisible();
-    mkdirSync(SHOT_DIR, { recursive: true });
-    await win.screenshot({ path: join(SHOT_DIR, "01-settings-log-popover.png") });
-    console.log("[shot] 01-settings-log-popover.png");
+    await shot(win, SHOT_DIR, "01-settings-log-popover.png");
 
     // getLogPath：主文件（无分片后缀）、存在于盘、首条为启动横幅
     const logPath = await win.evaluate(async () => {

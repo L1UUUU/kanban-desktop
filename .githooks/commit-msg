@@ -1,0 +1,20 @@
+#!/bin/sh
+# 用途：提交信息门禁 —— Conventional Commits 前缀 + 中文正文 + 必填「测试方法」栏（详见 commit-message 技能）
+set -e
+
+msg_file="$1"
+subject=$(sed -n '1p' "$msg_file")
+body=$(sed -n '2,$p' "$msg_file")
+
+case "$subject" in
+  feat*|fix*|docs*|style*|refactor*|perf*|test*|build*|ci*|chore*) ;;
+  *)
+    echo "[commit-msg] 提交 subject 必须以 Conventional Commits 前缀开头（feat/fix/docs/style/refactor/perf/test/build/ci/chore，可带 scope）" >&2
+    exit 1
+    ;;
+esac
+
+if ! printf '%s' "$body" | grep -q '测试方法'; then
+  echo "[commit-msg] 提交正文必须含「测试方法」栏" >&2
+  exit 1
+fi

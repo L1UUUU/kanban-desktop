@@ -72,6 +72,8 @@ Playwright（`apps/desktop/playwright.config.ts`）：testDir `./e2e`，workers 
 | `KANBAN_TEST_RESIDUE_JSON` | `apps/desktop/e2e/residue.spec.ts`（残留通知条演示流程） | 指向残留清单 JSON（逐条过 `residueProcessSchema` 校验）：Main 检测直接返回种子、`residue:kill` 不真实终止统一回报 killed；另 `KANBAN_USER_DATA` 隔离环境下无种子时跳过机器级残留枚举（整机 e2e 密封性，见 `docs/acceptance/stage4/residue-known-limits.md`） | launch env（非 skip 门禁） |
 | `KANBAN_E2E_DEBUG` | cli-host 四件套内的调试日志 | 非空时向 stderr 输出调试日志 | 调试开关（非门禁） |
 | `KANBAN_CODEX_MODEL` | cli-host codex 模型解析链（`packages/cli-host/src/codex/model-probe.ts`） | 逗号分隔模型白名单，按序真实试探，首个可用即用；全败报错**不回退**（跳过磁盘缓存/rollout/model/list；命中不落盘缓存） | 成本开关（非门禁） |
+| `KANBAN_UPDATE_SCREENSHOTS` | `apps/desktop/e2e/helpers/acceptance-artifacts.ts`（7 个验收 spec 的截图与 real-evidence 制品） | `=== "1"` 才把截图/JSON/TXT 写回 `docs/acceptance/`；默认写 `test-results/acceptance/`（.gitignore 已忽略），避免每次跑 e2e 污染共享工作树；提交归档时另需 `KANBAN_ALLOW_ARCHIVE_PNG=1` 过 `check:gates` | 制品写入开关（非门禁） |
+| `KANBAN_ALLOW_ARCHIVE_PNG` | `scripts/check-gates.mjs` | `=== "1"` 才允许本次提交带入 `docs/acceptance/*.png` 变更 | 提交门禁逃生口 |
 
 注意 `KANBAN_E2E` 是严格等于 `"1"`：`KANBAN_E2E=0` 或任意其它非空值**不会**触发 B 类（杜绝非空值误触真实 PTY/CLI 测试）。
 
@@ -131,3 +133,28 @@ include 均已通配（`packages/cli-host/vitest.config.ts`、`apps/desktop/vite
 ## `apps/desktop/scripts/` 手动 smoke 脚本归属
 
 `apps/desktop/scripts/` 下的 4 个 `.cjs`（`smoke-node-sqlite.cjs`、`packaged-smoke.cjs`、`offline-electron-dist.cjs`、`registry-fallback-proxy.cjs`）是**运维脚本**：由 package.json script（如 `pnpm --filter @kanban/desktop smoke:sqlite`）或手动调用，用于特定环境的人工核验，**不入测试目录体系、不参与 pnpm test**。这与「不预建 smoke 测试层」（ADR 0002 D3）不冲突——前者是运维工具，后者是测试层级。
+
+## 验收门禁命令（pre-commit / CI 强制）
+
+`.githooks/pre-commit` 与 `.github/workflows/checks.yml` 依次执行：`pnpm check:gates` → `pnpm lint:strict` → `pnpm typecheck` → `pnpm test`。`lint:strict` 是 `oxlint --deny-warnings`（warning 级违规如孤儿 import 也会让门禁失败）；`pnpm lint` 保留宽松语义仅供本地快速查看。`check:gates` 校验 B 类后缀门控、`workspacePackages` 与 workspace 包一致、归档 PNG 不被意外提交。CI 与本地跑同一套命令，不另立一套。
+
+## flaky 台账
+
+发现 flaky **即登记**，不得只重跑到绿（全局 AGENTS.md §3）。台账按用例记录：复现率、根因、修复 commit、当前状态。已知历史记录：
+
+| 用例 | 根因 | 处置 |
+|---|---|---|
+| desktop node project 多 worktree 并行负载下 5s 超时假红 | 机器负载 / 临时目录清理竞态（ENOTEMPTY/EPERM） | 超时阈值 5s→20s、清理重试兜底（bae1b3d） |
+| hover→「＋」点击竞态、single-instance OS 焦点断言、worker 外杀后 `app.close()` 固定 5s 白等 | 断言与 UI/OS 状态耦合 | 事件驱动 + 最小化还原断言（b6064b3 / 47555da） |
+| `app.close()` 超时但断言全部通过 | teardown 挂死（Electron utilityProcess 平台限制） | 应用侧 dispose 3s 超时 + kill 兜底；产品代码未动 |
+
+新发现时追加一行并注明复现条件；连续全绿才标记「已收敛」，仍要保留根因记录。
+
+## 环境探测清单（POC / 真实 CLI 类任务开工前）
+
+先探测再派单，避免凭据/版本滞后导致整波补跑或 spec 漂移：
+
+1. **CLI 版本**：`claude --version` / `codex --version` / `opencode --version`，记入 spec 的 Environment 节（带复查触发条件）。
+2. **凭据有效性**：OpenAI oauth / provider 配置是否过期；失效时上报用户并明确标注"数据为合成"，不静默降级。
+3. **基线版本**：Electron / node / pnpm 版本与 EOL 状态；pnpm 10 需声明 `onlyBuiltDependencies`。
+4. **模型白名单**：真实 codex 测试由测试脚本/CI 默认注入 `KANBAN_CODEX_MODEL=gpt-6-luna,gpt-5.6-luna`，不依赖「记得带」。

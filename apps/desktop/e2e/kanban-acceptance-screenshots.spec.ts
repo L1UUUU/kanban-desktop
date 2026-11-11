@@ -3,6 +3,7 @@ import { test, expect, _electron, type ElectronApplication, type Page } from "@p
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { shot } from "./helpers/acceptance-artifacts";
 
 const PROJECT_NAME = "kb-s2-shot-repo";
 const SHOT_DIR = resolve(__dirname, "../../../docs/acceptance/stage2/screenshots");
@@ -53,12 +54,6 @@ async function launchApp(userData: string, repoDir: string, claudeCfg: string): 
   return { app, win };
 }
 
-/** 截图到验收目录（调用前自行断言目标状态可见） */
-async function shot(win: Page, name: string): Promise<void> {
-  mkdirSync(SHOT_DIR, { recursive: true });
-  await win.screenshot({ path: join(SHOT_DIR, name) });
-  console.log(`[shot] ${name}`);
-}
 
 /** 在 composer 输入并发送 */
 async function send(win: Page, text: string): Promise<void> {
@@ -76,7 +71,7 @@ test("原型一致项截图集（spec #15 H 节 7 条 + S2-18 空板）：入口
     await win.getByTestId("kanban-entry").click();
     await expect(win.getByTestId("kanban-board")).toBeVisible();
     await expect(win.getByTestId("kanban-empty-guide")).toHaveText("选择或注册项目后查看其需求");
-    await shot(win, "11-board-empty-guide.png");
+    await shot(win, SHOT_DIR, "11-board-empty-guide.png");
     await win.getByTestId("kanban-entry").click(); // 切回聊天（无项目时入口显示「当前项目」）
 
     // 注册项目 + 建 Claude 会话（Fake）→ 同名 skill 检测触发提示条（一致项 7）
@@ -90,13 +85,13 @@ test("原型一致项截图集（spec #15 H 节 7 条 + S2-18 空板）：入口
     await expect(banner).toBeVisible({ timeout: 10_000 });
     await expect(banner).toContainText("design-feature");
     await expect(banner).toContainText("项目级将优先生效");
-    await shot(win, "10-skill-conflict-banner.png");
+    await shot(win, SHOT_DIR, "10-skill-conflict-banner.png");
     await banner.getByRole("button", { name: "知道了" }).click(); // 可关闭（非阻塞）
     await expect(banner).toHaveCount(0);
 
     // 一致项 1：侧栏底部「看板」入口按钮（带当前项目指示）—— 聊天视图整体（含会话行）
     await expect(win.getByTestId("kanban-entry")).toContainText(PROJECT_NAME);
-    await shot(win, "01-kanban-entry-sidebar.png");
+    await shot(win, SHOT_DIR, "01-kanban-entry-sidebar.png");
 
     // 一致项 2：看板五列（未开始列头「＋」手动建卡）/ Design / Implement / PR / Retro
     await win.getByTestId("kanban-entry").click();
@@ -105,7 +100,7 @@ test("原型一致项截图集（spec #15 H 节 7 条 + S2-18 空板）：入口
       await expect(win.getByTestId(`kanban-col-${key}`)).toBeVisible();
     }
     await expect(win.getByTestId("kanban-col-none").getByTitle("手动新建需求（归属当前项目）")).toBeVisible();
-    await shot(win, "02-board-five-columns.png");
+    await shot(win, SHOT_DIR, "02-board-five-columns.png");
 
     // 一致项 3a：verified design-feature 自动建卡 —— 标题/会话数/阶段依据行/verified 绿徽标（Design 列）
     await win.getByTestId("kanban-entry").click();
@@ -116,7 +111,7 @@ test("原型一致项截图集（spec #15 H 节 7 条 + S2-18 空板）：入口
     await expect(designCol.getByText("◍ 1 会话")).toBeVisible();
     await expect(designCol.getByTestId("verified-badge").first()).toBeVisible();
     await expect(designCol.getByText(/design-feature/).first()).toBeVisible(); // 卡片阶段依据行
-    await shot(win, "03-card-verified-design.png");
+    await shot(win, SHOT_DIR, "03-card-verified-design.png");
 
     // 一致项 3b：self_reported implement-spec → Implement 列 + uncertain「待确认」黄徽标
     await win.getByTestId("kanban-entry").click();
@@ -125,14 +120,14 @@ test("原型一致项截图集（spec #15 H 节 7 条 + S2-18 空板）：入口
     const implCol = win.getByTestId("kanban-col-Implement");
     await expect(implCol.getByText("待命名需求")).toBeVisible({ timeout: 15_000 });
     await expect(implCol.getByTestId("uncertain-badge").first()).toBeVisible();
-    await shot(win, "04-card-uncertain-implement.png");
+    await shot(win, SHOT_DIR, "04-card-uncertain-implement.png");
 
     // 一致项 4c：详情面板 uncertain 提示条 +「确认当前阶段」（暂不点确认，先截图）
     await implCol.getByText("待命名需求").click();
     await expect(win.getByTestId("detail-panel")).toBeVisible();
     await expect(win.getByTestId("uncertain-note")).toContainText("implement-spec");
     await expect(win.getByTestId("confirm-stage-button")).toBeVisible();
-    await shot(win, "07-detail-uncertain-confirm.png");
+    await shot(win, SHOT_DIR, "07-detail-uncertain-confirm.png");
 
     // 一致项 4b：「＋新建会话」四 CLI 菜单（PTY 项标注「无 skill 信号」）→ 选 OpenCode 创建即自动关联
     await win.getByTestId("new-session-menu").click();
@@ -140,7 +135,7 @@ test("原型一致项截图集（spec #15 H 节 7 条 + S2-18 空板）：入口
       await expect(win.getByTestId(`new-session-item-${cli}`)).toBeVisible();
     }
     await expect(win.getByTestId("new-session-item-pty")).toContainText("无 skill 信号");
-    await shot(win, "06-detail-new-session-menu.png");
+    await shot(win, SHOT_DIR, "06-detail-new-session-menu.png");
     await win.getByTestId("new-session-item-opencode").click();
     const openRow = win.getByTestId("detail-panel").locator('[data-testid="related-session"]', { hasText: "新会话 · OpenCode" });
     await expect(openRow).toBeVisible({ timeout: 15_000 });
@@ -157,7 +152,7 @@ test("原型一致项截图集（spec #15 H 节 7 条 + S2-18 空板）：入口
     await expect(openRow.getByTestId("related-unlink")).toBeVisible();
     await expect(win.getByTestId("link-existing-select")).toBeVisible();
     await expect(win.getByTestId("delete-requirement-button")).toBeVisible();
-    await shot(win, "05-detail-panel.png");
+    await shot(win, SHOT_DIR, "05-detail-panel.png");
 
     // uncertain 手动确认交互：徽标清除、阶段保持
     await win.getByTestId("confirm-stage-button").click();
@@ -170,7 +165,7 @@ test("原型一致项截图集（spec #15 H 节 7 条 + S2-18 空板）：入口
     const openSideRow = win.locator("aside").locator('[data-testid="session-row"]', { hasText: "新会话 · OpenCode" });
     await expect(claudeRow.getByTestId("req-badge")).toHaveText("REQ-001");
     await expect(openSideRow.getByTestId("req-badge")).toHaveText("REQ-001");
-    await shot(win, "09-sidebar-req-badge.png");
+    await shot(win, SHOT_DIR, "09-sidebar-req-badge.png");
 
     // 一致项 5：删除二次确认弹层（三要素文案）→ 确认后卡片实时消失（面板仍开着：activeRequirementId 未清）
     await win.getByTestId("kanban-entry").click();
@@ -180,7 +175,7 @@ test("原型一致项截图集（spec #15 H 节 7 条 + S2-18 空板）：入口
     await expect(dialog).toContainText("仅删除需求卡片与全部会话关联");
     await expect(dialog).toContainText("会话本身、聊天历史与事件日志保留");
     await expect(dialog).toContainText("不可撤销");
-    await shot(win, "08-delete-confirm-dialog.png");
+    await shot(win, SHOT_DIR, "08-delete-confirm-dialog.png");
     await win.getByTestId("confirm-delete-button").click();
     await expect(win.getByTestId("requirement-card")).toHaveCount(0, { timeout: 10_000 });
 

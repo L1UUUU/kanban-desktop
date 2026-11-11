@@ -4,9 +4,10 @@
 // 原型一致项 1–8 逐条真实渲染走查，截图归档 docs/acceptance/stage3/screenshots/（沿 #22 模式）。
 // 已知边界：四步进度/取消的进行中态需真实模型调用（run-once 仅真实 CLI，无 fake），由 #31/#32 B 类 e2e 与 #33 组件测试覆盖；本票预置数据只能走到失败/取消终态卡。
 import { test, expect, _electron, type ElectronApplication, type Page } from "@playwright/test";
-import { mkdirSync, rmSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { rmSync } from "node:fs";
+import { resolve } from "node:path";
 import { SEED, SEED_PROJECT_NAME, SEED_REQ2_TITLE, SEED_REQ_TITLE, seedMemoryFixture, type MemorySeed } from "./memory-seed";
+import { shot } from "./helpers/acceptance-artifacts";
 
 /** 截图归档目录（docs/acceptance/stage3/screenshots，沿 #22 阶段 2 验收目录约定） */
 const SHOT_DIR = resolve(__dirname, "../../../docs/acceptance/stage3/screenshots");
@@ -40,12 +41,6 @@ async function launchApp(seed: MemorySeed): Promise<{ app: ElectronApplication; 
   return { app, win };
 }
 
-/** 截图到验收目录（调用前自行断言目标状态可见） */
-async function shot(win: Page, name: string): Promise<void> {
-  mkdirSync(SHOT_DIR, { recursive: true });
-  await win.screenshot({ path: join(SHOT_DIR, name) });
-  console.log(`[shot] ${name}`);
-}
 
 /** 选中侧栏项目行（首轮启动无当前项目 → 点击即切换并持久化） */
 async function selectProject(win: Page): Promise<void> {
@@ -62,7 +57,7 @@ test("记忆视图链路（#34/#38）：入口 → 无项目空态 → 项目分
     await expect(aside.getByTestId("kanban-entry")).toBeVisible({ timeout: 15_000 });
     await expect(aside.getByTestId("memory-entry")).toBeVisible();
     await expect(aside.getByTestId("memory-entry")).toContainText("记忆");
-    await shot(win, "01-memory-entry-sidebar.png");
+    await shot(win, SHOT_DIR, "01-memory-entry-sidebar.png");
 
     // 无项目空态（首轮启动未选项目）：进入记忆视图 → 引导文案（一致项 2 的空态分支）
     await aside.getByTestId("memory-entry").click();
@@ -91,7 +86,7 @@ test("记忆视图链路（#34/#38）：入口 → 无项目空态 → 项目分
     await expect(summaryRow.getByTestId("memory-summary-view")).toBeVisible();
     await expect(summaryRow.getByTestId("memory-summary-edit")).toBeVisible();
     await expect(summaryRow.getByTestId("memory-summary-copy-path")).toBeVisible();
-    await shot(win, "02-memory-workspace.png");
+    await shot(win, SHOT_DIR, "02-memory-workspace.png");
 
     // 搜索命中：仅命中知识卡保留，未命中分区隐藏
     const search = win.getByTestId("memory-search");
@@ -103,7 +98,7 @@ test("记忆视图链路（#34/#38）：入口 → 无项目空态 → 项目分
     // 无匹配空态（顺带验证 pending 候选不进搜索：待忽略候选措辞查无结果）
     await search.fill(SEED.ignorePendingClaim);
     await expect(win.getByTestId("memory-empty-search")).toHaveText("没有匹配的知识或总结");
-    await shot(win, "02b-memory-empty-search.png");
+    await shot(win, SHOT_DIR, "02b-memory-empty-search.png");
     await search.fill("");
 
     // 知识编辑（memory:editAccepted 真通道）：弹层预填有效值 → 改 claim → 保存 → 列表即时更新
@@ -125,7 +120,7 @@ test("记忆视图链路（#34/#38）：入口 → 无项目空态 → 项目分
     await expect(win.getByTestId("memory-summary-textarea")).toHaveValue(SEED.summaryHuman); // 人工版预填
     const revisedSummary = `${SEED.summaryHuman}\n编辑闭环补充：总结编辑通道已接通。`;
     await win.getByTestId("memory-summary-textarea").fill(revisedSummary);
-    await shot(win, "08-summary-edit-dialog.png");
+    await shot(win, SHOT_DIR, "08-summary-edit-dialog.png");
     await win.getByTestId("memory-summary-save").click();
     await expect(summaryEditDialog).toHaveCount(0);
     await summaryRow.getByTestId("memory-summary-view").click();
@@ -190,7 +185,7 @@ test("详情审核闭环（#33）：完成批次+待审候选（冲突提示）+
     await expect(conflictNote).toContainText(seed.conflictDisplayNo);
     await expect(conflictNote).toContainText("相似度");
     await expect(conflictNote).toContainText("不会替换已有知识");
-    await shot(win, "06-candidates-conflict-review.png");
+    await shot(win, SHOT_DIR, "06-candidates-conflict-review.png");
 
     // 已处置按批次折叠：展开 B1 批次 → accepted/edited 终态 + 「去编辑」入口
     const toggleB1 = panel.getByTestId("memory-disposed-toggle").filter({ hasText: "B-seed-1" });
@@ -219,7 +214,7 @@ test("详情审核闭环（#33）：完成批次+待审候选（冲突提示）+
     await expect(panel.getByTestId("memory-edit-source")).toContainText(/候选编号 CAND-\d{4}/); // 溯源含编号（B1 两条知识占 0001/0002，本批按序 0003–0005）
     const revisedPendingClaim = "长历史分段处理按会话边界优先，累计上限 6000（编辑后接受）";
     await panel.getByTestId("memory-edit-claim").fill(revisedPendingClaim);
-    await shot(win, "07-candidate-edit-dialog.png");
+    await shot(win, SHOT_DIR, "07-candidate-edit-dialog.png");
     await panel.getByTestId("memory-edit-save").click();
     // #33 交互口径：保存成功弹层保持打开（组件测试同口径），以审核生效为成功信号，再手动关闭
     await expect(panel.getByText(/待审核 1（跨批次累计）/)).toBeVisible();
@@ -248,12 +243,12 @@ test("详情审核闭环（#33）：完成批次+待审候选（冲突提示）+
     const proposedBar = panel.getByTestId("memory-proposed-bar");
     await expect(proposedBar).toContainText("检测到人工编辑过的总结");
     await expect(proposedBar).toContainText("B-seed-3");
-    await shot(win, "05-proposed-bar.png");
+    await shot(win, SHOT_DIR, "05-proposed-bar.png");
     await proposedBar.getByTestId("memory-compare-button").click();
     const compareDialog = panel.getByTestId("memory-compare-dialog");
     await expect(compareDialog.getByTestId("memory-compare-human")).toContainText("人工补充：验收以 Playwright 全流程为准");
     await expect(compareDialog.getByTestId("memory-compare-new")).toContainText("重新提取后的新版总结");
-    await shot(win, "05b-summary-compare-dialog.png");
+    await shot(win, SHOT_DIR, "05b-summary-compare-dialog.png");
     await compareDialog.getByTestId("memory-compare-accept").click();
     await expect(compareDialog).toHaveCount(0);
     await expect(proposedBar).toHaveCount(0);
@@ -264,7 +259,7 @@ test("详情审核闭环（#33）：完成批次+待审候选（冲突提示）+
     const disabledButton = win.getByTestId("detail-panel").getByTestId("memory-extract-button");
     await expect(disabledButton).toBeDisabled();
     await expect(disabledButton).toHaveAttribute("title", /该需求没有关联的结构化会话/);
-    await shot(win, "03-extract-button-disabled.png");
+    await shot(win, SHOT_DIR, "03-extract-button-disabled.png");
 
     // 闭环收口：记忆视图检索到刚接受的知识（含冲突对），总结已是采纳的新版
     await win.getByTestId("memory-entry").click();
