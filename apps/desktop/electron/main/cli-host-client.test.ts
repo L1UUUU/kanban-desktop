@@ -1,4 +1,4 @@
-// 用途：CliHostClient 密封测试（#54 / spec #52 B/F/G 节）—— fork 注入替身 proc，覆盖 {log} 消息分派顺序（先于事件/无 id 分支）、Logger 未就绪不抛错、pending 白名单摘要（含 init.cli、不含 stdin 正文）、命令失败 error、worker 意外退出 error 与 exit 汇总一条、正常停机/超时强杀不误报
+// 用途：CliHostClient 密封测试（#54 / spec #52 B/F/G 节 + issue #73）—— fork 注入替身 proc，覆盖 {log} 消息分派顺序（先于事件/无 id 分支）、Logger 未就绪不抛错、pending 白名单摘要（含 init.cli、不含 stdin 正文）、命令失败 error、worker 意外退出 error 与 exit 汇总一条、正常停机/超时强杀不误报；buildWorkerEnv 纯函数（env 显式化：base 打底保留/config 覆盖/不突变 base）
 import { describe, expect, it, vi } from "vitest";
 
 // node 测试环境无 Electron 运行时：桩掉 utilityProcess（测试一律经 fork 注入替身，真实 fork 分支不触达）
@@ -14,7 +14,7 @@ vi.mock("electron", () => ({
 vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
 
 import { spawn } from "node:child_process";
-import { CliHostClient, type UtilityProcessLike } from "./cli-host-client";
+import { buildWorkerEnv, CliHostClient, type UtilityProcessLike } from "./cli-host-client";
 
 /** 记录型替身 proc：捕获 postMessage/kill 与 message/exit/spawn 监听器，供测试按消息协议驱动 */
 class FakeProc implements UtilityProcessLike {
@@ -145,6 +145,36 @@ describe("CliHostClient 命令失败与白名单摘要（#54 spec #52 G 节 M5�
     expect(detail).toContain("kind=cancel-run-once runId=rc");
     expect(detail).toContain("kind=run-once cli=claude runId=rr");
     expect(detail).toContain("kind=adoptSession sessionId=sa cli=codex");
+  });
+});
+
+describe("buildWorkerEnv（issue #73 env 显式化）", () => {
+  it("base 打底全保留：用户/测试手设 env（KANBAN_DISABLE_*、KANBAN_CODEX_MODEL 等）逐键继承；config 有值时叠加覆盖用户手设（与旧 process.env 突变语义一致）", () => {
+    const env = buildWorkerEnv(
+      { dataDir: "C:\\ud", codexExe: "C:\\cx.exe" },
+      { PATH: "p1", KANBAN_DISABLE_CLAUDE: "1", KANBAN_CODEX_MODEL: "gpt-6-luna", KANBAN_CODEX_BIN: "user-set" },
+    );
+    expect(env).toEqual({
+      PATH: "p1",
+      KANBAN_DISABLE_CLAUDE: "1",
+      KANBAN_CODEX_MODEL: "gpt-6-luna",
+      KANBAN_CODEX_BIN: "C:\\cx.exe",
+      KANBAN_DATA_DIR: "C:\\ud",
+    });
+  });
+
+  it("config 缺省（null/undefined/空串）不写对应 _BIN：用户手设值不被清空", () => {
+    const env = buildWorkerEnv(
+      { dataDir: "C:\\ud", codexExe: null, claudeExe: undefined, opencodeExe: "" },
+      { KANBAN_CLAUDE_BIN: "user-claude" },
+    );
+    expect(env).toEqual({ KANBAN_CLAUDE_BIN: "user-claude", KANBAN_DATA_DIR: "C:\\ud" });
+  });
+
+  it("纯函数不突变 base：Main 进程 env 保持干净（residue 枚举只剩 manualOverride 单路）", () => {
+    const base: NodeJS.ProcessEnv = { KANBAN_CODEX_BIN: "user-set" };
+    buildWorkerEnv({ dataDir: "C:\\ud", codexExe: "C:\\cx.exe" }, base);
+    expect(base).toEqual({ KANBAN_CODEX_BIN: "user-set" });
   });
 });
 

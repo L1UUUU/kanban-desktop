@@ -10,13 +10,13 @@ import { AdapterError, JOB_GUARD_PS, type AdoptSessionInput, type AdapterCapabil
 export interface CliHostClientOptions {
   /** worker bundle 绝对路径（out/main/cli-host-worker.js） */
   workerPath: string;
-  /** 模型探测缓存目录（userData，经 env 传给 worker） */
+  /** 模型探测缓存目录（userData，经 fork env 显式传给 worker） */
   dataDir: string;
-  /** config cliExe.codex 手动覆盖（经 env 传给 worker） */
+  /** config cliExe.codex 手动覆盖（经 fork env 显式传给 worker） */
   codexExe?: string | null;
-  /** config cliExe.claude 手动覆盖（经 env 传给 worker） */
+  /** config cliExe.claude 手动覆盖（经 fork env 显式传给 worker） */
   claudeExe?: string | null;
-  /** config cliExe.opencode 手动覆盖（经 env 传给 worker） */
+  /** config cliExe.opencode 手动覆盖（经 fork env 显式传给 worker） */
   opencodeExe?: string | null;
   /** 全量 dispose 后等 worker 自行退出的上限 ms（超时 kill 兜底；与退出序列 graceMs 对齐，缺省 3000） */
   fullDisposeWaitMs?: number;
@@ -24,7 +24,7 @@ export interface CliHostClientOptions {
   log?: (kind: LogKind, detail: string) => void;
   /** worker {log} 消息分派目标（#54 spec #52 B 节）：worker 经 parentPort 上报的 (kind, detail) 2 参回调，Main 装配侧强制 source=worker；入参保持 string——跨进程 wire 输入不可信，级别兜底由 resolveKindLog safeParse 守卫；缺省丢弃（Logger 未就绪不抛错） */
   onWorkerLog?: (kind: string, detail: string) => void;
-  /** fork 替身注入（#54 A 类测试 seam）：缺省走真实 utilityProcess.fork（env 传参行为不变）；注入替身时不绑 Job Object（无 OS 进程可绑） */
+  /** fork 替身注入（#54 A 类测试 seam）：缺省走真实 utilityProcess.fork（fork env 选项显式传参，issue #73）；注入替身时不绑 Job Object（无 OS 进程可绑） */
   fork?: (options: CliHostClientOptions) => UtilityProcessLike;
 }
 
@@ -40,13 +40,26 @@ export interface UtilityProcessLike {
   readonly pid?: number;
 }
 
-/** 缺省 fork：env 传参（worker 侧 createDesktopAdapterFactory 读取）→ 真实 utilityProcess.fork（utilityProcess 须在 app ready 后使用，由装配时机保证） */
+/**
+ * worker env 构造（issue #73 纯函数）：以 base（缺省 Main 进程 env）打底叠加 config 传参键。
+ * config 覆盖用户手设 env（与旧 process.env 突变语义一致）；KANBAN_DATA_DIR 无条件写、三个 _BIN 仅在 config 有值时写。
+ */
+export function buildWorkerEnv(
+  options: Pick<CliHostClientOptions, "dataDir" | "codexExe" | "claudeExe" | "opencodeExe">,
+  base: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  return {
+    ...base,
+    KANBAN_DATA_DIR: options.dataDir,
+    ...(options.codexExe ? { KANBAN_CODEX_BIN: options.codexExe } : {}),
+    ...(options.claudeExe ? { KANBAN_CLAUDE_BIN: options.claudeExe } : {}),
+    ...(options.opencodeExe ? { KANBAN_OPENCODE_BIN: options.opencodeExe } : {}),
+  };
+}
+
+/** 缺省 fork：env 显式传参（worker 侧 createDesktopAdapterFactory 读取；Main 进程 env 不再突变，issue #73）→ 真实 utilityProcess.fork（utilityProcess 须在 app ready 后使用，由装配时机保证） */
 function forkUtilityProcess(options: CliHostClientOptions): UtilityProcessLike {
-  process.env.KANBAN_DATA_DIR = options.dataDir;
-  if (options.codexExe) process.env.KANBAN_CODEX_BIN = options.codexExe;
-  if (options.claudeExe) process.env.KANBAN_CLAUDE_BIN = options.claudeExe;
-  if (options.opencodeExe) process.env.KANBAN_OPENCODE_BIN = options.opencodeExe;
-  return utilityProcess.fork(options.workerPath, [], { serviceName: "cli-host" });
+  return utilityProcess.fork(options.workerPath, [], { serviceName: "cli-host", env: buildWorkerEnv(options) });
 }
 
 /** pending 命令白名单摘要（#54 spec #52 G 节 M5）：只取 kind/sessionId/cli/runId（createSession 的 cli 取自 init.cli）；禁止整包 JSON.stringify（run-once 的 stdin 含 chunk 正文，Q8） */
