@@ -1,5 +1,6 @@
-// 用途：聊天会话视图 store —— ChatEvent 按合并键归并成每会话 items（不变量 3/4 的 renderer 侧），useSyncExternalStore 兼容（快照引用稳定）
+// 用途：聊天会话视图 store —— ChatEvent 按合并键归并成每会话 items（不变量 3/4 的 renderer 侧），useSyncExternalStore 兼容（快照引用稳定）；#59 起承载结构化会话草稿态
 import type { ApprovalSuggestion, ChatEvent, CliKind, PermMode, SessionRow, SessionStatus } from "@kanban/ipc-schema";
+import { CLI_LABELS } from "./error-classify";
 
 /** 用户消息条目（ChatEvent 无 user 成员：renderer 发送时本地回显） */
 export interface UserItem {
@@ -39,7 +40,7 @@ export interface PendingApproval {
 /** #42 恢复引导条三态：idle=待恢复（无恢复进行）；resuming=恢复中（不可中断，D1）；failed=上次尝试失败（附 IPC 错误） */
 export type ResumeState = { phase: "idle" } | { phase: "resuming" } | { phase: "failed"; code: string; message: string };
 
-/** #46 会话创建失败记录（session:create 失败无会话视图可挂——挂侧栏创建入口卡；携带原参数供「重试创建」，spec #40 F1） */
+/** #46 会话创建失败信息（session:create 失败的错误形状：错误卡数据源；#59 起由草稿 submitError 构造） */
 export interface CreateFailure {
   cli: CliKind;
   code: string;
@@ -48,6 +49,37 @@ export interface CreateFailure {
   projectId: string | null;
   title?: string;
   requirementId?: string;
+}
+
+/** #59 openDraft 入参（点「＋」选 CLI / 看板卡片建会话：cwd 必填，权限/模型可选继承） */
+export interface DraftMeta {
+  cli: CliKind;
+  cwd: string;
+  projectId?: string | null;
+  title?: string;
+  permMode?: PermMode;
+  model?: string;
+  /** 看板卡片进入草稿的需求关联（随首条消息落到新会话） */
+  requirementId?: string;
+}
+
+/** #59 结构化会话草稿（点「＋」后的中央区草稿态：不落库、不进侧栏、不启 CLI；发出首条消息才创建会话） */
+export interface DraftSession {
+  cli: CliKind;
+  /** 草稿标题（提示行显示；提交时作为会话 title 下发） */
+  title: string;
+  cwd: string;
+  projectId: string | null;
+  /** 权限档位/默认模型：随首条消息一并下发 */
+  permMode: PermMode;
+  model: string;
+  requirementId?: string;
+  /** 首条消息输入（提交失败保留；丢弃草稿即失） */
+  input: string;
+  /** 本草稿替换过已有草稿（提示行显示「已替换上一个草稿」） */
+  replacedHint: boolean;
+  /** 首条消息提交失败（创建+发送原子链错误；null=无） */
+  submitError: { code: string; message: string } | null;
 }
 
 export interface SessionView {
@@ -95,8 +127,8 @@ export interface ChatSnapshot {
   sessions: SessionView[];
   activeId: string | null;
   version: number;
-  /** #46：最近一次会话创建失败（null=无；侧栏创建入口错误卡数据源） */
-  createFailure: CreateFailure | null;
+  /** #59：当前结构化会话草稿（null=无草稿；全局仅一个） */
+  draft: DraftSession | null;
 }
 
 let userItemSeq = 0;
@@ -104,8 +136,8 @@ let userItemSeq = 0;
 export class ChatStore {
   private sessions = new Map<string, SessionView>();
   private activeId: string | null = null;
-  /** #46：最近一次会话创建失败（无会话视图可挂） */
-  private createFailure: CreateFailure | null = null;
+  /** #59：结构化会话草稿（全局仅一个；切会话/项目/重启丢弃） */
+  private draft: DraftSession | null = null;
   private listeners = new Set<() => void>();
   private version = 0;
   private snapshot: ChatSnapshot | null = null;
@@ -117,7 +149,7 @@ export class ChatStore {
         sessions: [...this.sessions.values()],
         activeId: this.activeId,
         version: this.version,
-        createFailure: this.createFailure,
+        draft: this.draft,
       };
     }
     return this.snapshot;
@@ -135,6 +167,24 @@ export class ChatStore {
   }
 
   registerSession(meta: SessionMeta): void {
+    const existing = this.sessions.get(meta.sessionId);
+    if (existing) {
+      // 事件先到（applyEvent 占位）后注册：保留事件已累积的运行态（status/items 等），仅回填元数据
+      // （#59 起首条消息在 session:create 的 invoke 内即开始 turn，running 态可能早于注册到达）
+      existing.cli = meta.cli;
+      existing.title = meta.title;
+      existing.permMode = meta.permMode;
+      existing.model = meta.model;
+      existing.projectId = meta.projectId ?? null;
+      existing.cwd = meta.cwd ?? existing.cwd;
+      existing.dirIdentity = meta.dirIdentity ?? existing.dirIdentity;
+      existing.worktreeName = meta.worktreeName ?? null;
+      existing.skillConflicts = meta.skillConflicts ?? [];
+      existing.skillConflictDismissed = false;
+      this.activeId = meta.sessionId;
+      this.changed();
+      return;
+    }
     this.sessions.set(meta.sessionId, {
       sessionId: meta.sessionId,
       cli: meta.cli,
@@ -155,8 +205,6 @@ export class ChatStore {
       resumeState: { phase: "idle" },
     });
     this.activeId = meta.sessionId;
-    // #46：创建成功清除旧的创建失败卡（不残留）
-    if (this.createFailure) this.createFailure = null;
     this.changed();
   }
 
@@ -186,8 +234,65 @@ export class ChatStore {
   }
 
   setActive(id: string): void {
-    if (!this.sessions.has(id) || this.activeId === id) return;
+    if (!this.sessions.has(id)) return;
+    const wasActive = this.activeId === id;
     this.activeId = id;
+    // #59：切会话丢弃草稿（不弹确认、输入不保留）——点当前激活行同样回到会话视图（草稿让位）
+    this.discardDraft();
+    if (!wasActive) this.changed(); // 激活变化必通知；点已激活行时仅草稿丢弃自身按需通知
+  }
+
+  /** #59：移除会话视图（session:create+firstMessage 失败回滚时撤销事件先至的占位行；不留空会话） */
+  removeSession(id: string): void {
+    if (!this.sessions.delete(id)) return;
+    if (this.activeId === id) this.activeId = null;
+    this.changed();
+  }
+
+  /** #59：打开草稿（全局仅一个：已有草稿则替换并置 replacedHint；返回是否发生了替换） */
+  openDraft(meta: DraftMeta): boolean {
+    const replaced = this.draft !== null;
+    this.draft = {
+      cli: meta.cli,
+      title: meta.title ?? `新会话 · ${CLI_LABELS[meta.cli] ?? meta.cli}`,
+      cwd: meta.cwd,
+      projectId: meta.projectId ?? null,
+      permMode: meta.permMode ?? "auto",
+      model: meta.model ?? "默认模型",
+      requirementId: meta.requirementId,
+      input: "",
+      replacedHint: replaced,
+      submitError: null,
+    };
+    this.changed();
+    return replaced;
+  }
+
+  /** #59：草稿本地编辑（首条消息输入/权限档位/默认模型） */
+  updateDraft(patch: Partial<Pick<DraftSession, "input" | "permMode" | "model">>): void {
+    if (!this.draft) return;
+    Object.assign(this.draft, patch);
+    this.changed();
+  }
+
+  /** #59：丢弃草稿（切会话/切项目/提交成功后；输入随之消失不保留） */
+  discardDraft(): void {
+    if (!this.draft) return;
+    this.draft = null;
+    this.changed();
+  }
+
+  /** #59：记录首条消息提交失败（创建+发送原子链错误；草稿与输入保留供重试） */
+  setDraftSubmitError(code: string, message: string): void {
+    if (!this.draft) return;
+    this.draft.submitError = { code, message };
+    this.changed();
+  }
+
+  /** #59：清除提交失败记录（失败卡「知道了」） */
+  clearDraftSubmitError(): void {
+    if (!this.draft?.submitError) return;
+    this.draft.submitError = null;
     this.changed();
   }
 
@@ -246,19 +351,6 @@ export class ChatStore {
     const s = this.sessions.get(id);
     if (!s || !s.lastError) return;
     s.lastError = null;
-    this.changed();
-  }
-
-  /** #46：记录会话创建失败（session:create IPC 错误；无会话视图可挂——侧栏创建入口错误卡数据源） */
-  setCreateFailure(f: CreateFailure): void {
-    this.createFailure = f;
-    this.changed();
-  }
-
-  /** #46：清除创建失败记录（「知道了」或下次创建成功时） */
-  clearCreateFailure(): void {
-    if (!this.createFailure) return;
-    this.createFailure = null;
     this.changed();
   }
 

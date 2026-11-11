@@ -67,6 +67,9 @@ async function registerAndCreate(win: Page): Promise<void> {
   await expect(win.locator("aside").getByText(PROJECT_NAME, { exact: true })).toBeVisible({ timeout: 15_000 });
   await openCreateMenu(win);
   await win.getByRole("button", { name: "Claude", exact: true }).click();
+  // #59 草稿：点 CLI 只开草稿，发出首条消息才创建会话（侧栏行出现）
+  await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
+  await send(win, "首条消息（建立会话）");
   await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
 }
 
@@ -148,23 +151,28 @@ test("spawn 创建失败侧栏卡：E_SPAWN_NOT_FOUND → 卡 3 形态呈现 →
     await expect(first.win.locator("aside").getByText(PROJECT_NAME, { exact: true })).toBeVisible({ timeout: 15_000 });
     await first.app.close();
 
-    // 第二次运行注入：Fake 前一次 createSession 抛 E_SPAWN_NOT_FOUND（协议级同码）→ 侧栏创建入口错误卡
+    // 第二次运行注入：Fake 前一次 createSession 抛 E_SPAWN_NOT_FOUND（协议级同码）→ 草稿提交失败卡（#59：草稿面板中央区）
     const second = await launchApp(userData, undefined, { KANBAN_FAKE_CREATE_FAIL_FIRST: "1" });
     const win = second.win;
     await openCreateMenu(win);
     await win.getByRole("button", { name: "Claude", exact: true }).click();
+    // 草稿面板出现（不落库、侧栏无新行）；发送首条消息触发创建失败
+    await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
+    await send(win, "要重试的首条");
 
-    // 无会话视图可挂：卡在侧栏创建入口（info 槽）呈现，对齐原型 d2 卡 3 信息结构
+    // 失败卡在草稿面板中央区呈现，对齐原型 d2 卡 3 信息结构；草稿与输入保留
     const card = win.getByTestId("create-error-card");
     await expect(card).toBeVisible({ timeout: 15_000 });
     await expect(card).toContainText("找不到 CLI 程序（Claude）");
     await expect(card).toContainText("FakeAdapter 注入"); // AdapterError 消息原文保留（不吞错）
     await expect(card).toContainText("config.json"); // 配置路径指引（AppInfo.configPath）
-    await expect(card.getByRole("button", { name: "重试创建" })).toBeVisible();
+    await expect(card.getByRole("button", { name: "重试发送" })).toBeVisible();
     await expect(card.getByRole("button", { name: "复制配置路径" })).toBeVisible();
+    await expect(win.getByTestId("draft-hint")).toBeVisible(); // 草稿与输入保留（可重试）
+    await expect(win.getByText("新会话 · Claude").first()).toHaveCount(0); // 不留空会话（无侧栏行）
 
-    // 「重试创建」：以原参数重发 session:create → 成功后卡消失 + 会话登记（console.error 旧形态不复存在）
-    await card.getByRole("button", { name: "重试创建" }).click();
+    // 「重试发送」：重新执行创建+发送首条消息 → 成功后卡消失 + 会话登记 + 草稿丢弃
+    await card.getByRole("button", { name: "重试发送" }).click();
     await expect(card).toHaveCount(0, { timeout: 15_000 });
     await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
 
@@ -178,7 +186,7 @@ test("spawn 创建失败侧栏卡：E_SPAWN_NOT_FOUND → 卡 3 形态呈现 →
     expect(cmdFailed).toBeTruthy();
     expect(cmdFailed?.message).toContain("kind=createSession");
     expect(cmdFailed?.message).toContain("cli=claude");
-    const rendererFailed = entries.find((e) => e.source === "renderer" && e.message === "会话创建失败");
+    const rendererFailed = entries.find((e) => e.source === "renderer" && e.message === "草稿提交失败（创建+发送首条消息）");
     expect(rendererFailed).toBeTruthy();
     expect(rendererFailed?.ctx?.code).toBe("E_SPAWN_NOT_FOUND");
     expect(rendererFailed?.ctx?.cli).toBe("claude");

@@ -109,6 +109,9 @@ async function registerAndCreate(win: Page, projectName: string): Promise<void> 
   await win.locator("aside").getByText(projectName, { exact: true }).hover();
   await win.getByRole("button", { name: "＋", exact: true }).click();
   await win.getByRole("button", { name: "Claude", exact: true }).click();
+  // #59 草稿：点 CLI 只开草稿，发出首条消息才创建会话（行出现）
+  await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
+  await send(win, "首条消息（建立会话）");
   await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
 }
 
@@ -259,20 +262,22 @@ test("I-2 补充：spawn 创建失败侧栏卡（F1 形态，无会话视图可�
     await expect(first.win.locator("aside").getByText("kb-s4-spawncard", { exact: true })).toBeVisible({ timeout: 15_000 });
     await first.app.close();
 
-    // 第二次运行注入 E_SPAWN_NOT_FOUND → 侧栏创建入口错误卡（对齐原型 d2 卡 3 信息结构）
+    // 第二次运行注入 E_SPAWN_NOT_FOUND → 草稿提交失败卡（#59：草稿面板中央区，输入保留；信息结构对齐原型 d2 卡 3）
     const second = await launchApp(userData, undefined, { KANBAN_FAKE_CREATE_FAIL_FIRST: "1" });
     const win = second.win;
     await win.locator("aside").getByText("kb-s4-spawncard", { exact: true }).hover();
     await win.getByRole("button", { name: "＋", exact: true }).click();
     await win.getByRole("button", { name: "Claude", exact: true }).click();
+    await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
+    await send(win, "要重试的首条");
     const card = win.getByTestId("create-error-card");
     await expect(card).toBeVisible({ timeout: 15_000 });
     await expect(card).toContainText("找不到 CLI 程序（Claude）");
     await expect(card).toContainText("config.json");
-    await expect(card.getByRole("button", { name: "重试创建" })).toBeVisible();
+    await expect(card.getByRole("button", { name: "重试发送" })).toBeVisible();
     await shot(win, SHOT_DIR, "10-error-card-spawn-sidebar.png");
-    // 动作实测：「重试创建」→ 以原参数重发 session:create → 卡消失 + 会话登记
-    await card.getByRole("button", { name: "重试创建" }).click();
+    // 动作实测：「重试发送」→ 重新执行创建+发送首条消息 → 卡消失 + 会话登记 + 草稿丢弃
+    await card.getByRole("button", { name: "重试发送" }).click();
     await expect(card).toHaveCount(0, { timeout: 15_000 });
     await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
     await second.app.close();

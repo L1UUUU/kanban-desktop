@@ -1,24 +1,27 @@
-// 用途：会话创建失败卡（#46 / spec #40 F1 + 原型 d2 卡 3 形态）—— session:create 失败无会话视图可挂，在侧栏创建入口（info 槽）呈现：
-// spawn 失败（E_SPAWN_NOT_FOUND）显示配置路径指引 +「重试创建」；其余保留 code/message 原文 +「复制错误详情」；动作仅编排不执行破坏性操作
+// 用途：会话创建失败卡（#46 / spec #40 F1 + 原型 d2 卡 3 形态；#59 起渲染在草稿面板 composer 上方）——
+// spawn 失败（E_SPAWN_NOT_FOUND）显示配置路径指引；其余保留 code/message 原文 +「复制错误详情」；动作仅编排不执行破坏性操作
 import type { CreateFailure } from "../chat-store";
 import { classifyError, CLI_LABELS } from "../error-classify";
 import { copyText } from "../../../lib/copy-text";
 
-/** 次要按钮（复制/知道了）：中性描边（侧栏窄容器内小号） */
+/** 次要按钮（复制/知道了）：中性描边（窄容器内小号） */
 const BTN = "rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:border-primary hover:text-primary";
-/** 主按钮（重试创建）：destructive 描边 */
+/** 主按钮（重试）：destructive 描边 */
 const BTN_PRIMARY = "rounded-md border border-destructive/60 px-2 py-0.5 text-[11px] text-destructive hover:bg-destructive/10";
 
 export function CreateErrorCard({
   failure,
   configPath,
+  retryLabel = "重试创建",
   onRetry,
   onDismiss,
 }: {
   failure: CreateFailure;
   /** 配置文件绝对路径（AppInfo 注入；null=不可用则不渲染「复制配置路径」与路径文本） */
   configPath: string | null;
-  /** 「重试创建」：以原参数（cli/cwd/projectId/title/requirementId）重发 session:create */
+  /** #59：重试按钮文案（草稿面板传「重试发送」——重新执行创建+发送首条消息） */
+  retryLabel?: string;
+  /** 重试：重新执行创建链（草稿面板=创建+发送首条消息） */
   onRetry(): void;
   /** 「知道了」：仅关闭卡片（不重试） */
   onDismiss(): void;
@@ -52,7 +55,7 @@ export function CreateErrorCard({
       </div>
       <div className="flex flex-wrap justify-end gap-1.5 px-2.5 pb-2">
         <button type="button" className={BTN_PRIMARY} onClick={onRetry}>
-          重试创建
+          {retryLabel}
         </button>
         {spawn && configPath ? (
           <button type="button" className={BTN} onClick={() => void copyText(configPath)}>

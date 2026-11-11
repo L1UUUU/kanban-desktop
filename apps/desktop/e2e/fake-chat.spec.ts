@@ -33,7 +33,6 @@ async function launchApp(): Promise<{ app: ElectronApplication; win: Page; clean
   // 空态引导 → 注册 → 项目行；再经「＋」菜单建首个会话（原型一致项 2；exact=项目行文本精确匹配，侧栏「看板」入口的项目指示不含项目名整串）
   await win.getByRole("button", { name: "＋ 注册", exact: true }).click();
   await expect(win.locator("aside").getByText(PROJECT_NAME, { exact: true })).toBeVisible({ timeout: 15_000 });
-  await createSession(win);
   return {
     app,
     win,
@@ -59,11 +58,13 @@ async function send(win: Page, text: string): Promise<void> {
   await win.getByRole("button", { name: "发送 ➤" }).click();
 }
 
-/** 经项目行「＋」新建 Claude 会话（原型一致项 2：悬浮显示 ＋ → 点击弹菜单；FakeAdapter 承载演示） */
-async function createSession(win: Page): Promise<void> {
+/** 经项目行「＋」新建 Claude 会话（原型一致项 2；#59 草稿：点 CLI 只开草稿，发出首条消息才创建会话） */
+async function createSession(win: Page, firstText = "首条消息（建立会话）"): Promise<void> {
   await win.locator("aside").getByText(PROJECT_NAME, { exact: true }).hover(); // 悬浮项目行显示「＋」
   await win.getByRole("button", { name: "＋", exact: true }).click();
   await win.getByRole("button", { name: "Claude", exact: true }).click();
+  await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 }); // 草稿面板出现（侧栏无新行）
+  await send(win, firstText); // 首条消息 = 创建+落库+发送原子链
   await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
 }
 
@@ -71,8 +72,9 @@ test("多轮对话：两轮流式 + 工具卡完成 + 权限 chip 三档切换",
   const t = await launchApp();
   const { app, win } = t;
 
+  // 经「＋」建会话：首条消息即「把 ipc-schema…」（#59 草稿：发首条才创建）
+  await createSession(win, "把 ipc-schema 的类型拆成独立文件");
   // 第一轮：流式助手文本 + 工具卡终态（时长/输出）
-  await send(win, "把 ipc-schema 的类型拆成独立文件");
   await expect(win.getByText("把 ipc-schema 的类型拆成独立文件")).toBeVisible();
   await expect(win.getByText("好的，我先跑一遍现有测试确认基线，然后开始拆分。")).toBeVisible({ timeout: 20_000 });
   await expect(win.getByText("完成 · 3.6s")).toBeVisible({ timeout: 20_000 });
@@ -101,8 +103,8 @@ test("审批三键：拒绝 / 允许一次（二次仍问）/ 总是允许（二
   const t = await launchApp();
   const { app, win } = t;
 
-  // —— 拒绝：工具被拒 + 道歉文本 + 回到空闲
-  await send(win, "审批演示");
+  // —— 拒绝：工具被拒 + 道歉文本 + 回到空闲（首条「审批演示」随会话创建发出）
+  await createSession(win, "审批演示");
   await expect(win.getByText(/⚙ 需要审批：Edit packages\/ipc-schema\/src\/index\.ts/)).toBeVisible({ timeout: 20_000 });
   await expect(win.getByText("等待审批")).toBeVisible();
   await win.getByRole("button", { name: "拒绝" }).click();
@@ -110,9 +112,8 @@ test("审批三键：拒绝 / 允许一次（二次仍问）/ 总是允许（二
   await expect(win.getByText("好的，我不改这个文件。需要我先列出计划再逐条确认吗？")).toBeVisible({ timeout: 20_000 });
   await expect(win.getByText("空闲").first()).toBeVisible({ timeout: 20_000 });
 
-  // —— 允许一次：仅本次允许 + 第二个审批仍会询问 → 再允许后完成
-  await createSession(win);
-  await send(win, "审批演示");
+  // —— 允许一次：仅本次允许 + 第二个审批仍会询问 → 再允许后完成（第二个会话，首条「审批演示」）
+  await createSession(win, "审批演示");
   await expect(win.getByText(/⚙ 需要审批：Edit packages\/ipc-schema\/src\/index\.ts/)).toBeVisible({ timeout: 20_000 });
   await win.getByRole("button", { name: "允许一次" }).click();
   await expect(win.getByText(/仅本次允许/)).toBeVisible({ timeout: 20_000 });
@@ -121,9 +122,9 @@ test("审批三键：拒绝 / 允许一次（二次仍问）/ 总是允许（二
   await expect(win.getByText("拆分完成，index.ts 的导出面保持不变，测试仍然全绿。")).toBeVisible({ timeout: 20_000 });
 
   // —— 总是允许：记住规则 + 第二个审批直接跳过
-  await createSession(win);
+  // —— 总是允许（第三个会话，首条「审批演示」随建发；nth(1) 为第二个会话行）
+  await createSession(win, "审批演示");
   await expect(win.getByText("新会话 · Claude").nth(1)).toBeVisible({ timeout: 10_000 });
-  await send(win, "审批演示");
   await expect(win.getByText(/⚙ 需要审批：Edit packages\/ipc-schema\/src\/index\.ts/)).toBeVisible({ timeout: 20_000 });
   await win.getByRole("button", { name: "总是允许" }).click();
   await expect(win.getByText(/记住规则，后续同类不再询问/).first()).toBeVisible({ timeout: 20_000 });
@@ -137,7 +138,7 @@ test("取消 Turn：停止输出 → 「本轮已取消」+ 已中断，会话�
   const t = await launchApp();
   const { app, win } = t;
 
-  await send(win, "默认演示");
+  await createSession(win, "默认演示");
   // 流式中：停止按钮出现并点击
   await win.getByRole("button", { name: "⏹ 停止输出" }).click({ timeout: 10_000 });
   await expect(win.getByText("— 本轮已取消，会话保留，可继续发消息 —")).toBeVisible({ timeout: 10_000 });

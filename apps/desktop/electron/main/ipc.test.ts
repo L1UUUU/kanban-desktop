@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { FakeAdapter, VirtualClock, type CliAdapter } from "@kanban/cli-host";
+import { AdapterError, FakeAdapter, VirtualClock, type CliAdapter } from "@kanban/cli-host";
 import { trackerChangeSchema } from "@kanban/ipc-schema";
 import { TrackerEngine, type TrackerChange } from "@kanban/tracker";
 import { openDatabase } from "./db";
@@ -992,6 +992,142 @@ describe("kanban 通道（#17 spec #15 C 节：全量经 TrackerEngine.process �
     await handleIpc(deps2, { channel: "kanban:setStage", requirementId: "REQ-001", stage: "Design" });
     expect(pushed.filter((c) => c.type === "stage_changed")).toHaveLength(1); // 推送路径本身可用
     engine2.close();
+  });
+});
+
+describe("session:create 首条消息原子化（#59：草稿提交 = 创建原生会话→落库→发送首条消息，任一步失败回滚不留空会话）", () => {
+  /** 草稿原子化专用 adapter：createSession 可注入失败；sendTurn 前 N 次抛错（驱动「创建成功但发送失败」）；dispose 记录调用 */
+  function makeAtomicAdapter(opts?: { failCreate?: boolean; failSendFirst?: number }) {
+    const clock = new VirtualClock();
+    const base = new FakeAdapter({ clock });
+    let seq = 0;
+    let sendCalls = 0;
+    const disposed: Array<string | undefined> = [];
+    const sentTurns: Array<{ sessionId: string; text: string }> = [];
+    const adapter = {
+      capabilities: base.capabilities,
+      createSession: async () => {
+        seq += 1;
+        if (opts?.failCreate) throw new AdapterError("E_SPAWN_NOT_FOUND", "未找到 CLI 可执行文件（注入）");
+        return { sessionId: `s-draft-${seq}` };
+      },
+      sendTurn: async (input: { sessionId: string; text: string }) => {
+        sendCalls += 1;
+        if (sendCalls <= (opts?.failSendFirst ?? 0)) throw new AdapterError("E_INTERNAL", "发送失败（注入）");
+        sentTurns.push(input);
+      },
+      interruptTurn: async () => {},
+      resolveApproval: async () => {},
+      readHistory: async () => [],
+      resume: async () => {},
+      dispose: async (input?: { sessionId?: string }) => {
+        disposed.push(input?.sessionId);
+      },
+      subscribe: () => () => undefined,
+    };
+    return { adapter: adapter as unknown as CliAdapter, disposed, sentTurns };
+  }
+
+  it("firstMessage 成功（Fake 全链）：落库 + 首条 turn 已提交（turn_started 事件可见）+ 响应 ok", async () => {
+    const clock = new VirtualClock();
+    const deps = makeDeps(new FakeAdapter({ clock }));
+    const handle = (raw: unknown) => handleIpc(deps, raw);
+    // 订阅先于创建（turn_started 在 create+send 编排内发出）
+    const turns: string[] = [];
+    deps.adapter.subscribe((e) => {
+      if ("type" in e && e.type === "turn_started") turns.push(e.sessionId);
+    });
+    const r = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p", firstMessage: "首条消息" });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.sessionId).toBeTruthy();
+      expect(r.title).toBe("新会话 · Fake");
+    }
+    // 落库（重启恢复依据）+ 首条消息送达 adapter（turn 已提交，事件流可见）
+    expect(deps.sessions.get(r.ok ? r.sessionId! : "")).toMatchObject({ cli: "fake", status: "idle" });
+    expect(turns).toContain(r.ok ? r.sessionId! : "");
+  });
+
+  it("发送失败：回滚删除已插记录（重启后不被恢复）+ 受控终止 + 明确错误；重试成功正常入库", async () => {
+    const { adapter, disposed, sentTurns } = makeAtomicAdapter({ failSendFirst: 1 });
+    const deps = makeDeps(adapter);
+    const handle = (raw: unknown) => handleIpc(deps, raw);
+
+    const r1 = await handle({ channel: "session:create", cli: "claude", cwd: "C:\\p", firstMessage: "首条" });
+    expect(r1.ok).toBe(false);
+    if (!r1.ok) {
+      expect(r1.error.code).toBe("E_INTERNAL");
+      expect(r1.error.message).toContain("发送失败");
+    }
+    // 回滚：记录已删（session:list 空 = 重启后不被恢复）、受控终止已调
+    expect(deps.sessions.get("s-draft-1")).toBeNull();
+    expect(deps.sessions.list()).toHaveLength(0);
+    expect(disposed).toEqual(["s-draft-1"]);
+
+    // 重试（同参数再发）：成功后正常入库、首条消息原样送达
+    const r2 = await handle({ channel: "session:create", cli: "claude", cwd: "C:\\p", firstMessage: "首条" });
+    expect(r2.ok).toBe(true);
+    expect(deps.sessions.get("s-draft-2")).toMatchObject({ cli: "claude", status: "idle" });
+    expect(sentTurns).toEqual([{ sessionId: "s-draft-2", text: "首条" }]);
+  });
+
+  it("创建失败（如 CLI 不存在）：错误透传、无落库、无回滚副作用", async () => {
+    const { adapter, disposed } = makeAtomicAdapter({ failCreate: true });
+    const deps = makeDeps(adapter);
+    const r = await handleIpc(deps, { channel: "session:create", cli: "claude", cwd: "C:\\p", firstMessage: "首条" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe("E_SPAWN_NOT_FOUND");
+    expect(deps.sessions.list()).toHaveLength(0);
+    expect(disposed).toEqual([]); // 创建失败在落库前，无需终止
+  });
+
+  it("firstMessage + requirementId：发送成功后关联落到新会话（sessionToReq 可见）", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "kb-ipc-draft-link-"));
+    const projDir = join(tmpRoot, "repo");
+    mkdirSync(projDir, { recursive: true });
+    const { adapter } = makeAtomicAdapter();
+    const deps = makeDeps(adapter, async () => projDir);
+    const handle = (raw: unknown) => handleIpc(deps, raw);
+    const reg = await handle({ channel: "project:register" });
+    const projectId = reg.ok && reg.project ? reg.project.id : null;
+    await handle({ channel: "kanban:create", projectId, title: "草稿关联需求" });
+    const reqId = projectId ? "REQ-001" : "REQ-001";
+
+    const r = await handle({
+      channel: "session:create",
+      cli: "fake",
+      cwd: projDir,
+      projectId: projectId ?? undefined,
+      requirementId: reqId,
+      firstMessage: "带关联的首条",
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.linked).toBe(true);
+    const list = await handle({ channel: "kanban:list" });
+    if (list.ok) expect(list.sessionToReq?.["s-draft-1"]).toBe("REQ-001");
+  });
+
+  it("非 AdapterError 的发送异常：E_INTERNAL 兜底且同样回滚", async () => {
+    const clock = new VirtualClock();
+    const base = new FakeAdapter({ clock });
+    const adapter = {
+      capabilities: base.capabilities,
+      createSession: async () => ({ sessionId: "s-internal" }),
+      sendTurn: async () => {
+        throw new Error("boom");
+      },
+      interruptTurn: async () => {},
+      resolveApproval: async () => {},
+      readHistory: async () => [],
+      resume: async () => {},
+      dispose: async () => {},
+      subscribe: () => () => undefined,
+    };
+    const deps = makeDeps(adapter as unknown as CliAdapter);
+    const r = await handleIpc(deps, { channel: "session:create", cli: "fake", cwd: "C:\\p", firstMessage: "x" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe("E_INTERNAL");
+    expect(deps.sessions.get("s-internal")).toBeNull();
   });
 });
 

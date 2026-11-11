@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AdapterEvent, IpcRequest, IpcResult, RequirementCardRow, TerminalEvent, TrackerChangeWire } from "@kanban/ipc-schema";
+import type { AdapterEvent, CliKind, IpcRequest, IpcResult, RequirementCardRow, TerminalEvent, TrackerChangeWire } from "@kanban/ipc-schema";
 import { FakeAdapter, VirtualClock } from "@kanban/cli-host";
 import { TrackerEngine } from "@kanban/tracker";
 import { openDatabase } from "../../../electron/main/db";
@@ -15,11 +15,18 @@ import { createPtyHost, type PtyLike, type PtyProcess } from "../../../electron/
 import { ProjectStore } from "../../../electron/main/project-store";
 import { SessionStore } from "../../../electron/main/session-store";
 import { AppShell } from "../../App";
-import type { ChatController } from "../chat/use-chat";
+import type { ChatController, OpenDraftOptions } from "../chat/use-chat";
 import type { ChatTransport } from "../../lib/kanban-api";
 
 // 未关闭的 db 连接（afterEach 统一关，避免 Windows 上临时目录删除 EPERM）
 const openDbs: Array<{ close(): void }> = [];
+
+/** #59 草稿创建会话：打开草稿并发送首条消息（原 createSession 直建的草稿语义等价物；text 可携带剧本关键词） */
+async function createViaDraft(ctl: ChatController, cli: CliKind, opts?: OpenDraftOptions, text = "默认演示"): Promise<void> {
+  ctl.openDraft(cli, opts);
+  ctl.store.updateDraft({ input: text });
+  await ctl.submitDraft();
+}
 
 // jsdom 缺 ResizeObserver：xterm 服务需要（生产 Chromium 原生具备）
 if (typeof globalThis.ResizeObserver === "undefined") {
@@ -268,9 +275,10 @@ describe("五列看板：列映射/建卡/移列/徽标/会话数/删除（#18�
     fireEvent.click(screen.getByRole("button", { name: "＋ 注册本地目录…" }));
     await screen.findAllByText("demo-repo");
     await act(async () => {
-      await t.ctl().createSession("claude", { cwd: projDir, projectId: await currentProjectId() });
+      await createViaDraft(t.ctl(), "claude", { cwd: projDir, projectId: await currentProjectId() });
     });
     await screen.findByText("新会话 · Claude");
+    t.advance(); // 首条 turn 完成回空闲（供后续用例继续发消息）
   }
 
   async function currentProjectId(): Promise<string> {
@@ -344,7 +352,7 @@ describe("五列看板：列映射/建卡/移列/徽标/会话数/删除（#18�
     await bootWithProjectSession();
     // 再建第二个项目会话（link 用）
     await act(async () => {
-      await t.ctl().createSession("claude", { cwd: projDir, projectId: await currentProjectId(), title: "二号会话" });
+      await createViaDraft(t.ctl(), "claude", { cwd: projDir, projectId: await currentProjectId(), title: "二号会话" });
     });
     enterKanban();
     fireEvent.click(within(col("none")).getByTitle("手动新建需求（归属当前项目）"));
@@ -412,12 +420,9 @@ describe("按项目过滤（#18；S2-08）", () => {
     const listA = await invoke(t, { channel: "project:list" });
     const pidA = listA.ok ? listA.currentProjectId ?? "" : "";
     await act(async () => {
-      await t.ctl().createSession("claude", { cwd: dirA, projectId: pidA });
+      await createViaDraft(t.ctl(), "claude", { cwd: dirA, projectId: pidA }, "/design-feature verified");
     });
     await screen.findByText("新会话 · Claude");
-    await act(async () => {
-      send("/design-feature verified");
-    });
     t.advance();
     enterKanban();
     await waitFor(() => expect(within(col("Design")).getAllByText("待命名需求").length).toBeGreaterThan(0));
@@ -465,12 +470,9 @@ describe("重启再水化（#18；S2-17）", () => {
     const listA = await invoke(t1, { channel: "project:list" });
     const pid = listA.ok ? listA.currentProjectId ?? "" : "";
     await act(async () => {
-      await t1.ctl().createSession("claude", { cwd: projDir, projectId: pid });
+      await createViaDraft(t1.ctl(), "claude", { cwd: projDir, projectId: pid }, "/design-feature verified");
     });
     await screen.findByText("新会话 · Claude");
-    await act(async () => {
-      send("/design-feature verified");
-    });
     act(() => {
       t1.advance();
     });

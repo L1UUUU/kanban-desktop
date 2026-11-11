@@ -56,6 +56,10 @@ async function createSession(win: Page, cliLabel: string): Promise<void> {
   await win.locator("aside").getByText(PROJECT_NAME, { exact: true }).hover();
   await win.getByRole("button", { name: "＋", exact: true }).click();
   await win.getByRole("button", { name: cliLabel, exact: true }).click();
+  // #59 草稿：点 CLI 只开草稿，发出首条消息才创建会话（侧栏行出现）
+  await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
+  await win.getByPlaceholder("输入消息，/ 开头触发 Skill…").fill("首条消息（建立会话）");
+  await win.getByRole("button", { name: "发送 ➤" }).click();
   await expect(win.getByText(`新会话 · ${cliLabel}`).first()).toBeVisible({ timeout: 10_000 });
 }
 
@@ -78,11 +82,8 @@ test("注册项目 → 新建会话（主仓库徽标）→ 重启完整恢复�
     await first.win.getByRole("button", { name: /PTY 终端/ }).click();
     await expect(first.win.getByText(/^终端 · /).first()).toBeVisible({ timeout: 10_000 });
     await expect(first.win.locator(".xterm").first()).toBeVisible({ timeout: 10_000 });
-    // 切回 Claude 会话建结构化会话（PTY 已占位激活，重新 hover 打开菜单）
-    await first.win.locator("aside").getByText(PROJECT_NAME, { exact: true }).hover();
-    await first.win.getByRole("button", { name: "＋", exact: true }).click();
-    await first.win.getByRole("button", { name: "Claude", exact: true }).click();
-    await expect(first.win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
+    // 切回 Claude 会话建结构化会话（PTY 已占位激活，重新 hover 打开菜单；#59 草稿发首条才建）
+    await createSession(first.win, "Claude");
     // 主仓库徽标（cwd 为 Main 侧 canonical 化后的路径，用正则断言；PTY 终端行同徽标 → first）
     await expect(first.win.getByTitle(/工作在主仓库（.*e2e-repo）/).first()).toBeVisible();
     await expect(first.win.getByText("空闲").first()).toBeVisible();

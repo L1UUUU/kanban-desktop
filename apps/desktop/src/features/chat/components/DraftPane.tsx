@@ -1,0 +1,100 @@
+// 用途：结构化会话草稿面板（#59 / spec #57 原型演示①）—— 点「＋」后的中央区草稿态：提示行（不落库、未启 CLI）+ 首条消息 composer（权限/模型可改、输入失败保留）+ 提交失败卡（重试=重新执行创建+发送）
+import { useState } from "react";
+import type { PermMode } from "@kanban/ipc-schema";
+import type { DraftSession } from "../chat-store";
+import { ModelSelect, PermChip } from "./ComposerControls";
+import { CreateErrorCard } from "./CreateErrorCard";
+
+export interface DraftPaneActions {
+  /** 提交草稿：经 Main 原子链「创建原生会话→落库→发送首条消息」；失败返回 false（草稿与输入保留） */
+  onSubmit(): Promise<boolean>;
+  /** 首条消息输入（受控于草稿：失败保留、丢弃即失） */
+  onInput(input: string): void;
+  onPermChange(mode: PermMode): void;
+  onModelChange(model: string): void;
+  /** 失败卡「知道了」：仅清除错误（草稿与输入保留） */
+  onDismissError(): void;
+}
+
+export function DraftPane({
+  draft,
+  configPath,
+  actions,
+}: {
+  draft: DraftSession;
+  /** 配置文件绝对路径（spawn 失败卡「复制配置路径」数据源） */
+  configPath: string | null;
+  actions: DraftPaneActions;
+}) {
+  const [submitting, setSubmitting] = useState(false);
+
+  // 提交中禁用输入与按钮（防双发）；失败时 draft 仍在（输入保留在草稿上）
+  const submit = async (): Promise<void> => {
+    if (draft.input.trim().length === 0 || submitting) return;
+    setSubmitting(true);
+    const ok = await actions.onSubmit();
+    setSubmitting(false);
+    void ok;
+  };
+
+  return (
+    <section data-testid="draft-pane" className="flex min-h-0 min-w-0 flex-col bg-background">
+      {/* 草稿提示行（原型 .draft-hint）：明确「不落库、不启 CLI、发首条消息才创建会话」；替换提示为全局单草稿的明确反馈 */}
+      <div data-testid="draft-hint" className="flex-none border-b border-warn/40 bg-warn/10 px-6 py-2 text-xs text-warn">
+        ✎ 草稿 · <b>{draft.title}</b> — 尚未保存、未启动 CLI，发出第一条消息后才创建会话
+        {draft.replacedHint ? "（已替换上一个草稿：全局仅一个）" : ""}
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+        <div className="mx-auto max-w-[860px]">
+          {draft.submitError ? (
+            // 提交失败卡（原型演示① err-card）：保留输入与草稿，重试=重新执行「创建+发送首条消息」
+            <CreateErrorCard
+              failure={{
+                cli: draft.cli,
+                code: draft.submitError.code,
+                message: draft.submitError.message,
+                cwd: draft.cwd,
+                projectId: draft.projectId,
+              }}
+              configPath={configPath}
+              retryLabel="重试发送"
+              onRetry={() => void submit()}
+              onDismiss={actions.onDismissError}
+            />
+          ) : null}
+        </div>
+      </div>
+      {/* 首条消息 composer：结构与会话 Composer 一致；输入受控于草稿（失败保留、丢弃即失） */}
+      <footer className="border-t border-border bg-card px-6 pb-4 pt-3">
+        <div className="mx-auto max-w-[860px] rounded-[14px] border border-border bg-muted px-3.5 pb-2 pt-2.5 transition-colors focus-within:border-primary">
+          <textarea
+            placeholder="输入消息，/ 开头触发 Skill…"
+            rows={2}
+            disabled={submitting}
+            value={draft.input}
+            onChange={(e) => actions.onInput(e.target.value)}
+            className="min-h-[46px] w-full resize-none bg-transparent text-[13px] outline-none placeholder:text-fg-faint disabled:text-muted-foreground"
+          />
+          <div className="mt-2 flex items-center gap-2">
+            <PermChip value={draft.permMode} onChange={actions.onPermChange} />
+            <ModelSelect value={draft.model} onChange={actions.onModelChange} />
+            <span className="flex-1" />
+            <button
+              type="button"
+              disabled={submitting || draft.input.trim().length === 0}
+              className="h-[30px] rounded-full bg-primary px-4 text-xs text-primary-foreground hover:bg-accent2 disabled:opacity-50"
+              onClick={() => void submit()}
+            >
+              发送 ➤
+            </button>
+          </div>
+        </div>
+        {draft.cli === "opencode" ? (
+          <div className="mt-1.5 text-center text-[11px] text-muted-foreground">
+            OpenCode 权限档位为 server 级（同项目下会话共享）；切换后新会话生效
+          </div>
+        ) : null}
+      </footer>
+    </section>
+  );
+}

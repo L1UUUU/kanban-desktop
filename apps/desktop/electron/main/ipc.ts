@@ -142,6 +142,23 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
         status: "idle",
         lastActiveAt: null,
       });
+      // #59（spec #57）：草稿首条消息 —— 创建+发送原子化：发送失败受控终止并回滚删除已插记录（不留空会话），错误直达调用方
+      if (req.firstMessage !== undefined) {
+        try {
+          await deps.adapter.sendTurn({ sessionId, text: req.firstMessage });
+        } catch (err) {
+          const code = err instanceof AdapterError ? err.code : "E_INTERNAL";
+          const message = err instanceof Error ? err.message : String(err);
+          await deps.adapter.dispose({ sessionId }).catch((disposeErr: unknown) => {
+            // 终止失败（进程已死等）不阻断回滚，仅留痕
+            deps.log?.("error", "session:create", `首条消息发送失败后的受控终止未成功：${disposeErr instanceof Error ? disposeErr.message : String(disposeErr)}`);
+          });
+          deps.sessions.delete(sessionId);
+          deps.log?.("error", "session:create", `首条消息发送失败，已回滚会话记录（${code}）：${message}`);
+          // 附带回滚会话 id：渲染端撤销事件先至的占位会话行（不留空会话的渲染端闭环）
+          return { ok: false, error: { code, message, rolledBackSessionId: sessionId } };
+        }
+      }
       // #17（spec #15 C 节）：可选 requirementId —— 创建成功后由 Main 原子落 link 事件（避免 renderer 两步编排竞态）；
       // 会话须与需求同项目，业务拒绝是合法结果不走错误码，原因直达调用方
       const linkedResult = req.requirementId

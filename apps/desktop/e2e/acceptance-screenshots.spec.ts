@@ -57,11 +57,14 @@ async function send(win: Page, text: string): Promise<void> {
   await win.getByRole("button", { name: "发送 ➤" }).click();
 }
 
-/** 经项目行「＋」新建指定 CLI 会话并等待会话行出现（nth 用于多会话场景）；exact 避免与会话行按钮名（含 Claude 子串）冲突 */
+/** 经项目行「＋」新建指定 CLI 会话并等待会话行出现（nth 用于多会话场景）；exact 避免与会话行按钮名（含 Claude 子串）冲突；
+ *  #59 草稿：点 CLI 只开草稿，发出首条消息才创建会话（行出现） */
 async function createSession(win: Page, cli: string, nth = 0): Promise<void> {
   await win.locator("aside").getByText(PROJECT_NAME, { exact: true }).hover();
   await win.getByRole("button", { name: "＋", exact: true }).click();
   await win.getByRole("button", { name: cli, exact: true }).click();
+  await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
+  await send(win, "首条消息（建立会话）");
   await expect(win.getByText("新会话 · Claude").nth(nth)).toBeVisible({ timeout: 10_000 });
 }
 
@@ -87,6 +90,9 @@ test("原型一致项截图集：布局/新建菜单/聊天区三卡/composer/�
     }
     await shot(win, SHOT_DIR, "02-new-session-menu.png");
     await win.getByRole("button", { name: "Claude", exact: true }).click();
+    // #59 草稿：发首条消息才创建会话（行出现）
+    await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
+    await send(win, "首条消息（建立会话）");
     await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
 
     // 一致项 1 完整形态截图（已注册+会话行+空聊天区）
@@ -187,6 +193,9 @@ test("徽标与断开恢复截图：主仓库绿/worktree 蓝 + 重开断开会�
     await wtRow.getByText("kb-shot-wt", { exact: true }).hover();
     await wtRow.getByRole("button", { name: "＋", exact: true }).click();
     await second.win.getByRole("button", { name: "Claude", exact: true }).click();
+    // #59 草稿：发首条消息才创建会话（行出现）
+    await expect(second.win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
+    await send(second.win, "首条消息（建立会话）");
     await expect(second.win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
     // 一致项 3（会话行徽标）：CLI 色点+标题+目录身份徽标+状态徽标；侧栏按当前项目过滤，两形态各截一张
     await expect(second.win.getByText(/worktree: kb-shot-wt/).first()).toBeVisible({ timeout: 10_000 });

@@ -258,23 +258,23 @@ test("阶段 3 真实验收全链：双 CLI 真实会话 → GUI 提取（2 段�
     // ---- ② 关联 structured 会话×2：Claude + Codex 各一条真实短 turn（含工具调用）----
     await win.getByTestId("new-session-menu").click();
     await win.getByTestId("new-session-item-claude").click();
+    // #59 草稿：卡片入口打开草稿并切回聊天；首条消息随「创建+落库+发送」原子发出，关联随首条落到新会话
+    await send(win, CLAUDE_PROMPT);
+    logCall("claude", "造历史：开发会话① 真实短 turn（Read 工具读取 NOTES.md + 一句话总结）");
     const panel = win.getByTestId("detail-panel");
     const claudeRow = panel.locator('[data-testid="related-session"]', { hasText: "新会话 · Claude" });
     await expect(claudeRow).toBeVisible({ timeout: 60_000 });
-    await claudeRow.getByTestId("related-jump").click();
-    await send(win, CLAUDE_PROMPT);
-    logCall("claude", "造历史：开发会话① 真实短 turn（Read 工具读取 NOTES.md + 一句话总结）");
     await waitTurnRoundtrip(win, "新会话 · Claude");
 
     // 面板跨视图保持打开：直接复用（related-jump 切走再切回不丢选中态）
     await openDetail(win, REQ_TITLE);
     await win.getByTestId("new-session-menu").click();
     await win.getByTestId("new-session-item-codex").click();
-    const codexRow = panel.locator('[data-testid="related-session"]', { hasText: "新会话 · Codex" });
-    await expect(codexRow).toBeVisible({ timeout: 60_000 });
-    await codexRow.getByTestId("related-jump").click();
+    // #59 草稿：同上，首条消息随创建原子发出（无需 jump——卡片入口已切回聊天视图）
     await send(win, CODEX_PROMPT);
     logCall("codex", "造历史：开发会话② 真实短 turn（shell 读取 NOTES.md + 一句话总结）");
+    const codexRow = panel.locator('[data-testid="related-session"]', { hasText: "新会话 · Codex" });
+    await expect(codexRow).toBeVisible({ timeout: 60_000 });
     await waitTurnRoundtrip(win, "新会话 · Codex");
 
     // ---- ③ 提取前指纹快照（PoC 5 隔离基线）----

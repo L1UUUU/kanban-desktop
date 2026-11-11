@@ -80,6 +80,9 @@ test("原型一致项截图集（spec #15 H 节 7 条 + S2-18 空板）：入口
     await win.locator("aside").getByText(PROJECT_NAME, { exact: true }).hover();
     await win.getByRole("button", { name: "＋", exact: true }).click();
     await win.getByRole("button", { name: "Claude", exact: true }).click();
+    // #59 草稿：发首条消息才创建会话（行出现；banner 在会话视图）
+    await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
+    await send(win, "首条消息（建立会话）");
     await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
     const banner = win.getByTestId("skill-conflict-banner");
     await expect(banner).toBeVisible({ timeout: 10_000 });
