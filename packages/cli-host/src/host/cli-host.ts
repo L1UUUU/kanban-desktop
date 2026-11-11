@@ -1,34 +1,12 @@
-// 用途：CliHost seam（spec C5 冻结：command/subscribe/shutdown，纯 Node 无 Electron 依赖）—— utilityProcess worker 的核心；多 Adapter 经 AdapterRouter 分发；run-once 一次性执行（#29 C5 演进）
-import type { LogKind, AdapterEvent, ChatEvent, TranscriptEvent } from "@kanban/ipc-schema";
+// 用途：CliHost seam（spec C5 冻结：command/subscribe/shutdown，纯 Node 无 Electron 依赖）—— utilityProcess worker 的核心；多 Adapter 经 AdapterRouter 分发；run-once 一次性执行（#29 C5 演进）；消息面 HostCommand/返回值类型由 wire.ts 从 CliAdapter 派生（issue #73：缺 case 编译红、payload 逐 case 精确窄化、返回值直传）
+import type { LogKind, AdapterEvent } from "@kanban/ipc-schema";
 import { AdapterError } from "../adapter";
 import { AdapterRouter, type AdapterFactory } from "../router-adapter";
-import { RunOnceRunner, type RunOnceResult } from "./run-once";
+import { RunOnceRunner } from "./run-once";
+import type { HostCommand, ReturnOf } from "./wire";
 
-/** 宿主命令（C1 方法面的 wire 形状；错误经 AdapterError 形状回传） */
-export type HostCommand =
-  | { kind: "createSession"; init: { cwd: string; model?: string; permMode?: string; cli?: string } }
-  | { kind: "sendTurn"; sessionId: string; text: string }
-  | { kind: "interruptTurn"; sessionId: string }
-  | { kind: "resolveApproval"; sessionId: string; requestId: string; decision: string }
-  | { kind: "readHistory"; sessionId: string }
-  | { kind: "readTranscript"; sessionId: string }
-  | { kind: "resume"; sessionId: string }
-  | { kind: "adoptSession"; sessionId: string; nativeSessionId: string; cwd: string; cli: string; permMode?: string; model?: string }
-  | { kind: "dispose"; sessionId?: string }
-  | { kind: "run-once"; runId: string; cli: string; args: string[]; cwd: string; stdin?: string; timeoutMs?: number }
-  | { kind: "cancel-run-once"; runId: string }
-  | { kind: "listChildPids" };
-
-/** 命令结果载荷（createSession 附 sessionId/nativeSessionId；readHistory 附事件数组；readTranscript 附双视角剧本；run-once 附执行结果；listChildPids 附 pid 集合；其余 void） */
-export interface HostCommandResult {
-  sessionId?: string;
-  nativeSessionId?: string | null;
-  events?: ChatEvent[];
-  transcript?: TranscriptEvent[];
-  runOnce?: RunOnceResult;
-  /** 活跃 CLI 子进程 pid 去重集合（C5 演进 #44；残留治理的本应用活跃集合基准） */
-  pids?: number[];
-}
+/** 命令返回值并集（单 kind 精确类型见 wire.ReturnOf；worker 协议按此直传方法返回值，无结果包袱对象） */
+export type HostCommandReturn = { [K in HostCommand["kind"]]: ReturnOf<K> }[HostCommand["kind"]];
 
 /** 有序停机原因（spec H：停止新请求→有序取消→有限等待→受控终止） */
 export interface ShutdownOptions {
@@ -56,60 +34,56 @@ export class CliHost {
     });
   }
 
-  /** 停机中拒绝新命令（spec H：先停止接收新请求） */
-  async command(cmd: HostCommand): Promise<HostCommandResult> {
+  /**
+   * 命令入口（spec H：停机中拒绝新请求）；wire 报文 {kind,payload}，返回值 = 方法返回值本身（issue #73），
+   * 按 kind 关联返回值类型 ReturnOf<K>（分发实现见 commandDispatch）。
+   */
+  async command<K extends HostCommand["kind"]>(cmd: HostCommand & { kind: K }): Promise<ReturnOf<K>> {
+    return (await this.commandDispatch(cmd)) as ReturnOf<K>;
+  }
+
+  private async commandDispatch(cmd: HostCommand): Promise<HostCommandReturn> {
     if (this.shuttingDown) throw new AdapterError("E_INTERNAL", `CliHost 正在停机（${cmd.kind} 被拒绝）`);
     switch (cmd.kind) {
       case "createSession": {
-        const r = await this.router.createSession({
-          cwd: cmd.init.cwd,
-          model: cmd.init.model,
-          permMode: cmd.init.permMode as never,
-          cli: cmd.init.cli,
-        });
+        const r = await this.router.createSession(cmd.payload);
         return { sessionId: r.sessionId, nativeSessionId: r.nativeSessionId ?? null };
       }
       case "sendTurn":
-        await this.router.sendTurn({ sessionId: cmd.sessionId, text: cmd.text });
-        return {};
+        await this.router.sendTurn(cmd.payload);
+        return;
       case "interruptTurn":
-        await this.router.interruptTurn(cmd.sessionId);
-        return {};
+        await this.router.interruptTurn(cmd.payload);
+        return;
       case "resolveApproval":
-        await this.router.resolveApproval({
-          sessionId: cmd.sessionId,
-          requestId: cmd.requestId,
-          decision: cmd.decision as never,
-        });
-        return {};
+        await this.router.resolveApproval(cmd.payload);
+        return;
       case "readHistory":
-        return { events: await this.router.readHistory(cmd.sessionId) };
+        return this.router.readHistory(cmd.payload);
       case "readTranscript":
-        return { transcript: await this.router.readTranscript(cmd.sessionId) };
+        return this.router.readTranscript(cmd.payload);
       case "resume":
-        await this.router.resume(cmd.sessionId);
-        return {};
+        await this.router.resume(cmd.payload);
+        return;
       case "adoptSession":
-        await this.router.adoptSession({
-          sessionId: cmd.sessionId,
-          nativeSessionId: cmd.nativeSessionId,
-          cwd: cmd.cwd,
-          permMode: cmd.permMode as never,
-          model: cmd.model,
-          cli: cmd.cli,
-        });
-        return {};
+        await this.router.adoptSession(cmd.payload);
+        return;
       case "dispose":
-        await this.router.dispose(cmd.sessionId ? { sessionId: cmd.sessionId } : undefined);
-        return {};
-      case "run-once":
-        return { runOnce: await this.runOnceRunner.run(cmd) };
-      case "cancel-run-once":
-        this.runOnceRunner.cancel(cmd.runId);
-        return {};
+        await this.router.dispose(cmd.payload);
+        return;
       case "listChildPids":
-        // C5 演进（#44）：worker 内聚合各 Adapter 活跃子进程 pid 上报 Main（不路由会话，host 级查询）
-        return { pids: await this.router.listChildPids() };
+        // C5 演进（#44）：聚合各 Adapter 活跃子进程 pid 上报 Main（不路由会话，host 级查询）
+        return this.router.listChildPids();
+      case "runOnce":
+        return this.runOnceRunner.run(cmd.payload);
+      case "cancelRunOnce":
+        this.runOnceRunner.cancel(cmd.payload);
+        return;
+      default: {
+        // 穷尽检查（issue #73）：CliAdapter 新增命令方法后 HostCommand 自动扩员，漏 case 时 cmd 不收敛为 never → 编译红
+        const exhaustive: never = cmd;
+        return exhaustive;
+      }
     }
   }
 

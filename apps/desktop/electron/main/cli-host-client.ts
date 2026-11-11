@@ -1,11 +1,25 @@
-// 用途：Main 侧 CliHost 托管客户端 —— utilityProcess fork worker（ADR-0001 形态）+ Windows Job Object 绑定（t0-01 验证策略）+ CliAdapter 远程代理（Renderer/路由无感托管形态）+ run-once 一次性执行桥（#29 C5 演进）
+// 用途：Main 侧 CliHost 托管客户端 —— utilityProcess fork worker（ADR-0001 形态）+ Windows Job Object 绑定（t0-01 验证策略）+ CliAdapter 远程代理（Renderer/路由无感托管形态）+ run-once 一次性执行桥（#29 C5 演进）；命令面经 wire.ts 派生的 {kind,payload} 报文往返，返回值直传（issue #73）
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AdapterEvent, ChatEvent, LogKind, TranscriptEvent } from "@kanban/ipc-schema";
 import { utilityProcess } from "electron";
-import { AdapterError, JOB_GUARD_PS, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type RunOnceResult, type SendTurnInput } from "@kanban/cli-host";
+import {
+  AdapterError,
+  JOB_GUARD_PS,
+  type AdoptSessionInput,
+  type AdapterCapabilities,
+  type CliAdapter,
+  type CreateSessionInput,
+  type DisposeInput,
+  type HostCommand,
+  type ResolveApprovalInput,
+  type ReturnOf,
+  type RunOnceInput,
+  type RunOnceResult,
+  type SendTurnInput,
+} from "@kanban/cli-host";
 
 export interface CliHostClientOptions {
   /** worker bundle 绝对路径（out/main/cli-host-worker.js） */
@@ -62,13 +76,20 @@ function forkUtilityProcess(options: CliHostClientOptions): UtilityProcessLike {
   return utilityProcess.fork(options.workerPath, [], { serviceName: "cli-host", env: buildWorkerEnv(options) });
 }
 
-/** pending 命令白名单摘要（#54 spec #52 G 节 M5）：只取 kind/sessionId/cli/runId（createSession 的 cli 取自 init.cli）；禁止整包 JSON.stringify（run-once 的 stdin 含 chunk 正文，Q8） */
-function summarizeCommand(cmd: Record<string, unknown>): string {
+/** pending 命令白名单摘要（#54 spec #52 G 节 M5 + issue #73 {kind,payload} 报文）：只取 kind/sessionId/cli/runId（createSession 的 cli 取自 payload.cli）；禁止整包 JSON.stringify（runOnce 的 stdin 含 chunk 正文，Q8） */
+function summarizeCommand(cmd: HostCommand): string {
   const parts = [`kind=${String(cmd.kind)}`];
-  if (cmd.sessionId !== undefined) parts.push(`sessionId=${String(cmd.sessionId)}`);
-  const cli = cmd.cli ?? (cmd.init as { cli?: unknown } | undefined)?.cli;
-  if (cli !== undefined) parts.push(`cli=${String(cli)}`);
-  if (cmd.runId !== undefined) parts.push(`runId=${String(cmd.runId)}`);
+  // 字符串 payload：cancelRunOnce 为 runId，interruptTurn/readHistory 等为 sessionId
+  if (typeof cmd.payload === "string") {
+    parts.push(`${cmd.kind === "cancelRunOnce" ? "runId" : "sessionId"}=${cmd.payload}`);
+    return parts.join(" ");
+  }
+  const p = cmd.payload as Record<string, unknown> | undefined;
+  if (p !== undefined) {
+    if (p.sessionId !== undefined) parts.push(`sessionId=${String(p.sessionId)}`);
+    if (p.cli !== undefined) parts.push(`cli=${String(p.cli)}`);
+    if (p.runId !== undefined) parts.push(`runId=${String(p.runId)}`);
+  }
   return parts.join(" ");
 }
 
@@ -112,62 +133,48 @@ export class CliHostClient implements CliAdapter {
   }
 
   async createSession(init: CreateSessionInput): Promise<{ sessionId: string; nativeSessionId?: string | null }> {
-    const r = (await this.command({
-      kind: "createSession",
-      init: { cwd: init.cwd, model: init.model, permMode: init.permMode, cli: init.cli },
-    })) as { sessionId: string; nativeSessionId: string | null };
-    return { sessionId: r.sessionId, nativeSessionId: r.nativeSessionId };
+    return this.send({ kind: "createSession", payload: init });
   }
 
   async sendTurn(input: SendTurnInput): Promise<void> {
-    await this.command({ kind: "sendTurn", sessionId: input.sessionId, text: input.text });
+    return this.send({ kind: "sendTurn", payload: input });
   }
 
   async interruptTurn(sessionId: string): Promise<void> {
-    await this.command({ kind: "interruptTurn", sessionId });
+    return this.send({ kind: "interruptTurn", payload: sessionId });
   }
 
   async resolveApproval(input: ResolveApprovalInput): Promise<void> {
-    await this.command({ kind: "resolveApproval", sessionId: input.sessionId, requestId: input.requestId, decision: input.decision });
+    return this.send({ kind: "resolveApproval", payload: input });
   }
 
   async readHistory(sessionId: string): Promise<ChatEvent[]> {
-    const r = (await this.command({ kind: "readHistory", sessionId })) as { events: ChatEvent[] };
-    return r.events ?? [];
+    return this.send({ kind: "readHistory", payload: sessionId });
   }
 
   async readTranscript(sessionId: string): Promise<TranscriptEvent[]> {
     // #28：双视角历史经 worker 命令往返（Main → cli-host adapter，记忆提取管线的读取入口）
-    const r = (await this.command({ kind: "readTranscript", sessionId })) as { transcript: TranscriptEvent[] };
-    return r.transcript ?? [];
+    return this.send({ kind: "readTranscript", payload: sessionId });
   }
 
   /** 上报 worker 管理的全部活跃 CLI 子进程 pid（#44 C5 演进，spec #40 C 节；残留治理 #49 的本应用活跃集合基准） */
   async listChildPids(): Promise<number[]> {
-    const r = (await this.command({ kind: "listChildPids" })) as { pids?: number[] };
-    return r.pids ?? [];
+    return this.send({ kind: "listChildPids", payload: undefined });
   }
 
   async resume(sessionId: string): Promise<void> {
-    await this.command({ kind: "resume", sessionId });
+    return this.send({ kind: "resume", payload: sessionId });
   }
 
   async adoptSession(input: AdoptSessionInput): Promise<void> {
-    await this.command({
-      kind: "adoptSession",
-      sessionId: input.sessionId,
-      nativeSessionId: input.nativeSessionId,
-      cwd: input.cwd,
-      cli: input.cli ?? "fake",
-      permMode: input.permMode,
-      model: input.model,
-    });
+    // cli 缺省 fake 显式补齐（与 Router 兜底一致，保持 wire 摘要 cli= 命中）
+    return this.send({ kind: "adoptSession", payload: { ...input, cli: input.cli ?? "fake" } });
   }
 
   async dispose(input?: DisposeInput): Promise<void> {
     // Session 粒度：走命令往返（worker 内 router.dispose({sessionId})——只终止单会话，进程/其他会话保留，t0-01 T3）
     if (input?.sessionId) {
-      await this.command({ kind: "dispose", sessionId: input.sessionId });
+      await this.send({ kind: "dispose", payload: input });
       return;
     }
     // 全量有序停机：worker 内 shutdown（停止新命令→dispose 全部 adapter→有限等待）→ 等 worker 实际退出，超时 kill 兜底（Job Object 覆盖强杀场景）
@@ -188,14 +195,13 @@ export class CliHostClient implements CliAdapter {
   }
 
   /** 一次性执行（#29 C5 演进，spec #27 C 节）：worker 内 spawn 直连 CLI 进程（自动落入 Job Object；提取引擎的 Claude headless 临时进程载体） */
-  async runOnce(input: { runId: string; cli: string; args: string[]; cwd: string; stdin?: string; timeoutMs?: number }): Promise<RunOnceResult> {
-    const r = (await this.command({ kind: "run-once", ...input })) as { runOnce: RunOnceResult };
-    return r.runOnce;
+  async runOnce(input: RunOnceInput): Promise<RunOnceResult> {
+    return this.send({ kind: "runOnce", payload: input });
   }
 
   /** 取消进行中的一次性执行（终结为 cancelled；未在执行则 no-op） */
   async cancelRunOnce(runId: string): Promise<void> {
-    await this.command({ kind: "cancel-run-once", runId });
+    return this.send({ kind: "cancelRunOnce", payload: runId });
   }
 
   subscribe(handler: (event: AdapterEvent) => void): () => void {
@@ -207,13 +213,18 @@ export class CliHostClient implements CliAdapter {
 
   /* ---------------- 内部 ---------------- */
 
-  private command(cmd: Parameters<typeof Object>[0] extends never ? never : Record<string, unknown>): Promise<unknown> {
+  /**
+   * 命令往返单入口（issue #73）：wire 报文 {kind,payload}，按 kind 返回 ReturnOf<K>（worker 回传方法返回值本身，无解包 cast）。
+   * 旧 `Parameters<typeof Object>[0] extends never` 绕行 hack 随 wire 类型化删除。
+   */
+  private send<K extends HostCommand["kind"]>(cmd: HostCommand & { kind: K }): Promise<ReturnOf<K>> {
     const id = this.nextId++;
-    return new Promise((resolve, reject) => {
+    const p = new Promise<unknown>((resolve, reject) => {
       // #54：pending 存白名单摘要（全部命令形状经此单入口，提取不丢字段）
       this.pending.set(id, { resolve, reject, summary: summarizeCommand(cmd) });
       this.proc.postMessage({ id, cmd });
     });
+    return p as Promise<ReturnOf<K>>;
   }
 
   private onMessage(msg: unknown): void {

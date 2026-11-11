@@ -20,7 +20,10 @@ export { resolveOpenCodeExe, listOpenCodeExeCandidates } from "./opencode/exe";
 export { OpenCodeHttpServerClient, type OpenCodeServerClientLike, type OpenCodeSseEvent, type OpenCodeApiResponse } from "./opencode/client";
 export { OpenCodeServerHost, OPENCODE_PERM_CONFIG, verifyRegistryEntry, readServerRegistry, pathCompareKey, type OpenCodeServerHostLike, type OpenCodeServerHostOptions, type RegistryEntry } from "./opencode/server-host";
 export { AdapterRouter, type AdapterFactory } from "./router-adapter";
-export { CliHost, type HostCommand, type HostCommandResult, type ShutdownOptions } from "./host/cli-host";
+export { CliHost, type HostCommandReturn, type ShutdownOptions } from "./host/cli-host";
+// issue #73：消息面 wire 契约（HostCommand/返回值由 CliAdapter 派生）+ worker 协议处理器（密封 roundtrip 测试注入位）
+export { type HostCommand, type CommandKeys, type ReturnOf } from "./host/wire";
+export { createPortHandler, type ParentPortLike } from "./host/port-handler";
 export { createDesktopAdapterFactory, type DesktopAdapterFactoryOptions } from "./host/desktop-adapters";
 // #29 C5 演进：run-once 一次性执行（spec #27 C 节）+ Job guard 脚本单一事实源
 export { RunOnceRunner, DEFAULT_RUN_ONCE_TIMEOUT_MS, type RunOnceInput, type RunOnceResult } from "./host/run-once";

@@ -99,7 +99,7 @@ try {
       : cli === "opencode" ? new OpenCodeAdapter({ registryPath: spec.registryPath, xdgRoot: spec.xdgRoot }) // 注册表落 server pid/port 台账
       : new FakeAdapter(); // 其余 CLI 不在编排内（AdapterRouter 构造期会对全 CLI 求能力合并，不能返回 null）
   const host = new CliHost(factory);
-  const mk = (cli, cwd) => host.command({ kind: "createSession", init: { cli, cwd } });
+  const mk = (cli, cwd) => host.command({ kind: "createSession", payload: { cli, cwd } });
   const s1 = await mk("claude", spec.claudeCwd);
   log("claude session " + s1.sessionId);
   const s2 = await mk("opencode", spec.ocCwdA);

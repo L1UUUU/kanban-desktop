@@ -1,9 +1,10 @@
-// 用途：CliHost seam 单测 —— command 分发（经 AdapterRouter）、事件聚合、未支持 CLI 报错、shutdown 拒绝新命令并 dispose 全部 adapter；run-once/cancel-run-once 命令路由（#29 C5 演进）
+// 用途：CliHost seam 单测 —— command 分发（经 AdapterRouter）、事件聚合、未支持 CLI 报错、shutdown 拒绝新命令并 dispose 全部 adapter；runOnce/cancelRunOnce 命令路由（#29 C5 演进）；wire 报文 {kind,payload}（issue #73，返回值 = 方法返回值本身）
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CliHost, type HostCommand } from "./cli-host";
+import { CliHost } from "./cli-host";
+import type { HostCommand } from "./wire";
 import { FakeAdapter } from "../fake-adapter";
 import type { AdapterEvent } from "@kanban/ipc-schema";
 import type { CliAdapter, DisposeInput } from "../adapter";
@@ -26,94 +27,88 @@ function makeHost() {
 describe("CliHost seam（C5）", () => {
   it("command createSession 按 cli 分发并返回应用侧 id；未支持 CLI 明确报错", async () => {
     const { host } = makeHost();
-    const r = await host.command({ kind: "createSession", init: { cwd: "C:\\demo", cli: "fake" } });
+    const r = await host.command({ kind: "createSession", payload: { cwd: "C:\\demo", cli: "fake" } });
     expect(r.sessionId).toBeDefined();
     expect(r.nativeSessionId).toBeNull(); // Fake 无原生 id
-    const codex = await host.command({ kind: "createSession", init: { cwd: "C:\\demo", cli: "codex" } });
+    const codex = await host.command({ kind: "createSession", payload: { cwd: "C:\\demo", cli: "codex" } });
     expect(codex.sessionId).toBeDefined();
-    await expect(host.command({ kind: "createSession", init: { cwd: "C:\\demo", cli: "claude" } })).rejects.toMatchObject({
+    await expect(host.command({ kind: "createSession", payload: { cwd: "C:\\demo", cli: "claude" } })).rejects.toMatchObject({
       code: "E_INTERNAL",
     });
   });
 
   it("sendTurn/readHistory 按 sessionId 路由到正确 adapter；事件聚合订阅", async () => {
     const { host, events } = makeHost();
-    const s1 = await host.command({ kind: "createSession", init: { cwd: "C:\\demo", cli: "fake" } });
-    const s2 = await host.command({ kind: "createSession", init: { cwd: "C:\\demo", cli: "codex" } });
-    await host.command({ kind: "sendTurn", sessionId: s1.sessionId!, text: "排队消息" });
+    const s1 = await host.command({ kind: "createSession", payload: { cwd: "C:\\demo", cli: "fake" } });
+    const s2 = await host.command({ kind: "createSession", payload: { cwd: "C:\\demo", cli: "codex" } });
+    await host.command({ kind: "sendTurn", payload: { sessionId: s1.sessionId, text: "排队消息" } });
     await new Promise((r) => setTimeout(r, 1500));
     // 两会话事件都聚合到同一订阅
     const ids = new Set(events.filter((e) => "type" in e).map((e) => (e as { sessionId: string }).sessionId));
-    expect(ids.has(s1.sessionId!)).toBe(true);
-    const history = await host.command({ kind: "readHistory", sessionId: s1.sessionId! });
-    expect(history.events!.length).toBeGreaterThan(0);
+    expect(ids.has(s1.sessionId)).toBe(true);
+    const history = await host.command({ kind: "readHistory", payload: s1.sessionId });
+    expect(history.length).toBeGreaterThan(0);
     // 第二会话（未发过 turn）：仅 createSession 的初始状态事件
-    const h2 = await host.command({ kind: "readHistory", sessionId: s2.sessionId! });
-    expect(h2.events!.every((e) => e.type === "session_status")).toBe(true);
+    const h2 = await host.command({ kind: "readHistory", payload: s2.sessionId });
+    expect(h2.every((e) => e.type === "session_status")).toBe(true);
   });
 
   it("readTranscript 命令（#28）：按 sessionId 路由，返回双视角剧本（user 提问 + 助手文本 + 工具标注）；未知会话报错", async () => {
     const { host } = makeHost();
-    const s1 = await host.command({ kind: "createSession", init: { cwd: "C:\\demo", cli: "fake" } });
-    await host.command({ kind: "sendTurn", sessionId: s1.sessionId!, text: "拆类型" });
+    const s1 = await host.command({ kind: "createSession", payload: { cwd: "C:\\demo", cli: "fake" } });
+    await host.command({ kind: "sendTurn", payload: { sessionId: s1.sessionId, text: "拆类型" } });
     await new Promise((r) => setTimeout(r, 4000)); // 等 DEFAULT 脚本完整走完（SystemClock 实时推进）
-    const r = await host.command({ kind: "readTranscript", sessionId: s1.sessionId! });
-    expect(r.transcript).toBeDefined();
-    const transcript = r.transcript!;
+    const transcript = await host.command({ kind: "readTranscript", payload: s1.sessionId });
     expect(transcript.some((e) => e.role === "user" && e.text === "拆类型")).toBe(true);
     expect(transcript.some((e) => e.role === "assistant" && e.text.length > 0)).toBe(true);
     expect(transcript.some((e) => e.tool?.name === "Bash")).toBe(true);
-    await expect(host.command({ kind: "readTranscript", sessionId: "nope" })).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
+    await expect(host.command({ kind: "readTranscript", payload: "nope" })).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
   });
 
   it("未知会话命令报 E_SESSION_NOT_FOUND", async () => {
     const { host } = makeHost();
-    await expect(host.command({ kind: "sendTurn", sessionId: "nope", text: "x" })).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
+    await expect(host.command({ kind: "sendTurn", payload: { sessionId: "nope", text: "x" } })).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
   });
 
   it("adoptSession（#13 恢复编排）：按 cli 分发收养并登记路由，后续命令按 sessionId 可达", async () => {
     const { host, events } = makeHost();
     await host.command({
       kind: "adoptSession",
-      sessionId: "s-restored",
-      nativeSessionId: "native-1",
-      cwd: "C:\\demo",
-      cli: "codex",
-      permMode: "auto",
+      payload: { sessionId: "s-restored", nativeSessionId: "native-1", cwd: "C:\\demo", cli: "codex", permMode: "auto" },
     });
     // 收养事件（session_status disconnected）聚合到订阅
     expect(events.some((e) => "type" in e && e.type === "session_status" && (e as { sessionId: string }).sessionId === "s-restored")).toBe(true);
     // 路由登记：收养会话的 readHistory/resume/interruptTurn 可达（Fake 实现语义）
-    const history = await host.command({ kind: "readHistory", sessionId: "s-restored" });
-    expect(history.events).toBeDefined();
-    await host.command({ kind: "resume", sessionId: "s-restored" });
-    await host.command({ kind: "interruptTurn", sessionId: "s-restored" });
+    const history = await host.command({ kind: "readHistory", payload: "s-restored" });
+    expect(Array.isArray(history)).toBe(true);
+    await host.command({ kind: "resume", payload: "s-restored" });
+    await host.command({ kind: "interruptTurn", payload: "s-restored" });
     await expect(
-      host.command({ kind: "adoptSession", sessionId: "s-dup", nativeSessionId: "n", cwd: "C:\\demo", cli: "claude" }),
+      host.command({ kind: "adoptSession", payload: { sessionId: "s-dup", nativeSessionId: "n", cwd: "C:\\demo", cli: "claude" } }),
     ).rejects.toMatchObject({ code: "E_INTERNAL" }); // 未支持 CLI
   });
 
   it("dispose 单会话命令：只终止该会话，其余会话与命令通道可用", async () => {
     const { host } = makeHost();
-    const s1 = await host.command({ kind: "createSession", init: { cwd: "C:\\demo", cli: "fake" } });
-    const s2 = await host.command({ kind: "createSession", init: { cwd: "C:\\demo", cli: "fake" } });
-    await host.command({ kind: "dispose", sessionId: s1.sessionId! });
-    await expect(host.command({ kind: "readHistory", sessionId: s1.sessionId! })).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
-    await host.command({ kind: "sendTurn", sessionId: s2.sessionId!, text: "还在" }); // 其余会话不受影响
+    const s1 = await host.command({ kind: "createSession", payload: { cwd: "C:\\demo", cli: "fake" } });
+    const s2 = await host.command({ kind: "createSession", payload: { cwd: "C:\\demo", cli: "fake" } });
+    await host.command({ kind: "dispose", payload: { sessionId: s1.sessionId } });
+    await expect(host.command({ kind: "readHistory", payload: s1.sessionId })).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
+    await host.command({ kind: "sendTurn", payload: { sessionId: s2.sessionId, text: "还在" } }); // 其余会话不受影响
   });
 
   it("shutdown：拒绝新命令并 dispose 全部 adapter", async () => {
     const { host, adapters } = makeHost();
-    await host.command({ kind: "createSession", init: { cwd: "C:\\demo", cli: "fake" } });
+    await host.command({ kind: "createSession", payload: { cwd: "C:\\demo", cli: "fake" } });
     await host.shutdown({ reason: "test" });
-    await expect(host.command({ kind: "createSession", init: { cwd: "C:\\demo", cli: "fake" } })).rejects.toMatchObject({ code: "E_INTERNAL" });
+    await expect(host.command({ kind: "createSession", payload: { cwd: "C:\\demo", cli: "fake" } })).rejects.toMatchObject({ code: "E_INTERNAL" });
     // dispose 后原会话不可用
-    await expect(host.command({ kind: "readHistory", sessionId: "any" })).rejects.toMatchObject({ code: "E_INTERNAL" });
+    await expect(host.command({ kind: "readHistory", payload: "any" })).rejects.toMatchObject({ code: "E_INTERNAL" });
     expect(adapters.length).toBeGreaterThan(0);
   });
 });
 
-describe("CliHost run-once 命令（C5 演进，#29）", () => {
+describe("CliHost runOnce 命令（C5 演进，#29；kind 改名 runOnce，issue #73）", () => {
   /** fake CLI（node.exe 直连；KANBAN_CLAUDE_BIN 指向 node.exe 走真实解析链） */
   const FAKE_CLI = path.join(import.meta.dirname, "../../tests/fixtures/fake-cli.mjs");
   let cwd: string;
@@ -128,27 +123,27 @@ describe("CliHost run-once 命令（C5 演进，#29）", () => {
     delete process.env.KANBAN_CLAUDE_BIN;
   });
 
-  it("run-once 命令：worker 协议内路由执行，结果经 runOnce 字段回传", { timeout: 20_000 }, async () => {
+  it("runOnce 命令：worker 协议内路由执行，返回值直传 RunOnceResult", { timeout: 20_000 }, async () => {
     const { host } = makeHost();
-    const r = await host.command({ kind: "run-once", runId: "h-1", cli: "claude", args: [FAKE_CLI, "ok", "H1"], cwd });
-    expect(r.runOnce).toMatchObject({ status: "completed", exitCode: 0 });
-    expect(r.runOnce!.stdout).toContain("fake-out:H1");
+    const r = await host.command({ kind: "runOnce", payload: { runId: "h-1", cli: "claude", args: [FAKE_CLI, "ok", "H1"], cwd } });
+    expect(r).toMatchObject({ status: "completed", exitCode: 0 });
+    expect(r.stdout).toContain("fake-out:H1");
   });
 
-  it("cancel-run-once 命令：终结进行中执行（cancelled）；未知 runId no-op 不报错", { timeout: 20_000 }, async () => {
+  it("cancelRunOnce 命令：终结进行中执行（cancelled）；未知 runId no-op 不报错", { timeout: 20_000 }, async () => {
     const { host } = makeHost();
-    const p = host.command({ kind: "run-once", runId: "h-2", cli: "claude", args: [FAKE_CLI, "sleep", "60000"], cwd });
-    await host.command({ kind: "cancel-run-once", runId: "h-2" });
-    expect((await p).runOnce).toMatchObject({ status: "cancelled" });
-    await expect(host.command({ kind: "cancel-run-once", runId: "nope" })).resolves.toBeDefined();
+    const p = host.command({ kind: "runOnce", payload: { runId: "h-2", cli: "claude", args: [FAKE_CLI, "sleep", "60000"], cwd } });
+    await host.command({ kind: "cancelRunOnce", payload: "h-2" });
+    expect(await p).toMatchObject({ status: "cancelled" });
+    await expect(host.command({ kind: "cancelRunOnce", payload: "nope" })).resolves.toBeUndefined();
   });
 
-  it("shutdown：终止进行中的 run-once（cancelled 收口）并拒绝新命令", { timeout: 20_000 }, async () => {
+  it("shutdown：终止进行中的 runOnce（cancelled 收口）并拒绝新命令", { timeout: 20_000 }, async () => {
     const { host } = makeHost();
-    const p = host.command({ kind: "run-once", runId: "h-3", cli: "claude", args: [FAKE_CLI, "sleep", "60000"], cwd });
+    const p = host.command({ kind: "runOnce", payload: { runId: "h-3", cli: "claude", args: [FAKE_CLI, "sleep", "60000"], cwd } });
     await host.shutdown({ reason: "test" });
-    expect((await p).runOnce).toMatchObject({ status: "cancelled" });
-    await expect(host.command({ kind: "run-once", runId: "h-4", cli: "claude", args: [FAKE_CLI, "ok"], cwd })).rejects.toMatchObject({ code: "E_INTERNAL" });
+    expect(await p).toMatchObject({ status: "cancelled" });
+    await expect(host.command({ kind: "runOnce", payload: { runId: "h-4", cli: "claude", args: [FAKE_CLI, "ok"], cwd } })).rejects.toMatchObject({ code: "E_INTERNAL" });
   });
 });
 
@@ -207,48 +202,48 @@ describe("CliHost listChildPids 命令（C5 演进，#44）", () => {
 
   it("聚合全部 Adapter 的 pid：去重升序；未实现可选成员的 Adapter 贡献空集；空 host 为空集", async () => {
     const { host, stubOf } = makePidHost();
-    expect(await host.command({ kind: "listChildPids" })).toEqual({ pids: [] }); // 空集合
-    await host.command({ kind: "createSession", init: { cwd: "C:\\demo", cli: "a" } });
-    await host.command({ kind: "createSession", init: { cwd: "C:\\demo", cli: "b" } });
-    await host.command({ kind: "createSession", init: { cwd: "C:\\demo", cli: "bare" } }); // 未实现可选成员
+    expect(await host.command({ kind: "listChildPids", payload: undefined })).toEqual([]); // 空集合
+    await host.command({ kind: "createSession", payload: { cwd: "C:\\demo", cli: "a" } });
+    await host.command({ kind: "createSession", payload: { cwd: "C:\\demo", cli: "b" } });
+    await host.command({ kind: "createSession", payload: { cwd: "C:\\demo", cli: "bare" } }); // 未实现可选成员
     stubOf("a").pids = [300, 100];
     stubOf("b").pids = [100, 200];
-    expect(await host.command({ kind: "listChildPids" })).toEqual({ pids: [100, 200, 300] });
+    expect(await host.command({ kind: "listChildPids", payload: undefined })).toEqual([100, 200, 300]);
   });
 
   it("全量 dispose 后集合清空；worker 重启（新 host）后集合重建 —— 新会话建立 pid 重新出现", async () => {
     const { host, stubOf } = makePidHost();
-    await host.command({ kind: "createSession", init: { cwd: "C:\\demo", cli: "a" } });
+    await host.command({ kind: "createSession", payload: { cwd: "C:\\demo", cli: "a" } });
     stubOf("a").pids = [111];
-    expect(await host.command({ kind: "listChildPids" })).toEqual({ pids: [111] });
-    await host.command({ kind: "dispose" }); // 全量退出：各 adapter 受控终止
-    expect(await host.command({ kind: "listChildPids" })).toEqual({ pids: [] });
+    expect(await host.command({ kind: "listChildPids", payload: undefined })).toEqual([111]);
+    await host.command({ kind: "dispose", payload: undefined }); // 全量退出：各 adapter 受控终止
+    expect(await host.command({ kind: "listChildPids", payload: undefined })).toEqual([]);
     // worker 重启：新 CliHost（新 Router/新 Adapter 实例）初始空集
     const restarted = makePidHost();
-    expect(await restarted.host.command({ kind: "listChildPids" })).toEqual({ pids: [] });
-    await restarted.host.command({ kind: "createSession", init: { cwd: "C:\\demo", cli: "a" } });
+    expect(await restarted.host.command({ kind: "listChildPids", payload: undefined })).toEqual([]);
+    await restarted.host.command({ kind: "createSession", payload: { cwd: "C:\\demo", cli: "a" } });
     restarted.stubOf("a").pids = [222]; // 新会话建立后（进程拉起）pid 重新出现
-    expect(await restarted.host.command({ kind: "listChildPids" })).toEqual({ pids: [222] });
+    expect(await restarted.host.command({ kind: "listChildPids", payload: undefined })).toEqual([222]);
   });
 });
 
-// HostCommand 类型形状冒烟（编译期断言用）
+// HostCommand 类型形状冒烟（派生联合编译期可构造；完备性断言见 apps/desktop 密封 roundtrip 测试 allKinds）
 void ({} as HostCommand);
 
 describe("CliHost 诊断 log 透传（#54 spec #52 B 节）", () => {
-  it("构造可选 log 转发 run-once：stderr 留痕经同一 2 参 (kind, detail) 回调上报；未注入时静默", async () => {
+  it("构造可选 log 转发 runOnce：stderr 留痕经同一 2 参 (kind, detail) 回调上报；未注入时静默", async () => {
     process.env.KANBAN_CLAUDE_BIN = process.execPath; // exe 解析链 env 分支 → node.exe（fake-cli 直连）
     const cwd = mkdtempSync(path.join(tmpdir(), "kb-host-log-"));
     const fakeCli = path.join(import.meta.dirname, "../../tests/fixtures/fake-cli.mjs");
     try {
       const logs: Array<[string, string]> = [];
       const host = new CliHost(() => new BaseStubAdapter() as CliAdapter, (kind, detail) => logs.push([kind, detail]));
-      const r = await host.command({ kind: "run-once", runId: "h1", cli: "claude", args: [fakeCli, "ok", "H1"], cwd });
-      expect(r.runOnce!.status).toBe("completed");
+      const r = await host.command({ kind: "runOnce", payload: { runId: "h1", cli: "claude", args: [fakeCli, "ok", "H1"], cwd } });
+      expect(r.status).toBe("completed");
       expect(logs.some(([k, d]) => k === "stderr" && d.includes("fake-err:H1") && d.includes("h1"))).toBe(true);
       // 未注入 log 的既有构造（单参）不受影响：同命令可执行
       const bare = new CliHost(() => new BaseStubAdapter() as CliAdapter);
-      expect((await bare.command({ kind: "run-once", runId: "h2", cli: "claude", args: [fakeCli, "ok"], cwd })).runOnce!.status).toBe("completed");
+      expect((await bare.command({ kind: "runOnce", payload: { runId: "h2", cli: "claude", args: [fakeCli, "ok"], cwd } })).status).toBe("completed");
     } finally {
       rmSync(cwd, { recursive: true, force: true });
       delete process.env.KANBAN_CLAUDE_BIN;

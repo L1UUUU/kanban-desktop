@@ -87,7 +87,7 @@ describe("CliHostClient {log} 分派（#54 spec #52 B 节）", () => {
     expect(events.length).toBe(1);
     const p = b.client.readHistory("s1");
     const posted = b.proc.posted[0] as { id: number };
-    b.proc.emitWorkerMessage({ id: posted.id, ok: true, result: { events: [] } });
+    b.proc.emitWorkerMessage({ id: posted.id, ok: true, result: [] }); // issue #73：返回值直传（readHistory 即 ChatEvent[]）
     expect(await p).toEqual([]);
   });
 
@@ -96,7 +96,7 @@ describe("CliHostClient {log} 分派（#54 spec #52 B 节）", () => {
     expect(() => b.proc.emitWorkerMessage({ log: { kind: "dead", detail: "x" } })).not.toThrow();
     const p = b.client.resume("s1");
     const posted = b.proc.posted[0] as { id: number };
-    b.proc.emitWorkerMessage({ id: posted.id, ok: true, result: {} });
+    b.proc.emitWorkerMessage({ id: posted.id, ok: true, result: undefined }); // issue #73：void 方法返回值直传 undefined
     await expect(p).resolves.toBeUndefined();
   });
 
@@ -142,8 +142,8 @@ describe("CliHostClient 命令失败与白名单摘要（#54 spec #52 G 节 M5�
     b.proc.emitExit(1);
     const detail = b.logKinds.find(([k]) => k === "worker-exit")?.[1] ?? "";
     expect(detail).toContain("kind=listChildPids");
-    expect(detail).toContain("kind=cancel-run-once runId=rc");
-    expect(detail).toContain("kind=run-once cli=claude runId=rr");
+    expect(detail).toContain("kind=cancelRunOnce runId=rc");
+    expect(detail).toContain("kind=runOnce cli=claude runId=rr");
     expect(detail).toContain("kind=adoptSession sessionId=sa cli=codex");
   });
 });
@@ -191,7 +191,7 @@ describe("CliHostClient worker 退出处置（#54 spec #52 F 节 M2）", () => {
     expect(exitLogs[0][0]).toBe("worker-exit");
     expect(exitLogs[0][1]).toContain("code=1");
     expect(exitLogs[0][1]).toContain("kind=readHistory sessionId=s1");
-    expect(exitLogs[0][1]).toContain("kind=run-once cli=codex runId=r1");
+    expect(exitLogs[0][1]).toContain("kind=runOnce cli=codex runId=r1");
   });
 
   it("由信号终止（code 0 + signal）同样记意外退出", () => {
