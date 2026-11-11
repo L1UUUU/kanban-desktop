@@ -1,0 +1,28 @@
+# 用途：每日定时整机 C 类 e2e（Playwright + Electron 构建产物）——推送门禁不含 e2e，环境差异耦合由本任务兜底
+# 只跑 Fake 子集：真实 codex 用例由 KANBAN_REAL_E2E 门控自动跳过；截图归档写入（KANBAN_UPDATE_SCREENSHOTS）不在 CI 开启
+name: e2e-daily
+
+on:
+  schedule:
+    # UTC 20:00 = 北京时间次日 04:00
+    - cron: "0 20 * * *"
+  # 手动触发：首次验证与日常补跑用
+  workflow_dispatch: {}
+
+concurrency:
+  group: e2e-daily
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -C apps/desktop test:e2e
