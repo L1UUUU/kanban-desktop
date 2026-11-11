@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>阶段 5 原型：会话生命周期优化（草稿 / 归档 / 删除 / 设置）</title>
+<!-- 用途：design-feature 原型验收依据；与业务实现隔离，沿用 stage1–4 暗色 token 与 demo-tabs 惯例 -->
+<style>
+  :root {
+    --bg: #0f1115; --card: #161a22; --muted-card: #1b2029; --border: #2a3140;
+    --fg: #e6e9ef; --fg-muted: #9aa3b2; --fg-faint: #6b7484;
+    --primary: #7c9cff; --ok: #4ade80; --warn: #f5c66b; --destructive: #f87171;
+    --codex: #3fb27f; --claude: #d97757; --opencode: #8b7cf6; --pty: #d4a72c;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font: 13px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--fg); padding: 16px; }
+  button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+  input { font: inherit; }
+  .demo-tabs { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .demo-tabs button { padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--fg-muted); }
+  .demo-tabs button.on { border-color: var(--primary); color: var(--fg); background: rgba(124,156,255,.12); }
+  .demo { display: none; }
+  .demo.on { display: block; }
+  .frame { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; display: flex; height: 620px; background: var(--bg); position: relative; }
+  .note { color: var(--fg-faint); font-size: 12px; margin: 8px 2px; }
+
+  /* ── 顶栏 ─────────────────────────────── */
+  .topbar { position: absolute; top: 0; left: 0; right: 0; height: 42px; display: flex; align-items: center; gap: 10px; padding: 0 14px; border-bottom: 1px solid var(--border); background: var(--card); z-index: 5; }
+  .topbar b { font-size: 13px; }
+  .topbar .badge { border: 1px solid var(--border); border-radius: 4px; padding: 0 6px; font-size: 11px; color: var(--fg-muted); }
+  .topbar .settings { margin-left: auto; font-size: 12px; color: var(--fg-muted); }
+  .topbar .settings:hover { color: var(--primary); }
+
+  /* ── 侧栏 ─────────────────────────────── */
+  .sidebar { width: 208px; flex: none; border-right: 1px solid var(--border); padding: 54px 0 8px; display: flex; flex-direction: column; gap: 2px; background: var(--card); overflow-y: auto; }
+  .side-h { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px 2px; font-size: 11px; letter-spacing: .08em; color: var(--fg-faint); }
+  .proj-row { display: flex; align-items: center; gap: 8px; padding: 6px 12px; }
+  .proj-row .plus { margin-left: auto; color: var(--fg-faint); }
+  .sess-group-title { padding: 12px 12px 2px; font-size: 11px; letter-spacing: .08em; color: var(--fg-faint); }
+  .sess-empty { padding: 4px 12px; font-size: 12px; color: var(--fg-faint); }
+  .sess { position: relative; display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-left: 2px solid transparent; }
+  .sess.active { border-left-color: var(--primary); background: var(--muted-card); }
+  .sess:hover { background: var(--muted-card); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .sess .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+  .tag { font-size: 10px; color: var(--ok); }
+  .status { font-size: 10px; color: var(--fg-faint); }
+  .sess .ops { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); display: none; gap: 2px; background: var(--muted-card); padding-left: 8px; }
+  .sess:hover .ops { display: flex; }
+  .ops button { font-size: 10px; border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; color: var(--fg-muted); }
+  .ops button:hover { border-color: var(--primary); color: var(--fg); }
+  .ops button.danger:hover { border-color: rgba(248,113,113,.6); color: var(--destructive); }
+  .side-bottom { margin-top: auto; padding: 8px 12px; display: flex; flex-direction: column; gap: 4px; }
+  .entry { display: flex; align-items: center; gap: 8px; width: 100%; border: 1px solid transparent; border-radius: 8px; padding: 6px 10px; font-size: 13px; color: var(--fg-muted); text-align: left; }
+  .entry:hover { border-color: var(--border); background: var(--muted-card); }
+  .entry .proj { margin-left: auto; font-size: 11px; color: var(--fg-faint); }
+
+  /* ── 中央区 ───────────────────────────── */
+  .main { flex: 1; display: flex; flex-direction: column; min-width: 0; padding-top: 42px; }
+  .banner { display: flex; align-items: center; gap: 10px; padding: 8px 16px; font-size: 12px; border-bottom: 1px solid rgba(124,156,255,.4); background: rgba(124,156,255,.08); color: var(--primary); }
+  .banner .actions { margin-left: auto; }
+  .banner button { border: 1px solid var(--primary); color: var(--primary); border-radius: 8px; padding: 2px 10px; font-size: 12px; }
+  .stage { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--fg-faint); font-size: 12px; }
+  .composer { margin: 12px 18px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); padding: 12px 14px; }
+  .composer .draft-hint { font-size: 11px; color: var(--warn); margin-bottom: 8px; }
+  .composer .input { width: 100%; background: transparent; border: none; outline: none; color: var(--fg); font-size: 13px; }
+  .composer .row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+  .chip { border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; font-size: 11px; color: var(--fg-muted); }
+  .send { margin-left: auto; border: 1px solid var(--primary); color: var(--primary); border-radius: 999px; padding: 4px 16px; font-size: 12px; }
+  .send.go { background: var(--primary); color: var(--bg); }
+  .terminal-draft { flex: 1; margin: 12px 18px; border: 1px dashed var(--border); border-radius: 12px; background: #0b0e14; padding: 14px; font: 12px/1.6 Consolas, monospace; color: var(--fg-muted); display: flex; flex-direction: column; }
+  .terminal-draft .hint { color: var(--fg-faint); font-family: "Segoe UI", sans-serif; margin-bottom: 10px; }
+  .terminal-draft .line { color: var(--fg-muted); }
+  .terminal-draft .caret { display: inline-block; width: 7px; height: 13px; background: var(--primary); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* ── 弹层 / 对话框 ───────────────────── */
+  .overlay { position: absolute; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 20; }
+  .overlay.hidden { display: none; }
+  .dialog { width: min(560px, 88%); max-height: 84%; overflow-y: auto; border: 1px solid var(--border); border-radius: 14px; background: var(--card); box-shadow: 0 16px 48px rgba(0,0,0,.6); }
+  .dialog-head { display: flex; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 14px; font-weight: 600; }
+  .dialog-head .x { margin-left: auto; color: var(--fg-faint); font-size: 16px; }
+  .dialog-body { padding: 14px 16px; }
+  .set-section { padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .set-section:last-child { border-bottom: none; }
+  .set-title { font-size: 12px; color: var(--fg-muted); margin-bottom: 8px; }
+  .set-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 13px; }
+  .set-row .desc { color: var(--fg-faint); font-size: 11px; }
+  .switch { position: relative; width: 36px; height: 20px; border-radius: 999px; background: var(--border); flex: none; transition: background .15s; }
+  .switch.on { background: var(--primary); }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--fg); transition: left .15s; }
+  .switch.on::after { left: 18px; }
+  .num { width: 64px; border: 1px solid var(--border); border-radius: 8px; background: var(--muted-card); color: var(--fg); padding: 3px 8px; outline: none; }
+  .num:focus { border-color: var(--primary); }
+  .arch-group { margin: 10px 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .arch-group-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--muted-card); font-size: 12px; }
+  .arch-group-head .count { margin-left: auto; color: var(--fg-faint); }
+  .arch-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border); font-size: 12px; }
+  .arch-item .meta { color: var(--fg-faint); font-size: 11px; }
+  .arch-item .ops2 { margin-left: auto; display: flex; gap: 6px; }
+  .arch-item .ops2 button { border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; font-size: 11px; color: var(--fg-muted); }
+  .arch-item .ops2 button:hover { border-color: var(--primary); color: var(--fg); }
+  .arch-item .ops2 button.danger:hover { border-color: rgba(248,113,113,.6); color: var(--destructive); }
+  .arch-empty { padding: 16px; text-align: center; color: var(--fg-faint); font-size: 12px; }
+  .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); }
+  .btn { border: 1px solid var(--border); border-radius: 8px; padding: 4px 14px; font-size: 12px; color: var(--fg-muted); }
+  .btn:hover { border-color: var(--primary); color: var(--fg); }
+  .btn.primary { border-color: var(--primary); color: var(--primary); }
+  .btn.danger { border-color: rgba(248,113,113,.5); color: var(--destructive); }
+  .confirm-body { font-size: 13px; line-height: 1.8; }
+  .confirm-body .why { color: var(--fg-faint); font-size: 12px; margin-top: 8px; }
+  .toast { position: absolute; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--muted-card); border: 1px solid var(--border); border-radius: 8px; padding: 8px 16px; font-size: 12px; color: var(--fg-muted); z-index: 30; display: none; }
+  .toast.show { display: block; }
+  .overlay.top { z-index: 40; }
+</style>
+</head>
+<body>
+
+<div class="demo-tabs">
+  <button class="on" data-demo="d1">① 草稿创建（结构化 / PTY）</button>
+  <button data-demo="d2">② 归档 / 删除（hover 操作）</button>
+  <button data-demo="d3">③ 设置面板（自动归档 + 已归档）</button>
+  <button data-demo="d4">④ 状态流转说明</button>
+</div>
+
+<!-- ══════════ 演示 1：草稿创建 ══════════ -->
+<div class="demo on" id="d1">
+  <div class="frame">
+    <div class="topbar"><b>Kanban Desktop</b><span class="badge">kanban-desktop</span><button class="settings" onclick="toast('演示 1 不涉及设置面板，请切到演示 3')">设置</button></div>
+    <div class="sidebar" id="d1-sidebar"></div>
+    <div class="main" id="d1-main"></div>
+    <div class="toast" id="d1-toast"></div>
+  </div>
+  <div class="note">交互：hover「kanban-desktop」项目行 → 点「＋」→ 选 CLI 或 PTY → 中央出现草稿（侧栏不新增行）→ 输入并发送 → 真正落库，侧栏新增一行。已有草稿时再点「＋」= 替换（全局仅一个）。开启「模拟创建失败」可查看失败卡：输入内容保留、可重试、未落库未进列表。切到其它演示再回来可重置。</div>
+</div>
+
+<!-- ══════════ 演示 2：归档 / 删除 ══════════ -->
+<div class="demo" id="d2">
+  <div class="frame">
+    <div class="topbar"><b>Kanban Desktop</b><span class="badge">kanban-desktop</span><button class="settings" onclick="toast('归档结果在演示 3 的设置面板里查看')">设置</button></div>
+    <div class="sidebar" id="d2-sidebar"></div>
+    <div class="main"><div class="banner">📴 会话「新会话 · Claude」来自上次运行（CLI 已退出）。缓存消息不替代原生历史。<span class="actions"><button>读取原生历史并恢复</button></span></div><div class="stage" id="d2-stage">选中左侧任一会话查看</div></div>
+    <div class="overlay hidden" id="d2-confirm">
+      <div class="dialog">
+        <div class="dialog-head">删除会话</div>
+        <div class="dialog-body confirm-body">
+          确定删除「<b id="d2-confirm-title"></b>」吗？<br>
+          <div class="why">将终止该会话的 CLI 进程、移除本地会话记录与看板关联，并切换当前激活会话。CLI 原生历史文件不删除。此操作不可撤销。</div>
+        </div>
+        <div class="dialog-actions"><button class="btn" onclick="closeConfirm()">取消</button><button class="btn danger" onclick="confirmDelete()">删除</button></div>
+      </div>
+    </div>
+    <div class="toast" id="d2-toast"></div>
+  </div>
+  <div class="note">交互：hover 会话行 → 「归档」把它移出默认列表（可在演示 3 找回）；「删除」先弹二次确认，确认后彻底移除。归档保留 native_session_id，取消归档后仍可 resume。</div>
+</div>
+
+<!-- ══════════ 演示 3：设置面板 ══════════ -->
+<div class="demo" id="d3">
+  <div class="frame">
+    <div class="topbar"><b>Kanban Desktop</b><span class="badge">kanban-desktop</span><button class="settings" onclick="openSettings()">设置 ▾</button></div>
+    <div class="sidebar" id="d3-sidebar"></div>
+    <div class="main"><div class="stage">点右上角「设置 ▾」打开设置面板</div></div>
+    <div class="overlay hidden" id="d3-settings">
+      <div class="dialog">
+        <div class="dialog-head">设置<span class="x" onclick="closeSettings()">✕</span></div>
+        <div class="dialog-body">
+          <div class="set-section">
+            <div class="set-title">日志</div>
+            <div class="set-row"><button class="btn" onclick="toast('打开日志文件')">打开日志文件</button><button class="btn" onclick="toast('复制日志文件路径')">复制日志文件路径</button></div>
+          </div>
+          <div class="set-section">
+            <div class="set-title">会话自动归档</div>
+            <div class="set-row"><div class="switch" id="d3-switch" onclick="toggleAuto()"></div><span>超过 <input class="num" id="d3-days" type="number" min="1" max="365" value="30" onchange="toast('天数保存：' + this.value + ' 天')"> 天未活跃的会话自动归档</span></div>
+            <div class="set-row"><span class="desc">默认关闭；启动时与修改设置时扫描。跳过正在运行 / 等待审批 / 进程仍存活的会话（含空闲终端）；已归档会话不计入。取消归档会重置活跃时间。</span></div>
+            <div class="set-row" id="d3-scan" style="display:none; color:var(--fg-faint); font-size:11px;"></div>
+          </div>
+          <div class="set-section">
+            <div class="set-title">已归档会话（按项目分组）</div>
+            <div id="d3-archived"></div>
+          </div>
+        </div>
+        <div class="dialog-actions"><button class="btn primary" onclick="closeSettings()">完成</button></div>
+      </div>
+    </div>
+    <div class="overlay hidden top" id="d3-confirm">
+      <div class="dialog">
+        <div class="dialog-head">删除已归档会话</div>
+        <div class="dialog-body confirm-body">确定删除「<b id="d3-confirm-title"></b>」吗？
+          <div class="why">与侧栏删除同款：解除看板关联并删除本地会话记录；CLI 原生历史不删除。此操作不可撤销。</div>
+        </div>
+        <div class="dialog-actions"><button class="btn" onclick="closeArchConfirm()">取消</button><button class="btn danger" onclick="confirmArchDelete()">删除</button></div>
+      </div>
+    </div>
+    <div class="toast" id="d3-toast"></div>
+  </div>
+  <div class="note">交互：开关与天数可操作，开启开关后显示上次扫描结果（归档 N 条）；「已归档会话」按项目分组（演示含「未关联项目」组），每条可「取消归档」（回默认列表并重置活跃时间）或「删除」（与侧栏同款二次确认弹窗）。空态显示提示文案。</div>
+</div>
+
+<!-- ══════════ 演示 4：状态流转 ══════════ -->
+<div class="demo" id="d4">
+  <div class="frame" style="height:auto; min-height:620px; display:block; padding:20px 26px;">
+    <div style="font-size:14px; font-weight:600; margin-bottom:12px;">会话状态流转（本阶段规则）</div>
+    <pre style="font:12px/1.9 Consolas, monospace; color:var(--fg-muted); white-space:pre-wrap;">点 + 选 CLI / PTY ──► [草稿] 不落库 / 不进列表 / 不起进程（全局仅 1 个，切走即丢弃）
+        │ 发出第一条消息（携带 model / permMode / cwd / projectId / requirementId）
+        ▼
+   [活跃] ── CLI 退出 / 重启 ──► [已断开 · 可恢复] ◄──────────┐
+     │                              │                        │ 取消归档
+     │ 归档（hover）                  │ 归档                    │ （touch 重置活跃时间）
+     ▼                              ▼                        │
+   [已归档] 移出默认列表、保留 native_session_id ─────────────┘
+     │  │
+     │  └── 删除 ──► [已移除] 二次确认 → 终止进程 + 删行 + unlink 收敛 + 切激活
+     │                （不删 CLI 原生 transcript、不撤销）
+     └── 自动归档：设置开关(默认关) + N 天(默认 30，1–365)
+          启动 / 改设置时扫描；跳过 running / waiting / 进程存活（含空闲终端）与已归档
+          基准 COALESCE(last_active_at, created_at)</pre>
+    <div class="note" style="margin-top:14px;">
+      与既有原型的差异：新增「草稿」态（stage1–4 点 + 即落库）；新增「归档 / 已归档 / 已移除」三态与设置面板；
+      顶栏「设置」由 2 项浮层升级为 modal；侧栏会话行新增 hover 操作；其余布局、配色、徽标、"已断开"引导条保持既有形态。
+    </div>
+    <div class="note">
+      必须一致项：暗色 token、顶栏 42px、侧栏分组（项目 / 结构化会话 / PTY 终端 / 底部入口）、会话行色点与徽标、恢复引导条文案与按钮。
+      可调整范围：设置 modal 宽度与分区间距、草稿提示文案措辞、hover 操作按钮的具体图标/文字、已归档分组的展开动画。
+    </div>
+  </div>
+</div>
+
+<script>
+/* ── 共享演示数据 ─────────────────────── */
+const SEED = [
+  { id: "s1", title: "新会话 · Codex", cli: "codex", status: "已断开" },
+  { id: "s2", title: "新会话 · Claude", cli: "claude", status: "已断开" },
+  { id: "s3", title: "新会话 · OpenCode", cli: "opencode", status: "已断开" },
+];
+const CLI_COLOR = { codex: "var(--codex)", claude: "var(--claude)", opencode: "var(--opencode)", fake: "var(--primary)", pty: "var(--pty)" };
+let d1 = { sessions: SEED.slice(), draft: null, menu: false, firstText: "", failMode: false, error: false, replaced: false };
+let d2 = { sessions: SEED.slice(), archived: [], pendingDelete: null };
+let d3 = { sessions: SEED.slice(), archived: [
+  { id: "a1", title: "新会话 · Codex", cli: "codex", project: "kanban-desktop", last: "2026-10-02", at: "2026-11-11" },
+  { id: "a2", title: "调研缓存策略", cli: "claude", project: "未关联项目", last: "2026-09-28", at: "2026-11-09" },
+], auto: false, pending: null };
+
+/* ── 通用 ─────────────────────────────── */
+function toast(msg) {
+  document.querySelectorAll(".toast").forEach(t => { t.textContent = msg; t.classList.add("show"); });
+  clearTimeout(window.__toastT);
+  window.__toastT = setTimeout(() => document.querySelectorAll(".toast").forEach(t => t.classList.remove("show")), 1800);
+}
+function sidebarHtml(sessions, opts) {
+  opts = opts || {};
+  const structured = sessions.filter(s => s.cli !== "pty");
+  const ptys = sessions.filter(s => s.cli === "pty");
+  const row = (s) => `<div class="sess ${opts.active === s.id ? "active" : ""}" ${opts.hover ? `onmouseenter="this.querySelector('.ops').style.display='flex'" onmouseleave="this.querySelector('.ops').style.display=''"` : ""}>
+      <span class="dot" style="background:${CLI_COLOR[s.cli]}"></span>
+      <span class="title">${s.title}</span>
+      <span class="tag">主仓库</span><span class="status">${s.status || "空闲"}</span>
+      ${opts.hover ? `<span class="ops" style="display:none">
+        <button onclick="event.stopPropagation();${opts.archiveFn}('${s.id}')">归档</button>
+        <button class="danger" onclick="event.stopPropagation();${opts.deleteFn}('${s.id}')">删除</button></span>` : ""}
+    </div>`;
+  return `<div class="side-h">项目 <button class="plus" onclick="${opts.plusFn || "toast('请切到演示 1 使用「＋」')"}" title="新建会话">＋ 注册</button></div>
+    <div class="proj-row" onmouseenter="this.querySelector('.plus').style.opacity=1" onmouseleave="this.querySelector('.plus').style.opacity=.35">
+      <span>📁</span><span>kanban-desktop</span><span class="plus" style="opacity:.35; cursor:pointer" onclick="${opts.newFn || "toast('请切到演示 1 使用「＋」')"}">＋</span>
+    </div>
+    ${opts.menu ? `<div style="margin:2px 12px; border:1px solid var(--border); border-radius:8px; background:var(--muted-card); padding:4px;">
+      ${["codex","claude","opencode","pty"].map(c => `<button style="display:flex; align-items:center; gap:8px; width:100%; padding:4px 8px; border-radius:6px; text-align:left;" onclick="pickCli('${c}')"><span class="dot" style="background:${CLI_COLOR[c]}"></span>${c === "pty" ? "PTY 终端" : "新会话 · " + ({codex:"Codex",claude:"Claude",opencode:"OpenCode"}[c])}</button>`).join("")}
+    </div>` : ""}
+    <div class="sess-group-title">结构化会话</div>
+    ${structured.length ? structured.map(row).join("") : `<div class="sess-empty">暂无会话</div>`}
+    <div class="sess-group-title">PTY 终端</div>
+    ${ptys.length ? ptys.map(row).join("") : `<div class="sess-empty">暂无终端会话</div>`}
+    <div class="side-bottom"><button class="entry">🗂 看板 <span class="proj">kanban-desktop →</span></button><button class="entry">🧠 记忆 <span class="proj">kanban-desktop →</span></button><button class="entry">🔀 Diff <span class="proj">kanban-desktop →</span></button></div>`;
+}
+
+/* ── 演示 1：草稿 ─────────────────────── */
+function renderD1() {
+  document.getElementById("d1-sidebar").innerHTML = sidebarHtml(d1.sessions, {
+    menu: d1.menu, newFn: "openMenu()", active: d1.draft ? d1.draft.id : null,
+  });
+  const main = document.getElementById("d1-main");
+  if (!d1.draft) {
+    main.innerHTML = `<div class="stage">左侧 hover 项目行 → 点「＋」→ 选 CLI / PTY 打开草稿<br>（当前无草稿，侧栏只有 ${d1.sessions.length} 条历史会话）</div>`;
+    return;
+  }
+  const d = d1.draft;
+  if (d.cli === "pty") {
+    main.innerHTML = `<div class="terminal-draft">
+      <div class="hint">🖥 终端草稿 · 尚未启动进程（不落库、不进侧栏）— 输入任意字符即启动 PTY 并落库</div>
+      <div class="line">$ <span class="caret"></span></div>
+      <div style="margin-top:auto"><button class="btn primary" onclick="spawnPty()">模拟首次输入 ⏎</button></div>
+    </div>`;
+  } else {
+    main.innerHTML = `${d1.error ? `<div class="err-card" style="margin:12px 18px 0">
+        <div class="err-card-head">⚠ 创建会话失败（模拟 E_SPAWN_NOT_FOUND）</div>
+        <div class="err-card-body"><div>首条消息未发出：未落库、未进侧栏，草稿与输入内容已保留。</div>
+        <div class="why">重试会重新执行「创建 + 发送首条消息」；也可修改输入后再试。</div></div>
+        <div class="err-card-actions"><button class="btn primary" onclick="retryFirst()">重试发送</button><button class="btn" onclick="d1.error=false;renderD1()">知道了</button></div>
+      </div>` : ""}
+      <div class="stage" style="flex:1"></div>
+      <div class="composer">
+        <div class="draft-hint">✎ 草稿 · 新会话 · ${({codex:"Codex",claude:"Claude",opencode:"OpenCode",fake:"Fake"})[d.cli]} — 尚未保存、未启动 CLI；发出第一条消息后才创建会话${d1.replaced ? "（已替换上一个草稿：全局仅一个）" : ""}</div>
+        <input class="input" id="d1-input" placeholder="输入消息…（发第一条消息才落库）" value="${d1.firstText}" oninput="d1.firstText=this.value">
+        <div class="row"><span class="chip">⚡ 权限：自动</span><span class="chip">默认模型 ▾</span>
+          <button class="btn" style="margin-left:8px" onclick="toggleFail()">模拟创建失败：${d1.failMode ? "开" : "关"}</button>
+          <button class="send ${d1.firstText ? "go" : ""}" onclick="sendFirst()">发送 ➤</button></div>
+      </div>`;
+  }
+}
+function openMenu() { d1.menu = !d1.menu; renderD1(); }
+function pickCli(cli) {
+  d1.menu = false;
+  const replacing = !!d1.draft;
+  d1.draft = { id: "draft", cli, title: cli === "pty" ? "终端草稿" : "新会话" };
+  d1.firstText = ""; d1.error = false; d1.replaced = replacing;
+  renderD1();
+  toast(replacing ? "已替换现有草稿（全局仅一个）" : (cli === "pty" ? "已打开 PTY 草稿：未启动进程、未落库" : "已打开草稿：侧栏未新增会话、未落库"));
+}
+function toggleFail() { d1.failMode = !d1.failMode; renderD1(); }
+function sendFirst() {
+  if (!d1.firstText.trim()) { toast("先输入内容，发送后才创建会话"); return; }
+  if (d1.failMode) { d1.error = true; renderD1(); toast("创建失败（模拟）：未落库，草稿与输入已保留"); return; }
+  commitFirst();
+}
+function retryFirst() {
+  if (!d1.firstText.trim()) { d1.error = false; renderD1(); toast("输入为空：请先输入内容"); return; }
+  d1.error = false; commitFirst();
+}
+function commitFirst() {
+  const label = ({codex:"Codex",claude:"Claude",opencode:"OpenCode",fake:"Fake"})[d1.draft.cli];
+  d1.sessions.unshift({ id: "s" + (d1.sessions.length + 1), title: "新会话 · " + label, cli: d1.draft.cli, status: "空闲" });
+  d1.draft = null; d1.firstText = ""; d1.error = false; d1.replaced = false;
+  renderD1();
+  toast("首条消息已发送：创建 + 落库 + 起 CLI，侧栏新增一行");
+}
+function spawnPty() {
+  d1.sessions.push({ id: "pty" + (d1.sessions.length + 1), title: "终端 · pwsh", cli: "pty", status: "空闲" });
+  d1.draft = null;
+  renderD1();
+  toast("首次输入触发 spawn + 落库，PTY 会话进入侧栏");
+}
+
+/* ── 演示 2：归档 / 删除 ──────────────── */
+function renderD2() {
+  document.getElementById("d2-sidebar").innerHTML = sidebarHtml(d2.sessions, {
+    hover: true, archiveFn: "archiveSession", deleteFn: "askDelete",
+  });
+}
+function archiveSession(id) {
+  const s = d2.sessions.find(x => x.id === id);
+  if (!s) return;
+  d2.sessions = d2.sessions.filter(x => x.id !== id);
+  d2.archived.push(s);
+  renderD2();
+  toast("已归档「" + s.title + "」：移出默认列表，可在设置 → 已归档找回");
+}
+function askDelete(id) {
+  d2.pendingDelete = id;
+  const s = d2.sessions.find(x => x.id === id);
+  document.getElementById("d2-confirm-title").textContent = s ? s.title : id;
+  document.getElementById("d2-confirm").classList.remove("hidden");
+}
+function closeConfirm() { document.getElementById("d2-confirm").classList.add("hidden"); d2.pendingDelete = null; }
+function confirmDelete() {
+  const s = d2.sessions.find(x => x.id === d2.pendingDelete);
+  d2.sessions = d2.sessions.filter(x => x.id !== d2.pendingDelete);
+  closeConfirm(); renderD2();
+  toast("已删除「" + (s ? s.title : "") + "」：终止进程 + 删行 + unlink 收敛");
+}
+
+/* ── 演示 3：设置面板 ─────────────────── */
+function renderD3Sidebar() {
+  document.getElementById("d3-sidebar").innerHTML = sidebarHtml(d3.sessions, {});
+}
+function renderArchived() {
+  const el = document.getElementById("d3-archived");
+  if (!d3.archived.length) { el.innerHTML = `<div class="arch-empty">暂无已归档会话。可在侧栏会话行 hover → 归档，或开启自动归档。</div>`; return; }
+  const groups = {};
+  d3.archived.forEach(a => (groups[a.project] = groups[a.project] || []).push(a));
+  el.innerHTML = Object.entries(groups).map(([proj, items]) => `
+    <div class="arch-group">
+      <div class="arch-group-head">📁 ${proj}<span class="count">${items.length} 条</span></div>
+      ${items.map(a => `<div class="arch-item">
+        <span class="dot" style="background:${CLI_COLOR[a.cli]}"></span>
+        <span>${a.title}</span><span class="meta">最后活跃 ${a.last} · 归档于 ${a.at}</span>
+        <span class="ops2"><button onclick="unarchive('${a.id}')">取消归档</button><button class="danger" onclick="deleteArchived('${a.id}')">删除</button></span>
+      </div>`).join("")}
+    </div>`).join("");
+}
+function openSettings() { renderArchived(); document.getElementById("d3-settings").classList.remove("hidden"); }
+function closeSettings() { document.getElementById("d3-settings").classList.add("hidden"); }
+function toggleAuto() {
+  d3.auto = !d3.auto;
+  document.getElementById("d3-switch").classList.toggle("on", d3.auto);
+  const scan = document.getElementById("d3-scan");
+  if (d3.auto) {
+    scan.style.display = "flex";
+    scan.textContent = "上次扫描（刚刚）：归档 0 条 — 无超期会话；后续扫描结果也在此显示";
+    toast("自动归档已开启：本次扫描归档 0 条");
+  } else {
+    scan.style.display = "none";
+    toast("自动归档已关闭");
+  }
+}
+function unarchive(id) {
+  const a = d3.archived.find(x => x.id === id);
+  d3.archived = d3.archived.filter(x => x.id !== id);
+  d3.sessions.unshift({ id: a.id, title: a.title, cli: a.cli, status: "已断开" });
+  renderD3Sidebar(); renderArchived();
+  toast("已取消归档「" + a.title + "」：回默认列表、重置活跃时间、仍可 resume");
+}
+function deleteArchived(id) {
+  const a = d3.archived.find(x => x.id === id);
+  if (!a) return;
+  d3.pending = id;
+  document.getElementById("d3-confirm-title").textContent = a.title;
+  document.getElementById("d3-confirm").classList.remove("hidden");
+}
+function closeArchConfirm() { document.getElementById("d3-confirm").classList.add("hidden"); d3.pending = null; }
+function confirmArchDelete() {
+  const a = d3.archived.find(x => x.id === d3.pending);
+  d3.archived = d3.archived.filter(x => x.id !== d3.pending);
+  closeArchConfirm(); renderArchived();
+  toast("已删除「" + (a ? a.title : "") + "」");
+}
+
+/* ── tab 切换 + 初始渲染 ──────────────── */
+document.querySelectorAll(".demo-tabs button").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".demo-tabs button").forEach(b => b.classList.remove("on"));
+    document.querySelectorAll(".demo").forEach(d => d.classList.remove("on"));
+    btn.classList.add("on");
+    document.getElementById(btn.dataset.demo).classList.add("on");
+    // 切回演示 1 重置草稿，保证可反复体验
+    if (btn.dataset.demo === "d1") { d1 = { sessions: SEED.slice(), draft: null, menu: false, firstText: "", failMode: false, error: false, replaced: false }; renderD1(); }
+  });
+});
+renderD1(); renderD2(); renderD3Sidebar(); renderArchived();
+</script>
+</body>
+</html>
