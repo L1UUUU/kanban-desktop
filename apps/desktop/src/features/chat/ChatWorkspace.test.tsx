@@ -811,6 +811,24 @@ describe("PTY 终端链路（#12：mock PTY 驱动 TerminalPanel 与多路复用
     expect(calls.filter((c) => c.channel === "terminal:create")).toHaveLength(0);
   });
 
+  it("结构化草稿打开时点「＋」→ PTY 终端：PTY 草稿替换结构化草稿（全局仅一个，双向替换）", async () => {
+    const { transport } = recordInvoke(makePtyFixture().transport);
+    const t = await boot(transport);
+
+    // 先开结构化草稿（点菜单 Claude，不发首条消息）
+    fireEvent.click(screen.getByRole("button", { name: "＋" }));
+    fireEvent.click(screen.getByText("Claude"));
+    await t.flush();
+    expect(screen.getByTestId("draft-hint")).toBeTruthy();
+
+    // 再点「＋」→ PTY 终端：结构化草稿被静默替换（DraftPane 让位终端草稿；#65 整机验收发现反向替换缺失）
+    fireEvent.click(screen.getByRole("button", { name: "＋" }));
+    fireEvent.click(screen.getByRole("button", { name: /PTY 终端/ }));
+    await t.flush();
+    expect(screen.getByText(/终端草稿 · 尚未启动进程/)).toBeTruthy();
+    expect(screen.queryByTestId("draft-hint")).toBeNull();
+  });
+
   it("创建失败：草稿保留 + 错误提示 + 缓冲保留；再输入合并缓冲重试成功入库", async () => {
     const fixture = makePtyFixture();
     const calls: IpcRequest[] = [];

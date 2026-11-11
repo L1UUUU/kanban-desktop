@@ -129,6 +129,12 @@ test("关联管理往返（#20）：卡片建会话自动关联 → 解除（会
     }
     await expect(panel.getByTestId("new-session-item-pty")).toContainText("无 skill 信号");
     await panel.getByTestId("new-session-item-opencode").click();
+    // #59 草稿：卡片入口只开草稿（切到聊天视图，requirementId 随首条消息落到新会话）——发首条消息才创建+自动关联
+    await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
+    await win.getByPlaceholder("输入消息，/ 开头触发 Skill…").fill("首条消息（建立会话）");
+    await win.getByRole("button", { name: "发送 ➤" }).click();
+    await expect(win.locator("aside").getByText("新会话 · OpenCode").first()).toBeVisible({ timeout: 10_000 });
+    await win.getByTestId("kanban-entry").click(); // 回看板（详情面板与选中卡片状态保持）
     const openRow = panel.locator('[data-testid="related-session"]', { hasText: "新会话 · OpenCode" });
     await expect(openRow).toBeVisible({ timeout: 15_000 });
     await expect(designCol.getByText("◍ 2 会话")).toBeVisible({ timeout: 10_000 });
@@ -224,9 +230,14 @@ test("全流程串测（#22 验收）：入口→看板→手动建卡→卡片�
     await titleInput.press("Enter");
     await expect(noneCol.getByText("全流程演示需求")).toBeVisible({ timeout: 10_000 });
 
-    // ③ 关联 = 卡片建会话（S2-11）：详情「＋新建会话」OpenCode → 创建即自动关联
+    // ③ 关联 = 卡片建会话（S2-11）：详情「＋新建会话」OpenCode → #59 草稿：发首条消息才创建（requirementId 随之落关联）
     await win.getByTestId("new-session-menu").click();
     await win.getByTestId("new-session-item-opencode").click();
+    await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
+    await win.getByPlaceholder("输入消息，/ 开头触发 Skill…").fill("首条消息（建立会话）");
+    await win.getByRole("button", { name: "发送 ➤" }).click();
+    await expect(win.locator("aside").getByText("新会话 · OpenCode").first()).toBeVisible({ timeout: 10_000 });
+    await win.getByTestId("kanban-entry").click(); // 回看板（详情面板保持）
     const openRow = win.getByTestId("detail-panel").locator('[data-testid="related-session"]', { hasText: "新会话 · OpenCode" });
     await expect(openRow).toBeVisible({ timeout: 15_000 });
     await expect(noneCol.getByText("◍ 1 会话")).toBeVisible({ timeout: 10_000 });

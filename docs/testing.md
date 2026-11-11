@@ -40,7 +40,7 @@
 | `packages/cli-host/tests/e2e/` | `*.e2e.test.ts` | vitest（单 project） | node | claude / codex / opencode / lifecycle 四件套 + run-once-claude / run-once-job |
 | `apps/desktop/tests/`（根） | `*.test.ts` | vitest node project | node | memory-ipc.test.ts（IPC 集成，默认跑）+ memory-fixture.ts（共享装配，非测试文件） |
 | `apps/desktop/tests/e2e/` | `*.e2e.test.ts` | vitest node project | node | conpty.e2e.test.ts + memory.e2e.test.ts |
-| `apps/desktop/e2e/` | `*.spec.ts` | Playwright | Electron 构建产物（out/） | 11 个整机 spec |
+| `apps/desktop/e2e/` | `*.spec.ts` | Playwright | Electron 构建产物（out/） | 20 个整机 spec（#65 会话生命周期验收起含 stage5 截图与全流程两组） |
 
 环境映射靠目录不靠文件内声明：
 
@@ -88,7 +88,7 @@ Playwright（`apps/desktop/playwright.config.ts`）：testDir `./e2e`，workers 
 | 级别 | 命令 | 实际展开 | 跑什么 |
 |---|---|---|---|
 | 根 | `pnpm test` | `pnpm -r test` | 5 包 vitest 全量：A 类执行，B 类显示 skipped |
-| 根 | `pnpm test:e2e` | `pnpm --filter @kanban/desktop test:e2e` | **C 类**：Playwright 11 spec（先 electron-vite build 再 playwright test） |
+| 根 | `pnpm test:e2e` | `pnpm --filter @kanban/desktop test:e2e` | **C 类**：Playwright 20 spec（先 electron-vite build 再 playwright test） |
 | 根 | `pnpm typecheck` | `pnpm -r typecheck` | 各包 `tsc --noEmit`（含 tests/ 目录） |
 | 根 | `pnpm lint` | `oxlint apps packages` | oxlint（范围含新 tests/ 目录） |
 | 包（cli-host） | `pnpm --filter @kanban/cli-host test` | 包内 `vitest run` | cli-host A 类 + B 类 skipped |

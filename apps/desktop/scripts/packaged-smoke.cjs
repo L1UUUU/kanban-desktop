@@ -91,7 +91,12 @@ async function launchAppOnce(userData, repoDir, cdpPort) {
   }
   if (!version) fail(`CDP 60s 未就绪（日志 ${logFile}）`);
   const browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`);
-  const page = browser.contexts().flatMap((c) => c.pages())[0];
+  // /json/version 就绪早于窗口目标注册（重启场景实测 ~1s 差）：轮询等页面出现，避免竞态性「未找到窗口页面」
+  let page = null;
+  for (let i = 0; i < 15 && !page; i++) {
+    page = browser.contexts().flatMap((c) => c.pages())[0] ?? null;
+    if (!page) await new Promise((r) => setTimeout(r, 1000));
+  }
   if (!page) fail("未找到窗口页面");
   await page.waitForLoadState("domcontentloaded");
   return {
@@ -226,7 +231,8 @@ async function lifecycle() {
     try {
       await second.page.getByText("已断开").first().waitFor({ timeout: 15_000 });
       await second.page.getByText("新会话 · Claude").first().click();
-      await second.page.getByText("该会话来自上次运行（CLI 已退出）。缓存不替代原生历史。").waitFor({ timeout: 10_000 });
+      // #42 起恢复条文案为「📴 会话「title」来自上次运行（CLI 已退出）。缓存消息不替代原生历史。」——此处取无前缀子串
+      await second.page.getByText("来自上次运行（CLI 已退出）。缓存消息不替代原生历史。").waitFor({ timeout: 10_000 });
       await second.page.getByRole("button", { name: "读取原生历史并恢复" }).click();
       await second.page.getByText("空闲").first().waitFor({ timeout: 15_000 });
       await runFakeTurn(second.page, "中断后继续");

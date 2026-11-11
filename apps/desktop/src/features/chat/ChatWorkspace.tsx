@@ -89,9 +89,11 @@ export function ChatWorkspace({
     onSetView?.("chat");
   };
 
-  // #60：打开 PTY 终端草稿并切回聊天视图（草稿须可见可交互——首输入才能触发创建；从看板/记忆等视图发起时带回）
+  // #60：打开 PTY 终端草稿并切回聊天视图（草稿须可见可交互——首输入才能触发创建；从看板/记忆等视图发起时带回）；
+  // 结构化草稿同时静默丢弃（全局单草稿双向替换：#65 整机验收发现点「＋」PTY 不替换结构化草稿）
   const openPtyDraft = (opts: { projectId: string | null; cwd: string; command?: TerminalCommand; requirementId?: string }): void => {
     onSetView?.("chat");
+    controller.store.discardDraft();
     terminals.openDraft(opts);
   };
 

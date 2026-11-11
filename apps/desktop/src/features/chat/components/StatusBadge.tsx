@@ -11,5 +11,6 @@ const STATUS_META: Record<SessionStatus, { label: string; cls: string }> = {
 
 export function StatusBadge({ status }: { status: SessionStatus }) {
   const meta = STATUS_META[status];
-  return <span className={`rounded-full border px-[7px] py-px text-[11px] ${meta.cls}`}>{meta.label}</span>;
+  // flex-none + nowrap：徽标不可被压缩换行（#62 pr-20 预留下 130px 预算曾被压至 29px 宽致文字竖排、行撑高 56px，#65 验收回归）
+  return <span className={`flex-none whitespace-nowrap rounded-full border px-[7px] py-px text-[11px] ${meta.cls}`}>{meta.label}</span>;
 }

@@ -22,7 +22,8 @@ const NEW_MENU_CLIS: Array<{ cli: CliKind; label: string }> = [
   { cli: "opencode", label: "OpenCode" },
 ];
 
-/** 会话行需求徽标（原型一致项 6，.req-badge）：REQ-id 文本 + 点击跳看板；span 避免 button 嵌套 */
+/** 会话行需求徽标（原型一致项 6，.req-badge）：REQ-id 文本 + 点击跳看板；span 避免 button 嵌套。
+ *  可收缩截断（#65）：与状态徽标并存的 130px 行预算下 flex-none 徽标会把标题挤到 0 宽 */
 function ReqBadge({ requirementId, onOpen }: { requirementId: string; onOpen?: (requirementId: string) => void }) {
   return (
     <span
@@ -30,7 +31,7 @@ function ReqBadge({ requirementId, onOpen }: { requirementId: string; onOpen?: (
       tabIndex={0}
       data-testid="req-badge"
       title={`${requirementId} · 点击进入看板`}
-      className="ml-1 flex-none cursor-pointer rounded border border-accent2/45 px-1 text-[11px] text-accent2 hover:bg-primary/15"
+      className="ml-1 min-w-0 max-w-[5rem] shrink cursor-pointer truncate rounded border border-accent2/45 px-1 text-[11px] text-accent2 hover:bg-primary/15"
       onClick={(e) => {
         e.stopPropagation();
         onOpen?.(requirementId);
@@ -140,11 +141,12 @@ export function Sidebar({
               </span>
               {p.status === "missing" ? <span className="flex-none text-[11px] text-warn">目录缺失</span> : null}
             </button>
-            {/* 悬浮「＋」：absolute 脱离文档流 + 透明度切换，避免 hover 时 display:none→block 撑高行、挤窄项目名并下移下方内容（原型一致项 2） */}
+            {/* 悬浮「＋」：absolute 脱离文档流 + 透明度切换，避免 hover 时 display:none→block 撑高行、挤窄项目名并下移下方内容（原型一致项 2）；
+                不用 pointer-events 门控：点击命中判定先于鼠标移动，无 hover 态时命中会落到下层按钮（#65 验收定位的偶发点击拦截根因） */}
             <button
               type="button"
               title="新建会话（选择 CLI）"
-              className="absolute right-3.5 top-1/2 h-6 w-6 -translate-y-1/2 rounded-md text-fg-faint opacity-0 pointer-events-none hover:text-primary group-hover:pointer-events-auto group-hover:opacity-100"
+              className="absolute right-3.5 top-1/2 h-6 w-6 -translate-y-1/2 rounded-md text-fg-faint opacity-0 hover:text-primary group-hover:opacity-100"
               onClick={() => {
                 setMenuProjectId(menuProjectId === p.id ? null : p.id);
               }}
@@ -195,6 +197,7 @@ export function Sidebar({
               s.sessionId === activeId ? "border-l-primary bg-muted" : "border-l-transparent"
             }`}
           >
+            {/* 常驻 pr-20 为 hover 操作区预留右缘（徽标永不进入该区，命中判定不被拦截）；标题 grow + 徽标 truncate 保证 130px 预算下标题不被挤到 0 宽（#65 验收回归） */}
             <button
               type="button"
               data-testid="session-row"
@@ -203,12 +206,15 @@ export function Sidebar({
               onClick={() => onSelect(s.sessionId)}
             >
               <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${CLI_DOT_CLS[s.cli] ?? "bg-accent2"}`} />
-              <span className="min-w-0 flex-1 truncate text-[13px]">{s.title}</span>
+              {/* 标题 grow（basis auto）而非 flex-1（basis 0）：徽标超宽时按基准宽度分摊收缩，标题不被挤到 0 宽（#65 验收回归） */}
+              <span className="min-w-0 grow truncate text-[13px]" title={s.title}>
+                {s.title}
+              </span>
               <DirBadge identity={s.dirIdentity} worktreeName={s.worktreeName} cwd={s.cwd} />
               <StatusBadge status={s.status} />
               {s.sessionId in sessionToReq ? <ReqBadge requirementId={sessionToReq[s.sessionId]} onOpen={onOpenRequirement} /> : null}
             </button>
-            <div className="absolute right-3.5 top-1/2 flex -translate-y-1/2 gap-1 opacity-0 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100">
+            <div className="absolute right-3.5 top-1/2 flex -translate-y-1/2 gap-1 opacity-0 group-hover:opacity-100">
               <button
                 type="button"
                 title="归档（移出默认列表，可在设置找回）"
@@ -245,12 +251,15 @@ export function Sidebar({
           >
             <button type="button" className="flex min-w-0 flex-1 items-center gap-1 pr-24 text-left" onClick={() => onSelect(s.sessionId)}>
               <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-pty" />
-              <span className="min-w-0 flex-1 truncate text-[13px]">{s.title}</span>
+              {/* 同结构化行：grow 而非 flex-1，长 worktree 徽标下标题不被挤到 0 宽（#65） */}
+              <span className="min-w-0 grow truncate text-[13px]" title={s.title}>
+                {s.title}
+              </span>
               <DirBadge identity={s.dirIdentity} worktreeName={s.worktreeName} cwd={s.cwd} />
               <StatusBadge status={s.status} />
               {s.sessionId in sessionToReq ? <ReqBadge requirementId={sessionToReq[s.sessionId]} onOpen={onOpenRequirement} /> : null}
             </button>
-            <div className="absolute right-3.5 top-1/2 flex -translate-y-1/2 gap-1 opacity-0 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100">
+            <div className="absolute right-3.5 top-1/2 flex -translate-y-1/2 gap-1 opacity-0 group-hover:opacity-100">
               {s.status !== "disconnected" ? (
                 <button
                   type="button"

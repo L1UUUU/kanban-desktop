@@ -172,7 +172,8 @@ test("spawn 创建失败侧栏卡：E_SPAWN_NOT_FOUND → 卡 3 形态呈现 →
     await expect(card.getByRole("button", { name: "重试发送" })).toBeVisible();
     await expect(card.getByRole("button", { name: "复制配置路径" })).toBeVisible();
     await expect(win.getByTestId("draft-hint")).toBeVisible(); // 草稿与输入保留（可重试）
-    await expect(win.getByText("新会话 · Claude").first()).toHaveCount(0); // 不留空会话（无侧栏行）
+    // 不留空会话（侧栏无行）：限定 aside——草稿提示行文案含同名标题，页面级计数会被 draft-hint 命中
+    await expect(win.locator("aside").getByText("新会话 · Claude")).toHaveCount(0);
 
     // 「重试发送」：重新执行创建+发送首条消息 → 成功后卡消失 + 会话登记 + 草稿丢弃
     await card.getByRole("button", { name: "重试发送" }).click();

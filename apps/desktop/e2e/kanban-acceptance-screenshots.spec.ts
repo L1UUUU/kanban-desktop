@@ -140,6 +140,11 @@ test("原型一致项截图集（spec #15 H 节 7 条 + S2-18 空板）：入口
     await expect(win.getByTestId("new-session-item-pty")).toContainText("无 skill 信号");
     await shot(win, SHOT_DIR, "06-detail-new-session-menu.png");
     await win.getByTestId("new-session-item-opencode").click();
+    // #59 草稿：卡片入口只开草稿（切到聊天视图）——发首条消息才创建（requirementId 随之落自动关联），再回看板
+    await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
+    await send(win, "首条消息（建立会话）");
+    await expect(win.locator("aside").getByText("新会话 · OpenCode").first()).toBeVisible({ timeout: 10_000 });
+    await win.getByTestId("kanban-entry").click(); // 回看板（详情面板保持）
     const openRow = win.getByTestId("detail-panel").locator('[data-testid="related-session"]', { hasText: "新会话 · OpenCode" });
     await expect(openRow).toBeVisible({ timeout: 15_000 });
     await expect(implCol.getByText("◍ 2 会话")).toBeVisible({ timeout: 10_000 });

@@ -99,9 +99,10 @@ test("切页不停止（§6.1）：A 流式中切 B 再切回，增量无缝、�
     // A 完整收尾后切到 B：B 也在后台完成了（不因切走而停止/丢失）
     await win.getByText("新会话 · Claude").nth(1).click();
     await expect(win.getByText("基线全绿。现在把 chat 与 session 两个命名空间拆成独立文件，并在 index 里保持原导出面不变。")).toBeVisible({ timeout: 20_000 });
-    // 回切增量无缝：A 的终文恰出现一次（无重复 delta）
+    // 回切增量无缝：A 的首段回复恰出现两次——A 跑过两轮（#59 草稿首条消息 + 拆类型各一轮，同文案各一份）；
+    // 若流式重复 delta 会多出第三份（回归断言语义：每轮恰一份）
     await win.getByText("新会话 · Claude").nth(0).click();
-    await expect(win.getByText("好的，我先跑一遍现有测试确认基线，然后开始拆分。")).toHaveCount(1);
+    await expect(win.getByText("好的，我先跑一遍现有测试确认基线，然后开始拆分。")).toHaveCount(2);
     await expect(win.getByText("空闲").first()).toBeVisible({ timeout: 20_000 });
 
     await app.close();
@@ -192,15 +193,17 @@ test("冲突提示条（spec I-4）：主仓库两会话并行运行出现（列
     const { app, win } = await launchApp(userData, repoDir);
     await registerAndCreate(win);
 
-    // 第二个会话（同项目同主仓库目录；#59 草稿：首条「拆类型」随创建发出，行出现）
+    // 第二个会话（同项目同主仓库目录；#59 草稿：首条消息随创建发出，行出现）
     await win.locator("aside").getByText(PROJECT_NAME, { exact: true }).hover();
     await win.getByRole("button", { name: "＋", exact: true }).click();
     await win.getByRole("button", { name: "Claude", exact: true }).click();
     await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
-    await send(win, "拆类型");
+    await send(win, "首条消息（建立会话）");
     await expect(win.getByText("新会话 · Claude").nth(1)).toBeVisible({ timeout: 10_000 });
-
-    // 两会话并行运行（第二个已起 turn；切回第一个再发）：提示条出现
+    // #59 迁移补拍：两会话的首条 turn 几乎同时收尾（A 等发送键恢复期间 B 已空闲），无法构成并行——
+    // 等 B 空闲后向 B（当前激活）再发一轮「拆类型」，随后立即切 A 发送，两会话并行窗口由 Fake turn ~4s 保证
+    await expect(win.locator("aside [data-testid=\"session-row\"]").nth(1)).toContainText("空闲", { timeout: 15_000 });
+    await send(win, "拆类型");
     await win.getByText("新会话 · Claude").nth(0).click();
     await send(win, "拆类型");
     const banner = win.getByTestId("conflict-banner");
