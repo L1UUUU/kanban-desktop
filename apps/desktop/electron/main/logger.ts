@@ -1,26 +1,16 @@
 // 用途：Main 侧唯一日志深模块（spec #52 A 节）—— 级别过滤、单条截断、JSONL 落盘、控制台纯文本双写、按启动建文件、启动横幅、大小切分、保留清理、写失败自保护与崩溃兜底；四来源（Main/worker/Renderer/CLI stderr）诊断事件唯一汇聚点
 import { mkdirSync, appendFileSync, existsSync, readdirSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { LOG_LEVELS, type LogCtx, type LogLevel, type LogSource } from "@kanban/ipc-schema";
+import { LOG_LEVELS, type LogCtx, type LogLevel, type LogSource, type LoggingConfig } from "@kanban/ipc-schema";
 
 // 枚举与 ctx 类型单源（main→ipc-schema，方向先例 log-write.ts）：@kanban/ipc-schema 是 wire 契约唯一来源，此处 re-export 维持 main 内既有 import 路径
 export { LOG_LEVELS };
-export type { LogCtx, LogLevel, LogSource };
+export type { LogCtx, LogLevel, LogSource, LoggingConfig };
 
 /** 级别严重度序（数值越小越严重；条目级别 ≤ 生效级别才记录） */
 const LEVEL_ORDER: Record<LogLevel, number> = { error: 0, warn: 1, info: 2, debug: 3 };
 
-/** logging 配置节（config.logging 四项，spec #52 D 节） */
-export interface LoggingConfig {
-  /** 生效级别（config 值或 KANBAN_LOG_LEVEL env 覆盖后的 effectiveLevel） */
-  level: LogLevel;
-  /** 单文件字节上限（超出切轮转分片） */
-  maxFileBytes: number;
-  /** 保留的最近启动组数（主文件+分片一起清理） */
-  retainRuns: number;
-  /** 单条字符上限（message 与 ctx 各字符串值超出截断，防大段 CLI 输出冲爆文件） */
-  maxMessageChars: number;
-}
+// logging 配置节（config.logging 四项，spec #52 D 节）类型已上提 ipc-schema loggingConfigSchema（issue #68 单源），经文件头 re-export 维持 main 内既有 import 路径
 
 /** 单条日志写入函数形状（Logger.log 的独立引用形态；ipc/adapter-events 等 deps 注入用） */
 export type LogFn = (level: LogLevel, scope: string, message: string, ctx?: LogCtx) => void;

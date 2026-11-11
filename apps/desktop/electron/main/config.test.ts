@@ -169,6 +169,15 @@ describe("退出序列配置（#13/spec H 参数进 config 不硬编码）", () 
     writeFileSync(path, JSON.stringify({ shutdown: { graceMs: "fast" } }), "utf8");
     expect(loadConfig(path).shutdown.graceMs).toBe(3000);
   });
+
+  it("graceMs 非整数回退默认 3000（issue #68 语义收紧：原实现 Math.floor 采纳 2500.7→2500，schema int 校验后不再取整采纳；config.json 只由 saveConfig 整数落盘，无实际影响）", () => {
+    const dir = newTempDir();
+    const path = join(dir, "config.json");
+    writeFileSync(path, JSON.stringify({ shutdown: { graceMs: 2500.7 } }), "utf8");
+    expect(loadConfig(path).shutdown.graceMs).toBe(3000);
+    writeFileSync(path, JSON.stringify({ shutdown: { graceMs: 60_000.5 } }), "utf8");
+    expect(loadConfig(path).shutdown.graceMs).toBe(3000);
+  });
 });
 
 describe("logging 配置（#53 spec D：级别/字节上限/保留启动数/单条字符上限，不信任文件数值惯例）", () => {

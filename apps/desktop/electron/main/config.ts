@@ -1,149 +1,27 @@
-// 用途：应用配置加载/保存 —— 三 CLI exe 路径等用户配置统一落 JSON 文件，不硬编码（spec J/G）；探测逻辑为占位，由后续 Adapter 工单接入
+// 用途：应用配置加载/保存 —— fs 读写 + 一行 parse（schema/边界/默认值单源于 @kanban/ipc-schema appConfigFileSchema，issue #68；spec J/G）
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { AUTO_ARCHIVE_DAYS_BOUNDS, type AutoArchiveConfig } from "@kanban/ipc-schema";
-import { LOG_LEVELS, type LogLevel, type LoggingConfig } from "./logger";
+import { LOG_LEVELS, appConfigFileSchema, type AppConfig, type CliExeConfig, type LogLevel } from "@kanban/ipc-schema";
 
-/** 三 CLI exe 配置：null = 未探测/未手动覆盖 */
-export interface CliExeConfig {
-  codex: string | null;
-  claude: string | null;
-  opencode: string | null;
-}
+// 配置形状 re-export 单源（issue #68：main 内既有 "./config" import 路径不变；LoggingConfig 沿用 logger.ts 的 re-export 先例）
+export type { AppConfig, AutoArchiveConfig, CliExeConfig, DiffConfig, LoggingConfig, ShutdownConfig, TerminalConfig } from "@kanban/ipc-schema";
 
-/** 终端配置：shell=null 自动探测（pwsh→powershell→cmd）；不硬编码默认 shell */
-export interface TerminalConfig {
-  shell: string | null;
-}
-
-/** 退出序列配置（spec H：有限等待/受控终止的时长参数，不硬编码） */
-export interface ShutdownConfig {
-  /** 活跃会话有序取消后的有限等待上限 ms（等待各会话离开 running/waiting；缺省 3000） */
-  graceMs: number;
-}
-
-/** Diff 视图截断保护上限（#47，spec #40 E 节/F8：三类上限数值进配置不硬编码；超限置 truncated、剩余文件仅列名） */
-export interface DiffConfig {
-  /** git diff/status 采集 stdout 总字节上限（超出停止采集并终止 git 进程） */
-  maxBytes: number;
-  /** 文件数上限（窗口外文件仅列名，不采集/不展开 hunks） */
-  maxFiles: number;
-  /** 单个 untracked 新文件全文展示的行数上限 */
-  maxUntrackedLines: number;
-}
-
-/** diff 上限各字段的防御上限（防配置写 absurd 值导致主进程超大缓冲） */
-const DIFF_LIMIT_BOUNDS = { maxBytes: 100_000_000, maxFiles: 100_000, maxUntrackedLines: 1_000_000 } as const;
-
-/** logging 数值字段的防御边界：下限防过小值致每条切文件/删当前文件/消息全空，上限防 absurd 值（spec #52 D 节；retainRuns 范围 1–100） */
-const LOGGING_BOUNDS = {
-  maxFileBytes: { min: 1024, max: 100_000_000 },
-  retainRuns: { min: 1, max: 100 },
-  maxMessageChars: { min: 1, max: 1_000_000 },
-} as const;
-
-export interface AppConfig {
-  cliExe: CliExeConfig;
-  /** 当前项目 id（项目注册/切换时持久化，重启恢复；null=尚无项目） */
-  currentProjectId: string | null;
-  /** #43：git 可执行手动覆盖路径（最高优先；null=未覆盖走 where 探测；解析失败 diff 面归 git-missing） */
-  gitExe: string | null;
-  diff: DiffConfig;
-  terminal: TerminalConfig;
-  shutdown: ShutdownConfig;
-  /** #53（spec #52 D 节）：日志系统四参数（level 默认 info；env 覆盖另存 effectiveLevel 不落此处，M11） */
-  logging: LoggingConfig;
-  /** #61（spec #57）：会话自动归档（默认关 + 30 天；经 config:ipc 读写，写仅开放本子集） */
-  autoArchive: AutoArchiveConfig;
-}
-
-/** 默认配置：三 CLI exe 均为占位 null；diff 上限 2MB/200 文件/2000 行（覆盖日常大改动的审阅量级）；日志 info/5MB/10 次启动/单条 2000 字符 */
+/** 默认配置 = appConfigFileSchema.parse({})（各字段 .catch 默认值汇集，单源不再手抄） */
 export function defaultConfig(): AppConfig {
-  return {
-    cliExe: { codex: null, claude: null, opencode: null },
-    currentProjectId: null,
-    gitExe: null,
-    diff: { maxBytes: 2_000_000, maxFiles: 200, maxUntrackedLines: 2000 },
-    terminal: { shell: null },
-    shutdown: { graceMs: 3000 },
-    logging: { level: "info", maxFileBytes: 5_000_000, retainRuns: 10, maxMessageChars: 2000 },
-    autoArchive: { enabled: false, days: 30 },
-  };
+  return appConfigFileSchema.parse({});
 }
 
-const CLI_KEYS = ["codex", "claude", "opencode"] as const;
-
-/** 读取配置：文件缺失/损坏/字段非法时回退默认值，合法的手动覆盖保留（各节独立合并，一节损坏不牵连其余） */
+/** 读取配置：文件缺失/JSON 损坏/顶层非对象 → 整体回退默认；节与字段级非法回退由 schema 内 .catch 承担（字段级合并语义保持：一坏只牵连该字段，各节独立） */
 export function loadConfig(path: string): AppConfig {
-  const fallback = defaultConfig();
-  if (!existsSync(path)) return fallback;
-  let raw: unknown;
+  if (!existsSync(path)) return defaultConfig();
   try {
-    raw = JSON.parse(readFileSync(path, "utf8"));
+    return appConfigFileSchema.parse(JSON.parse(readFileSync(path, "utf8")));
   } catch {
-    return fallback;
+    return defaultConfig();
   }
-  if (typeof raw !== "object" || raw === null) return fallback;
-  const fileCli = (raw as { cliExe?: Record<string, unknown> }).cliExe;
-  if (typeof fileCli === "object" && fileCli !== null) {
-    for (const key of CLI_KEYS) {
-      const v = fileCli[key];
-      if (typeof v === "string" && v.length > 0) fallback.cliExe[key] = v;
-    }
-  }
-  const current = (raw as { currentProjectId?: unknown }).currentProjectId;
-  if (typeof current === "string" && current.length > 0) fallback.currentProjectId = current;
-  const gitExe = (raw as { gitExe?: unknown }).gitExe;
-  if (typeof gitExe === "string" && gitExe.length > 0) fallback.gitExe = gitExe;
-  const fileDiff = (raw as { diff?: Record<string, unknown> }).diff;
-  if (typeof fileDiff === "object" && fileDiff !== null) {
-    for (const key of ["maxBytes", "maxFiles", "maxUntrackedLines"] as const) {
-      const v = fileDiff[key];
-      // 正整数且不超防御上限才采纳（对齐 graceMs 的不信任文件数值惯例）
-      if (typeof v === "number" && Number.isInteger(v) && v > 0 && v <= DIFF_LIMIT_BOUNDS[key]) {
-        fallback.diff[key] = v;
-      }
-    }
-  }
-  const termShell = (raw as { terminal?: { shell?: unknown } }).terminal?.shell;
-  if (typeof termShell === "string" && termShell.length > 0) fallback.terminal.shell = termShell;
-  const graceMs = (raw as { shutdown?: { graceMs?: unknown } }).shutdown?.graceMs;
-  if (typeof graceMs === "number" && Number.isFinite(graceMs) && graceMs > 0 && graceMs <= 60_000) {
-    fallback.shutdown.graceMs = Math.floor(graceMs);
-  }
-  const fileLogging = (raw as { logging?: Record<string, unknown> }).logging;
-  if (typeof fileLogging === "object" && fileLogging !== null) {
-    const lv = fileLogging.level;
-    if (typeof lv === "string" && (LOG_LEVELS as readonly string[]).includes(lv)) {
-      fallback.logging.level = lv as LogLevel;
-    }
-    for (const key of ["maxFileBytes", "retainRuns", "maxMessageChars"] as const) {
-      const v = fileLogging[key];
-      const bound = LOGGING_BOUNDS[key];
-      // 正整数且在防御边界内才采纳（对齐 diff 节的不信任文件数值惯例）
-      if (typeof v === "number" && Number.isInteger(v) && v >= bound.min && v <= bound.max) {
-        fallback.logging[key] = v;
-      }
-    }
-  }
-  // #61：autoArchive 节 —— enabled 须为布尔、days 须为 1–365 整数（边界常量与 wire 契约同一单源），非法逐字段回落默认
-  const fileAutoArchive = (raw as { autoArchive?: Record<string, unknown> }).autoArchive;
-  if (typeof fileAutoArchive === "object" && fileAutoArchive !== null) {
-    if (typeof fileAutoArchive.enabled === "boolean") fallback.autoArchive.enabled = fileAutoArchive.enabled;
-    const days = fileAutoArchive.days;
-    if (
-      typeof days === "number" &&
-      Number.isInteger(days) &&
-      days >= AUTO_ARCHIVE_DAYS_BOUNDS.min &&
-      days <= AUTO_ARCHIVE_DAYS_BOUNDS.max
-    ) {
-      fallback.autoArchive.days = days;
-    }
-  }
-  return fallback;
 }
 
-/** 保存配置（自动创建父目录） */
+/** 保存配置（自动创建父目录；graceMs 等数值经 schema int 校验后内存态恒为整数，落盘无小数） */
 export function saveConfig(path: string, config: AppConfig): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, "utf8");
