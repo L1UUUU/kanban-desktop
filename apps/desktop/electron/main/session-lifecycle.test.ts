@@ -231,3 +231,46 @@ describe("remove 删除编排（#62 spec #57 D 节）", () => {
     expect(sessions.shouldDropEvents("tty-1")).toBe(false); // 重建后事件照常
   });
 });
+
+describe("onTerminalEvent PTY 终端事件写入口（#58/#62，#70 Step3）", () => {
+  const tty = (id: string): Partial<SessionRecord> => ({ id, kind: "pty", cli: "pty", nativeSessionId: null, permMode: null });
+
+  it("started → idle；exit → disconnected + 活跃时间（固定时钟）；data/error 只吃判定零写入", () => {
+    const { sessions, lifecycle } = makeLifecycle();
+    sessions.insert(makeRecord({ ...tty("tty-1"), status: "disconnected", lastActiveAt: null }));
+    expect(lifecycle.onTerminalEvent("tty-1", "started")).toBe(true);
+    expect(sessions.get("tty-1")).toMatchObject({ status: "idle", lastActiveAt: null }); // started 不动活跃时间
+    expect(lifecycle.onTerminalEvent("tty-1", "data")).toBe(true);
+    expect(lifecycle.onTerminalEvent("tty-1", "error")).toBe(true);
+    expect(sessions.get("tty-1")).toMatchObject({ status: "idle", lastActiveAt: null }); // data/error 零写入
+    expect(lifecycle.onTerminalEvent("tty-1", "exit")).toBe(true);
+    expect(sessions.get("tty-1")).toMatchObject({ status: "disconnected", lastActiveAt: FIXED_NOW });
+  });
+
+  it("归档后 exit → false 且不写库（竞态区覆盖缺口：归档编排终止进程后迟到的 exit 不得改写归档行状态/活跃时间）", async () => {
+    const { sessions, lifecycle } = makeLifecycle();
+    sessions.insert(makeRecord({ ...tty("tty-arch"), status: "idle", lastActiveAt: null }));
+    await lifecycle.archive("tty-arch");
+    expect(lifecycle.onTerminalEvent("tty-arch", "exit")).toBe(false);
+    expect(sessions.listArchived()[0]).toMatchObject({ id: "tty-arch", status: "idle", lastActiveAt: null }); // 归档行原样
+    expect(lifecycle.onTerminalEvent("tty-arch", "data")).toBe(false); // 其余事件类型同样拦截
+  });
+
+  it("删除后（墓碑）事件 → false；未知 id 放行（渲染端预生成 id 的窗口期事件照常）", async () => {
+    const { sessions, lifecycle } = makeLifecycle();
+    sessions.insert(makeRecord({ ...tty("tty-gone"), status: "idle" }));
+    await lifecycle.remove("tty-gone");
+    expect(lifecycle.onTerminalEvent("tty-gone", "started")).toBe(false);
+    expect(lifecycle.onTerminalEvent("ghost", "started")).toBe(true); // 未知 id 放行（与 store 守卫同语义）
+  });
+
+  it("墓碑复活（#62 × #60）经终端事件口钉住：回删占位行后同 id 重试——重建后 started 照常写 idle", async () => {
+    const { sessions, lifecycle } = makeLifecycle();
+    sessions.insert(makeRecord({ ...tty("tty-retry"), status: "idle" }));
+    await lifecycle.remove("tty-retry"); // PTY 草稿 spawn 失败回删占位行（进墓碑）
+    expect(lifecycle.onTerminalEvent("tty-retry", "started")).toBe(false); // 墓碑期事件拦截（不写库不转发）
+    sessions.insert(makeRecord({ ...tty("tty-retry"), status: "idle" })); // 渲染端同 id 重试重建占位行
+    expect(lifecycle.onTerminalEvent("tty-retry", "started")).toBe(true); // 重建即活终端，迟到守卫不再命中
+    expect(sessions.get("tty-retry")).toMatchObject({ status: "idle" });
+  });
+});

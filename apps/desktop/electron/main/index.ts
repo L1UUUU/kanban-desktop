@@ -257,15 +257,14 @@ app.whenReady().then(async () => {
   await adoptRestoredSessions({ adapter, sessions, log: logKind });
 
   // PTY 宿主装配：平台能力注入（shell/CLI exe 覆盖来自 config，不硬编码）；事件出站过 schema 校验并转发 renderer，
-  // started/exit 顺带落 sessions 状态（PTY 活=空闲徽标，退出=已断开徽标）
-  // #58/#62：已归档/已删除终端的迟到事件不落库不转发（spec #57 D 节；store 未归档守卫挡写库，此处挡转发渲染端）
+  // started/exit 的 sessions 状态落库与 #58/#62 迟到守卫统一经 lifecycle.onTerminalEvent（#70 C2 唯一写入口；
+  // 已归档/已删除终端的迟到事件不落库不转发，spec #57 D 节）——四回调退化为「问 lifecycle → 转发」
   const sendTerminalEvent = (event: unknown): void => {
     terminalEventSchema.parse(event);
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("terminal:event", event);
     }
   };
-  const skipDroppedTerminal = (terminalId: string): boolean => sessions.shouldDropEvents(terminalId);
   const ptyHost = createPtyHost(
     {
       pty: nodePty,
@@ -282,29 +281,27 @@ app.whenReady().then(async () => {
     },
     {
       started: (terminalId, payload) => {
-        if (skipDroppedTerminal(terminalId)) return;
-        sessions.updateStatus(terminalId, "idle");
+        if (!lifecycle.onTerminalEvent(terminalId, "started")) return;
         sendTerminalEvent({ terminalId, type: "started", ...payload });
       },
       data: (terminalId, data) => {
-        if (skipDroppedTerminal(terminalId)) return;
+        if (!lifecycle.onTerminalEvent(terminalId, "data")) return;
         sendTerminalEvent({ terminalId, type: "data", data });
       },
       exit: (terminalId, payload) => {
-        if (skipDroppedTerminal(terminalId)) return;
-        sessions.updateStatus(terminalId, "disconnected");
-        sessions.touch(terminalId, new Date().toISOString());
+        if (!lifecycle.onTerminalEvent(terminalId, "exit")) return;
         sendTerminalEvent({ terminalId, type: "exit", ...payload });
       },
       error: (terminalId, payload) => {
-        if (skipDroppedTerminal(terminalId)) return;
+        if (!lifecycle.onTerminalEvent(terminalId, "error")) return;
         sendTerminalEvent({ terminalId, type: "error", message: payload.message });
       },
     },
   );
 
-  // #70 C2：会话生命周期唯一编排写者（archive/unarchive/remove 编排收敛；ipc 路由壳 / 自动归档引擎共用同一实例），
-  // 进程能力经 SessionProcesses seam 分派（structured → adapter；pty → 宿主 kill）
+  // #70 C2：会话生命周期唯一编排写者（archive/unarchive/remove/终端事件落库收敛；ipc 路由壳 / 自动归档引擎 / PTY 事件泵共用同一实例），
+  // 进程能力经 SessionProcesses seam 分派（structured → adapter；pty → 宿主 kill）；
+  // 声明于 ptyHost 之后（procs 引用宿主）——上方 PTY 回调闭包捕获本绑定，同步紧邻赋值后才可能发生首个 spawn，无空窗
   const lifecycle = createSessionLifecycle({
     sessions,
     procs: createAdapterSessionProcesses(adapter, ptyHost),

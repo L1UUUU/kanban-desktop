@@ -1,4 +1,4 @@
-// 用途：会话生命周期唯一编排写者（issue #70 C2，spec #57 D 节）—— 归档/取消归档/删除三编排自 ipc.ts 收敛于此，进程能力经 SessionProcesses seam 注入（生产 = adapter/PTY 宿主分派，测试 = fake）；session-store 保持纯数据面（status 流转决策全在此，落库经 store）
+// 用途：会话生命周期唯一编排写者（issue #70 C2，spec #57 D 节）—— 归档/取消归档/删除三编排自 ipc.ts、PTY 终端事件落库自 index.ts sink 收敛于此，进程能力经 SessionProcesses seam 注入（生产 = adapter/PTY 宿主分派，测试 = fake）；session-store 保持纯数据面（status 流转决策全在此，落库经 store）
 import type { AdoptSessionInput, CliAdapter } from "@kanban/cli-host";
 import type { LogFn } from "./logger";
 import type { PtyHost } from "./pty-host";
@@ -42,6 +42,9 @@ export interface SessionLifecycle {
   unarchive(id: string): Promise<{ outcome: "restored" | "noop" }>;
   /** 删除（#62：解关联 hook 抛错即中止（行保留可重试）→ 终止进程（best-effort 放行）→ 删行记墓碑；无行 no-op 幂等） */
   remove(id: string, hooks?: { beforeDelete?(): Promise<void> }): Promise<void>;
+  /** PTY 终端事件唯一写入口（#58/#62）：started → idle / exit → disconnected + 活跃时间；data/error 只吃迟到判定零写入；
+   *  返回 false = 迟到事件（已归档/已删除终端），调用方不得写库不得转发 renderer */
+  onTerminalEvent(terminalId: string, ev: "started" | "data" | "exit" | "error"): boolean;
 }
 
 /** 编排内 best-effort 步骤：失败只记 warn 不阻断（进程已死等不应挡住归档/删除）——自 ipc.ts 随迁，日志 scope/文案逐字不变 */
@@ -97,6 +100,18 @@ export function createSessionLifecycle(deps: SessionLifecycleDeps): SessionLifec
         await bestEffort(() => deps.procs.terminate(rec), deps, `删除终止失败（放行）：${rec.id}`);
       }
       deps.sessions.delete(rec.id);
+    },
+
+    onTerminalEvent(terminalId, ev): boolean {
+      // 迟到守卫（#58/#62，spec #57 D 节）：已归档/已删除终端的事件不写库不转发（判定单点 = store 数据事实）
+      if (deps.sessions.shouldDropEvents(terminalId)) return false;
+      // PTY 活 = 空闲徽标（idle）、退出 = 已断开徽标（disconnected）并刷新活跃时间；data/error 不写库
+      if (ev === "started") deps.sessions.updateStatus(terminalId, "idle");
+      else if (ev === "exit") {
+        deps.sessions.updateStatus(terminalId, "disconnected");
+        deps.sessions.touch(terminalId, now());
+      }
+      return true;
     },
   };
 }
