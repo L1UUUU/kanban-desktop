@@ -8,6 +8,7 @@ import * as nodePty from "node-pty";
 import {
   appEventSchema,
   appInfoSchema,
+  IPC_CHANNELS,
   memoryEventSchema,
   residueProcessSchema,
   shutdownNoticeSchema,
@@ -345,7 +346,7 @@ app.whenReady().then(async () => {
     log: logger.log,
   };
 
-  // 注册 IPC 处理器：app:getInfo 冒烟通道 + kanban:ipc 单通道路由（入站强制 zod 校验，spec E）
+  // 注册 IPC 处理器：app:getInfo 冒烟通道 + 五个 :ipc 单通道路由（入站强制 zod 校验，spec E；通道名经 IPC_CHANNELS 单源，#72 Step4）
   ipcMain.handle("app:getInfo", () =>
     appInfoSchema.parse({
       app: app.getName(),
@@ -360,14 +361,14 @@ app.whenReady().then(async () => {
       configPath,
     }),
   );
-  ipcMain.handle("kanban:ipc", (_event, raw: unknown) => handleIpc(deps, raw));
+  ipcMain.handle(IPC_CHANNELS.kanban.name, (_event, raw: unknown) => handleIpc(deps, raw));
   // #31：memory:ipc 单通道（入站 zod 强制校验 + 业务拒绝 ok:false+reason，spec #27 H 节）
-  ipcMain.handle("memory:ipc", (_event, raw: unknown) =>
+  ipcMain.handle(IPC_CHANNELS.memory.name, (_event, raw: unknown) =>
     handleMemoryIpc({ memory: memoryService, isShuttingDown: () => shutdown.isShuttingDown(), log: logger.log }, raw),
   );
   // #43：diff:ipc 单通道（spec #40 D 节；git exe 解析 = config gitExe 覆盖 → env → where，解析失败归 git-missing）
   // #47：三类截断上限来自 config.diff（采集字节/文件数/untracked 行数，超限置 truncated）
-  ipcMain.handle("diff:ipc", (_event, raw: unknown) =>
+  ipcMain.handle(IPC_CHANNELS.diff.name, (_event, raw: unknown) =>
     handleDiffIpc(
       {
         projects,
@@ -389,7 +390,7 @@ app.whenReady().then(async () => {
     lastAutoArchiveScan = summary;
     return summary;
   };
-  ipcMain.handle("config:ipc", (_event, raw: unknown) =>
+  ipcMain.handle(IPC_CHANNELS.config.name, (_event, raw: unknown) =>
     handleConfigIpc(
       {
         getConfig: () => appConfig,
@@ -437,7 +438,7 @@ app.whenReady().then(async () => {
       (p ??= residueSeed ? Promise.resolve(residueSeed) : residueE2eSkip ? Promise.resolve([]) : detectResidue(residueDeps));
   })();
   const sendAppEvent = createValidatedSender(appEventSchema, "app:event", getMainWindow);
-  ipcMain.handle("residue:ipc", (_event, raw: unknown) =>
+  ipcMain.handle(IPC_CHANNELS.residue.name, (_event, raw: unknown) =>
     handleResidueIpc(
       {
         detect: detectResidueOnce,

@@ -1,10 +1,6 @@
 // 用途：Main 入站 IPC 处理器聚合 —— kanban:ipc（信封经共享工厂 + 25 子通道编译期穷尽查表，handler 按 feature 落 main/ipc/*.ts）与 memory/residue/diff/config 四个独立单通道路由（纯函数无 Electron 依赖：dialog 与 config 经 deps 注入）；#72 C1 Step2 自 775 行 route switch 巨石拆分
 import {
-  configRequestSchema,
-  diffRequestSchema,
-  ipcRequestSchema,
-  memoryRequestSchema,
-  residueRequestSchema,
+  IPC_CHANNELS,
   type AutoArchiveScanSummary,
   type ConfigRequest,
   type ConfigResult,
@@ -57,10 +53,11 @@ export interface IpcDeps extends EnvelopeDeps {
   memory?: MemoryService;
 }
 
-/** 处理一条入站请求：信封（校验/门闸/错误形状化）经共享工厂，主体查 25 子通道路由表分发（spec E：Main 强制校验，非法消息明确错误码；spec H：退出中拒新请求） */
+/** 处理一条入站请求：信封（校验/门闸/错误形状化）经共享工厂，主体查 25 子通道路由表分发（spec E：Main 强制校验，非法消息明确错误码；spec H：退出中拒新请求）；
+ *  通道名与请求契约引自 IPC_CHANNELS 单源（#72 Step4） */
 export async function handleIpc(deps: IpcDeps, raw: unknown): Promise<IpcResult> {
   return createChannelHandler<IpcRequest, IpcResult, IpcDeps>(
-    { scope: "kanban:ipc", schema: ipcRequestSchema, dialect: codeEnvelope, catchStyle: { kind: "adapter-passthrough", toError: codeEnvelope.toError } },
+    { scope: IPC_CHANNELS.kanban.name, schema: IPC_CHANNELS.kanban.request, dialect: codeEnvelope, catchStyle: { kind: "adapter-passthrough", toError: codeEnvelope.toError } },
     deps,
     (req, d) => routeByTable(allKanbanHandlers, d, req),
   )(raw);
@@ -76,7 +73,7 @@ export interface MemoryIpcDeps extends EnvelopeDeps {
 /** 处理一条 memory:ipc 入站请求：信封经共享工厂（reason 方言 + rethrow），八通道路由（业务拒绝直达调用方，不新增全局错误码） */
 export async function handleMemoryIpc(deps: MemoryIpcDeps, raw: unknown): Promise<MemoryResult> {
   return createChannelHandler<MemoryRequest, MemoryResult, MemoryIpcDeps>(
-    { scope: "memory:ipc", schema: memoryRequestSchema, dialect: reasonEnvelope, catchStyle: { kind: "rethrow" } },
+    { scope: IPC_CHANNELS.memory.name, schema: IPC_CHANNELS.memory.request, dialect: reasonEnvelope, catchStyle: { kind: "rethrow" } },
     deps,
     routeMemory,
   )(raw);
@@ -139,7 +136,7 @@ export interface DiffIpcDeps extends EnvelopeDeps {
 /** 处理一条 residue:ipc 入站请求：信封经共享工厂（reason 方言 + rethrow），二通道路由（业务拒绝直达调用方，不新增全局错误码） */
 export async function handleResidueIpc(deps: ResidueIpcDeps, raw: unknown): Promise<ResidueResult> {
   return createChannelHandler<ResidueRequest, ResidueResult, ResidueIpcDeps>(
-    { scope: "residue:ipc", schema: residueRequestSchema, dialect: reasonEnvelope, catchStyle: { kind: "rethrow" } },
+    { scope: IPC_CHANNELS.residue.name, schema: IPC_CHANNELS.residue.request, dialect: reasonEnvelope, catchStyle: { kind: "rethrow" } },
     deps,
     routeResidue,
   )(raw);
@@ -158,7 +155,7 @@ async function routeResidue(req: ResidueRequest, deps: ResidueIpcDeps): Promise<
 /** 处理一条 diff:ipc 入站请求：信封经共享工厂（code 方言 + rethrow），diff:get 经 project store 解析 cwd 后透传服务结果 */
 export async function handleDiffIpc(deps: DiffIpcDeps, raw: unknown): Promise<DiffResult> {
   return createChannelHandler<DiffRequest, DiffResult, DiffIpcDeps>(
-    { scope: "diff:ipc", schema: diffRequestSchema, dialect: codeEnvelope, catchStyle: { kind: "rethrow" } },
+    { scope: IPC_CHANNELS.diff.name, schema: IPC_CHANNELS.diff.request, dialect: codeEnvelope, catchStyle: { kind: "rethrow" } },
     deps,
     routeDiff,
   )(raw);
@@ -197,8 +194,8 @@ export interface ConfigIpcDeps extends EnvelopeDeps {
 export async function handleConfigIpc(deps: ConfigIpcDeps, raw: unknown): Promise<ConfigResult> {
   return createChannelHandler<ConfigRequest, ConfigResult, ConfigIpcDeps>(
     {
-      scope: "config:ipc",
-      schema: configRequestSchema,
+      scope: IPC_CHANNELS.config.name,
+      schema: IPC_CHANNELS.config.request,
       dialect: codeEnvelope,
       // 写盘失败不 rethrow：配置保存是用户可见的可重试动作，返回明确错误直达调用方（新值不生效）；文案逐字保持既有锚点
       catchStyle: {

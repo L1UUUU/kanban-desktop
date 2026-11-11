@@ -1,40 +1,20 @@
-// 用途：contextBridge 薄层 —— 向 renderer 暴露最小 IPC 面（app:getInfo + kanban:ipc/memory:ipc/residue:ipc/diff:ipc/config:ipc 单通道 invoke + chat:event/terminal:event/tracker:event/memory:event/app:event/app:shutdown 订阅 + log:write 单向日志/log:getPath/log:openDir）；全部通道形状由 @kanban/ipc-schema 契约化，preload 不做校验（两端校验，spec E）
+// 用途：contextBridge 薄层 —— 向 renderer 暴露最小 IPC 面（app:getInfo + kanban:ipc/memory:ipc/residue:ipc/diff:ipc/config:ipc 单通道 invoke + chat:event/terminal:event/tracker:event/memory:event/app:event/app:shutdown 订阅 + log:write 单向日志/log:getPath/log:openDir）；全部通道形状由 @kanban/ipc-schema 契约化，通道名经 IPC_CHANNELS 单源（#72 Step4），preload 不做校验（两端校验，spec E）
 import { contextBridge, ipcRenderer } from "electron";
-import type {
-  AdapterEvent,
-  AppEventWire,
-  AppInfo,
-  ConfigRequest,
-  ConfigResult,
-  DiffRequest,
-  DiffResult,
-  IpcRequest,
-  IpcResult,
-  LogCtx,
-  LogLevel,
-  MemoryEventWire,
-  MemoryRequest,
-  MemoryResult,
-  ResidueRequest,
-  ResidueResult,
-  ShutdownNotice,
-  TerminalEvent,
-  TrackerChangeWire,
-} from "@kanban/ipc-schema";
+import { IPC_CHANNELS, type AdapterEvent, type AppEventWire, type AppInfo, type ConfigRequest, type ConfigResult, type DiffRequest, type DiffResult, type IpcRequest, type IpcResult, type LogCtx, type LogLevel, type MemoryEventWire, type MemoryRequest, type MemoryResult, type ResidueRequest, type ResidueResult, type ShutdownNotice, type TerminalEvent, type TrackerChangeWire } from "@kanban/ipc-schema";
 
 const api = {
   /** 拉取应用运行信息（名称/版本/平台/SQLite 入口），用于骨架冒烟展示 */
   getAppInfo: (): Promise<AppInfo> => ipcRenderer.invoke("app:getInfo") as Promise<AppInfo>,
   /** 发送一条 IPC 请求（请求/结果形状见 ipcRequestSchema/ipcResultSchema；terminal:* 同经此通道） */
-  invoke: (req: IpcRequest) => ipcRenderer.invoke("kanban:ipc", req) as Promise<IpcResult>,
+  invoke: (req: IpcRequest) => ipcRenderer.invoke(IPC_CHANNELS.kanban.name, req) as Promise<IpcResult>,
   /** #31：发送一条 memory:ipc 请求（提取/取消/审核/总结处置/需求一次读/项目检索/知识再编辑，schema 见 memoryRequestSchema） */
-  invokeMemory: (req: MemoryRequest) => ipcRenderer.invoke("memory:ipc", req) as Promise<MemoryResult>,
+  invokeMemory: (req: MemoryRequest) => ipcRenderer.invoke(IPC_CHANNELS.memory.name, req) as Promise<MemoryResult>,
   /** #49：发送一条 residue:ipc 请求（residue:detect 检测清单 / residue:kill 确认式清理，schema 见 residueRequestSchema） */
-  invokeResidue: (req: ResidueRequest) => ipcRenderer.invoke("residue:ipc", req) as Promise<ResidueResult>,
+  invokeResidue: (req: ResidueRequest) => ipcRenderer.invoke(IPC_CHANNELS.residue.name, req) as Promise<ResidueResult>,
   /** #43：发送一条 diff:ipc 请求（工作区未提交变更一次读，schema 见 diffRequestSchema） */
-  invokeDiff: (req: DiffRequest) => ipcRenderer.invoke("diff:ipc", req) as Promise<DiffResult>,
+  invokeDiff: (req: DiffRequest) => ipcRenderer.invoke(IPC_CHANNELS.diff.name, req) as Promise<DiffResult>,
   /** #61：发送一条 config:ipc 请求（config:get 读 / config:set 存 autoArchive 子集，schema 见 configRequestSchema） */
-  invokeConfig: (req: ConfigRequest) => ipcRenderer.invoke("config:ipc", req) as Promise<ConfigResult>,
+  invokeConfig: (req: ConfigRequest) => ipcRenderer.invoke(IPC_CHANNELS.config.name, req) as Promise<ConfigResult>,
   /**
    * #55：发送一条 renderer 日志（fire-and-forget：send 不等待回执，不用 invoke；Main 侧强制 source=renderer、
    * 落盘 ts 由 Main 生成，两者不信自报；jsdom 无桥时调用方以 window.api?.log?.() 可选链降级）
