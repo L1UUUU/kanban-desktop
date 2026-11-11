@@ -22,6 +22,9 @@ const COLS = "id, kind, cli, native_session_id, project_id, title, cwd, perm_mod
 
 /** sessions 表读写（INSERT 后状态流转经 updateStatus/touch 落库） */
 export class SessionStore {
+  /** #62 已删除会话墓碑（内存态）：行删除后迟到事件守卫的判定依据——删除时进程已终止，重启后无迟到事件源，故不持久化 */
+  private readonly deletedIds = new Set<string>();
+
   constructor(private readonly db: SqliteDb) {}
 
   /** 新会话入库（id 为应用侧 uuid，由 Main 从 adapter.createSession 拿到后传入；新建恒未归档） */
@@ -95,9 +98,16 @@ export class SessionStore {
       .run(at, id);
   }
 
-  /** 删除（#58）：移除整行（含 native_session_id；#62 删除编排经 IPC 调用）；幂等——无行即 no-op */
+  /** 删除（#58/#62）：移除整行（含 native_session_id；删除编排经 IPC 调用）并记内存墓碑；幂等——无行即 no-op */
   delete(id: string): void {
     this.db.prepare("DELETE FROM sessions WHERE id = ?").run(id);
+    this.deletedIds.add(id);
+  }
+
+  /** #62 迟到事件守卫（spec #57 D 节）：已删除（墓碑）或已归档的会话——迟到事件不写库不转发（杜绝幽灵行）；
+   *  未知 id 放行（新建会话在 insert 前的窗口期事件照常，如 FakeAdapter createSession 返回前同步发出的 session_status） */
+  shouldDropEvents(id: string): boolean {
+    return this.deletedIds.has(id) || this.get(id)?.archivedAt != null;
   }
 }
 

@@ -145,6 +145,19 @@ describe("SessionStore 归档/取消归档/删除（#58 spec #57 D 节）", () =
     expect(() => store.delete("s-1")).not.toThrow(); // 幂等
   });
 
+  it("shouldDropEvents（#62 迟到事件守卫）：已删除（内存墓碑）与已归档为 true，正常行为 false；未知 id 不拦截（新会话创建窗口期事件照常）", () => {
+    const store = makeStore();
+    store.insert(makeRecord({ id: "s-live" }));
+    store.insert(makeRecord({ id: "s-arch", status: "idle" }));
+    store.insert(makeRecord({ id: "s-gone" }));
+    store.archive("s-arch", "2026-11-10T08:00:00.000Z");
+    store.delete("s-gone");
+    expect(store.shouldDropEvents("s-live")).toBe(false);
+    expect(store.shouldDropEvents("s-arch")).toBe(true); // 已归档
+    expect(store.shouldDropEvents("s-gone")).toBe(true); // 已删除（行已无，靠墓碑）
+    expect(store.shouldDropEvents("ghost")).toBe(false); // 未知 id 放行（FakeAdapter 创建窗口期 session_status 照常转发）
+  });
+
   it("重启读回：archived_at 随库文件往返（默认列表排除、归档视图可见）", () => {
     const store = makeStore();
     store.insert(makeRecord({ id: "s-1" }));

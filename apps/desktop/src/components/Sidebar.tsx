@@ -1,8 +1,9 @@
-// 用途：侧栏 —— 项目区（注册引导/项目行切换/悬浮「＋」CLI 新建菜单）+ 结构化会话与 PTY 终端两组会话行（CLI 色点/目录徽标/状态徽标/需求徽标/PTY 停止按钮，按当前项目过滤）+ 底部运行信息（原型一致项 1/2/3/6；PTY 实体 #12；REQ 徽标 #20）
+// 用途：侧栏 —— 项目区（注册引导/项目行切换/悬浮「＋」CLI 新建菜单）+ 结构化会话与 PTY 终端两组会话行（CLI 色点/目录徽标/状态徽标/需求徽标/PTY 停止按钮，按当前项目过滤）+ 底部运行信息（原型一致项 1/2/3/6；PTY 实体 #12；REQ 徽标 #20；hover 归档 #58；hover 删除+二次确认 #62）
 import { useState, type ReactNode } from "react";
 import type { AppInfo, CliKind, ProjectRow } from "@kanban/ipc-schema";
 import type { SessionView } from "../features/chat/chat-store";
 import { StatusBadge } from "../features/chat/components/StatusBadge";
+import { DeleteSessionDialog } from "./DeleteSessionDialog";
 import { DirBadge } from "./DirBadge";
 
 // CLI 色点（原型四色；fake 演示用 accent2 蓝；pty 终端用 pty 色）——详情面板关联会话行共用（#20 导出）
@@ -61,6 +62,8 @@ export interface SidebarProps {
   onKillTerminal(terminalId: string): void;
   /** #58 会话行 hover「归档」（结构化与 PTY 同款）：Main 编排中断/终止+写归档标记，行移出默认列表 */
   onArchiveSession(sessionId: string): void;
+  /** #62 会话行 hover「删除」（结构化与 PTY 同款）：经二次确认后由 Main 编排 unlink+终止+删记录，行移除 */
+  onDeleteSession(sessionId: string): void;
   /** #20：会话→需求反查映射（kanban:list；会话行需求徽标数据源） */
   sessionToReq?: Record<string, string>;
   /** #20：会话行 REQ 徽标点击 → 进入看板并选中该需求（原型一致项 6） */
@@ -80,12 +83,15 @@ export function Sidebar({
   onCreatePtySession,
   onKillTerminal,
   onArchiveSession,
+  onDeleteSession,
   sessionToReq = {},
   onOpenRequirement,
   info,
 }: SidebarProps) {
   // 「＋」菜单开在哪个项目行上（一次只开一个）
   const [menuProjectId, setMenuProjectId] = useState<string | null>(null);
+  // #62 待二次确认删除的会话行（null=确认弹窗关闭）
+  const [deleteTarget, setDeleteTarget] = useState<SessionView | null>(null);
 
   // 会话按作用域过滤：有当前项目=该项目会话；无=无项目会话（boot 演示链路可见）
   const scopedSessions = sessions.filter((s) =>
@@ -193,7 +199,7 @@ export function Sidebar({
               type="button"
               data-testid="session-row"
               data-active={s.sessionId === activeId ? "true" : "false"}
-              className="flex min-w-0 flex-1 items-center gap-1 pr-14 text-left"
+              className="flex min-w-0 flex-1 items-center gap-1 pr-20 text-left"
               onClick={() => onSelect(s.sessionId)}
             >
               <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${CLI_DOT_CLS[s.cli] ?? "bg-accent2"}`} />
@@ -202,14 +208,24 @@ export function Sidebar({
               <StatusBadge status={s.status} />
               {s.sessionId in sessionToReq ? <ReqBadge requirementId={sessionToReq[s.sessionId]} onOpen={onOpenRequirement} /> : null}
             </button>
-            <button
-              type="button"
-              title="归档（移出默认列表，可在设置找回）"
-              className="absolute right-3.5 top-1/2 h-5 -translate-y-1/2 rounded-md px-1 text-[11px] text-fg-faint opacity-0 pointer-events-none hover:text-primary group-hover:pointer-events-auto group-hover:opacity-100"
-              onClick={() => onArchiveSession(s.sessionId)}
-            >
-              归档
-            </button>
+            <div className="absolute right-3.5 top-1/2 flex -translate-y-1/2 gap-1 opacity-0 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100">
+              <button
+                type="button"
+                title="归档（移出默认列表，可在设置找回）"
+                className="h-5 rounded-md px-1 text-[11px] text-fg-faint hover:text-primary"
+                onClick={() => onArchiveSession(s.sessionId)}
+              >
+                归档
+              </button>
+              <button
+                type="button"
+                title="删除（终止进程并移除会话记录，不可撤销）"
+                className="h-5 rounded-md px-1 text-[11px] text-fg-faint hover:text-destructive"
+                onClick={() => setDeleteTarget(s)}
+              >
+                删除
+              </button>
+            </div>
           </div>
         ))
       )}
@@ -227,7 +243,7 @@ export function Sidebar({
               s.sessionId === activeId ? "border-l-primary bg-muted" : "border-l-transparent"
             }`}
           >
-            <button type="button" className="flex min-w-0 flex-1 items-center gap-1 pr-14 text-left" onClick={() => onSelect(s.sessionId)}>
+            <button type="button" className="flex min-w-0 flex-1 items-center gap-1 pr-24 text-left" onClick={() => onSelect(s.sessionId)}>
               <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-pty" />
               <span className="min-w-0 flex-1 truncate text-[13px]">{s.title}</span>
               <DirBadge identity={s.dirIdentity} worktreeName={s.worktreeName} cwd={s.cwd} />
@@ -253,12 +269,33 @@ export function Sidebar({
               >
                 归档
               </button>
+              <button
+                type="button"
+                title="删除（终止进程并移除会话记录，不可撤销）"
+                className="h-5 rounded-md px-1 text-[11px] text-fg-faint hover:text-destructive"
+                onClick={() => setDeleteTarget(s)}
+              >
+                删除
+              </button>
             </div>
           </div>
         ))
       )}
 
       {info ? <div className="mt-auto px-3.5 pb-1 pt-4 text-[11px] leading-relaxed text-fg-faint">{info}</div> : null}
+
+      {/* #62 删除二次确认（原型 stage5 演示②）：确认后才走 onDeleteSession 编排（unlink → 终止 → 删记录） */}
+      {deleteTarget ? (
+        <DeleteSessionDialog
+          title={deleteTarget.title}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => {
+            const id = deleteTarget.sessionId;
+            setDeleteTarget(null);
+            onDeleteSession(id);
+          }}
+        />
+      ) : null}
     </aside>
   );
 }

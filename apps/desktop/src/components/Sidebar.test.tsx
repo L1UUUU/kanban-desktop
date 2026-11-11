@@ -38,6 +38,7 @@ function mount(props: Partial<Parameters<typeof Sidebar>[0]> = {}) {
   const onCreatePtySession = vi.fn();
   const onKillTerminal = vi.fn();
   const onArchiveSession = vi.fn();
+  const onDeleteSession = vi.fn();
   render(
     <Sidebar
       projects={[]}
@@ -51,10 +52,11 @@ function mount(props: Partial<Parameters<typeof Sidebar>[0]> = {}) {
       onCreatePtySession={onCreatePtySession}
       onKillTerminal={onKillTerminal}
       onArchiveSession={onArchiveSession}
+      onDeleteSession={onDeleteSession}
       {...props}
     />,
   );
-  return { onSelectProject, onRegisterProject, onCreateSession, onCreatePtySession, onKillTerminal, onArchiveSession };
+  return { onSelectProject, onRegisterProject, onCreateSession, onCreatePtySession, onKillTerminal, onArchiveSession, onDeleteSession };
 }
 
 describe("侧栏项目区（原型一致项 2）", () => {
@@ -200,6 +202,54 @@ describe("侧栏会话行 hover「归档」（#58 spec #57）", () => {
     expect(onArchiveSession).toHaveBeenCalledWith("s-1");
     fireEvent.click(btns[1]);
     expect(onArchiveSession).toHaveBeenCalledWith("tty-1");
+  });
+});
+
+describe("侧栏会话行 hover「删除」+ 二次确认弹窗（#62 spec #57 / 原型 stage5 演示②）", () => {
+  function mountDeletable(onDeleteSession = vi.fn()) {
+    mount({
+      projects: [P1],
+      currentProjectId: "p-1",
+      sessions: [
+        makeSession(),
+        makeSession({ sessionId: "tty-1", cli: "pty", title: "终端 · pwsh", status: "idle", projectId: "p-1" }),
+      ],
+      onDeleteSession,
+    });
+    return { onDeleteSession };
+  }
+
+  it("结构化与 PTY 行均提供删除操作，点击弹二次确认（不直接删除）", () => {
+    const h = mountDeletable();
+    const btns = screen.getAllByTitle("删除（终止进程并移除会话记录，不可撤销）");
+    expect(btns).toHaveLength(2); // 结构化 + PTY 行同款 hover 操作
+    fireEvent.click(btns[0]);
+    expect(screen.getByTestId("delete-session-dialog")).toBeTruthy(); // 二次确认弹出，未直接触发删除
+    expect(h.onDeleteSession).not.toHaveBeenCalled();
+  });
+
+  it("确认弹窗内容：标题「删除会话」+ 会话标题 + 影响说明（终止进程/移除记录与看板关联/切激活/原生历史不删）+ 不可撤销", () => {
+    mountDeletable();
+    fireEvent.click(screen.getAllByTitle("删除（终止进程并移除会话记录，不可撤销）")[0]);
+    const dialog = screen.getByTestId("delete-session-dialog");
+    expect(dialog.textContent).toContain("删除会话");
+    expect(dialog.textContent).toContain("调研 Vite 配置");
+    expect(dialog.textContent).toContain("将终止该会话的 CLI 进程、移除本地会话记录与看板关联，并切换当前激活会话。CLI 原生历史文件不删除。此操作不可撤销。");
+    expect(screen.getByRole("button", { name: "取消" })).toBeTruthy();
+    expect(screen.getByTestId("delete-session-confirm").textContent).toBe("删除");
+  });
+
+  it("「取消」关闭弹窗且不触发删除；「删除」确认触发 onDeleteSession 并关闭", () => {
+    const h = mountDeletable();
+    fireEvent.click(screen.getAllByTitle("删除（终止进程并移除会话记录，不可撤销）")[0]);
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByTestId("delete-session-dialog")).toBeNull();
+    expect(h.onDeleteSession).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getAllByTitle("删除（终止进程并移除会话记录，不可撤销）")[1]); // PTY 行删除
+    fireEvent.click(screen.getByTestId("delete-session-confirm"));
+    expect(h.onDeleteSession).toHaveBeenCalledWith("tty-1");
+    expect(screen.queryByTestId("delete-session-dialog")).toBeNull(); // 确认后关闭
   });
 });
 

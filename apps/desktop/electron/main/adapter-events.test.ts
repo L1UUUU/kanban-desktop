@@ -96,6 +96,22 @@ describe("已归档会话迟到事件守卫（#58）", () => {
   });
 });
 
+// ========== #62 已删除会话的迟到事件守卫（spec #57 D 节：行已移除，靠 store 内存墓碑拦截——不写库、不转发渲染端） ==========
+describe("已删除会话迟到事件守卫（#62）", () => {
+  it("ChatEvent 与 SkillObservation：行已删（墓碑命中）不写库、不进 tracker、不转发 renderer（不产生幽灵行）", () => {
+    const { db, sessions, engine, handler, forwarded } = makeWiring(":memory:");
+    insertSession(db, "s-del", "p-1");
+    sessions.delete("s-del"); // 行移除 + 墓碑登记（删除编排的最后一步）
+    handler({ sessionId: "s-del", seq: 1, at: "2026-11-10T09:00:00.000Z", type: "session_status", status: "running" });
+    handler(verifiedDesignFeature("s-del", "2026-11-10T09:00:01.000Z", "sk-del-late") as unknown as AdapterEvent);
+    // 行已无（不复活）；tracker 不驱动；事件不转发
+    expect(db.prepare("SELECT count(*) AS n FROM sessions WHERE id = 's-del'").get()).toEqual({ n: 0 });
+    expect(engine.snapshot()).toEqual([]);
+    expect(db.prepare("SELECT count(*) AS n FROM stage_events").get()).toEqual({ n: 0 });
+    expect(forwarded).toEqual([]);
+  });
+});
+
 describe("SkillObservation → Engine 落库（#9 接线）", () => {
   it("verified design-feature（会话已挂项目）→ 自动建卡 REQ-001 归属项目 + 关联 session + stage_events 落库；事件仍转发 renderer", () => {
     const { db, engine, handler, forwarded } = makeWiring(":memory:");
@@ -187,7 +203,10 @@ describe("SkillObservation → Engine 落库（#9 接线）", () => {
     // 合法事件但 tracker 处理失败（注入抛错的 engine 驱动 catch 路径）→ 记 error 后仍转发
     const forwarded2: AdapterEvent[] = [];
     const handler2 = createAdapterEventHandler({
-      sessions: { get: () => null } as unknown as ReturnType<typeof makeWiring>["sessions"],
+      // 会话在库且未归档未删除（守卫放行，事件到达 tracker 注入点）
+      sessions: { get: () => ({ archivedAt: null, projectId: "p-1" }), shouldDropEvents: () => false } as unknown as ReturnType<
+        typeof makeWiring
+      >["sessions"],
       engine: { process: (): never => { throw new Error("tracker 爆炸"); } } as unknown as ReturnType<typeof makeWiring>["engine"],
       send: (e) => forwarded2.push(e),
       log,

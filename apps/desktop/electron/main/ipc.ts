@@ -164,6 +164,28 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
       }
       return { ok: true };
     }
+    case "session:delete": {
+      // #62 删除编排（spec #57 D 节）：先解除看板关联（落 unlink 事件，重启重放后映射干净；失败抛错即中止，记录保留可重试）→
+      // 终止 CLI 进程（PTY 用终端终止；终止失败 best-effort 放行——进程已死不应挡删除）→ 删除本地会话记录；
+      // 幂等：记录已不存在（重复删除/从未存在）直接成功；不删 CLI 原生历史文件、不做撤销；历史事件日志永不删除
+      const rec = deps.sessions.get(req.sessionId);
+      if (!rec) return { ok: true };
+      if (deps.engine.tracker.sessionToReq.has(rec.id)) {
+        processAndEmit(deps, guiEvent(`unlink:${rec.id}`, {
+          kind: "unlink",
+          source: "gui",
+          requirementId: null,
+          sessionId: rec.id,
+        }));
+      }
+      if (rec.kind === "pty") deps.pty.kill(rec.id);
+      else {
+        await bestEffort(() => deps.adapter.interruptTurn(rec.id), deps, `删除前中断失败（放行）：${rec.id}`);
+        await bestEffort(() => deps.adapter.dispose({ sessionId: rec.id }), deps, `删除终止失败（放行）：${rec.id}`);
+      }
+      deps.sessions.delete(rec.id);
+      return { ok: true };
+    }
     case "session:create": {
       const { sessionId, nativeSessionId } = await deps.adapter.createSession({
         cwd: req.cwd,

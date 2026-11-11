@@ -28,6 +28,8 @@ export interface ChatControllerActions {
   resumeSession(sessionId: string): Promise<void>;
   /** #58 归档会话（侧栏 hover「归档」）：Main 编排中断+终止+写标记；成功后本地移除行（含激活切换），失败在该会话上报错 */
   archiveSession(sessionId: string): Promise<void>;
+  /** #62 删除会话（侧栏 hover「删除」经二次确认）：Main 编排 unlink+终止+删记录；成功后本地移除行（含激活切换），失败在该会话上报错（行保留可重试） */
+  deleteSession(sessionId: string): Promise<void>;
   /** #21：关闭同名 skill 冲突提示条（仅隐藏不影响会话） */
   dismissSkillConflict(sessionId: string): void;
   /** #46：关闭会话创建失败卡（仅隐藏；下次创建成功自动清除） */
@@ -168,6 +170,15 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
         else {
           store.setError(sessionId, r.error.code, r.error.message);
           window.api?.log?.("error", "chat", "会话归档失败", { sessionId, code: r.error.code, message: r.error.message });
+        }
+      },
+      deleteSession: async (sessionId) => {
+        if (!transport) return;
+        const r = await transport.invoke({ channel: "session:delete", sessionId });
+        if (r.ok) store.removeSession(sessionId);
+        else {
+          store.setError(sessionId, r.error.code, r.error.message);
+          window.api?.log?.("error", "chat", "会话删除失败", { sessionId, code: r.error.code, message: r.error.message });
         }
       },
     };
