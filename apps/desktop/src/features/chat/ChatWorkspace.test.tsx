@@ -2,7 +2,7 @@
 /// <reference types="node" /> <!-- 本文件用 node:fs/os/path 建持久化 fixture（重启恢复用例） -->
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AdapterEvent, CliKind, ErrorCode, IpcRequest, IpcResult, ProjectRow, TerminalEvent } from "@kanban/ipc-schema";
@@ -643,7 +643,8 @@ describe("项目注册与会话恢复（#7 全链，除 Electron dialog）", () 
 
   /** 临时项目目录（.git 目录=主仓库 fixture）+ 固定返回它的 pick + db/状态文件路径 */
   function makeProjectFixture(): { projDir: string; dbPath: string; statePath: string; transport: ChatTransport } {
-    tmpRoot = mkdtempSync(join(tmpdir(), "kb-ws-projects-"));
+    // realpath 归一：CI 的 TEMP 可能是 8.3 短名（RUNNER~1），夹具须与 canonicalizePath 同形态
+    tmpRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "kb-ws-projects-")));
     const projDir = join(tmpRoot, "demo-repo");
     mkdirSync(join(projDir, ".git"), { recursive: true });
     const dbPath = join(tmpRoot, "state.db");
@@ -710,7 +711,7 @@ describe("PTY 终端链路（#12：mock PTY 驱动 TerminalPanel 与多路复用
   });
 
   function makePtyFixture() {
-    tmpRoot = mkdtempSync(join(tmpdir(), "kb-ws-pty-"));
+    tmpRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "kb-ws-pty-")));
     const projDir = join(tmpRoot, "demo-repo");
     mkdirSync(join(projDir, ".git"), { recursive: true });
     const dbPath = join(tmpRoot, "state.db");

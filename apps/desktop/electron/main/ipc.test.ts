@@ -1,5 +1,5 @@
 // 用途：Main 入站 IPC 路由单测 —— zod 强制校验（非法消息明确错误码 E_SCHEMA）+ 各通道路由到 Adapter/store + AdapterError 错误码透传（spec E/#6 验收第 4 条/#7 project/session 通道；#17 kanban 七通道 + 原子关联 + tracker 推送）
-import { existsSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1180,7 +1180,8 @@ describe("diff:ipc 通道（#43 spec #40 D 节：独立单通道 + 入站 zod + 
   function makeDiffRouter(readWorkspaceDiff: (cwd: string) => Promise<unknown>) {
     const db = openDatabase(":memory:");
     const projects = new ProjectStore(db);
-    const repoDir = join(tmpRoot || (tmpRoot = mkdtempSync(join(tmpdir(), "kb-diff-ipc-"))), "repo");
+    // realpath 归一：CI 的 TEMP 可能是 8.3 短名（RUNNER~1），cwd 断言须与 canonicalizePath 同形态
+    const repoDir = join(tmpRoot || (tmpRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "kb-diff-ipc-")))), "repo");
     mkdirSync(repoDir, { recursive: true });
     const { project } = projects.register(repoDir);
     const handle = (raw: unknown) =>

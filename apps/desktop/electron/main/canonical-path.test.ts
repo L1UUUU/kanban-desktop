@@ -1,5 +1,5 @@
 // 用途：canonical path 归一化测试 —— 大小写/斜杠/尾分隔符/不存在回退（工单 #7 验收：canonical path 注册去重的根基）
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -16,7 +16,8 @@ afterEach(() => {
 
 /** 建临时 fixture 根目录 */
 function makeTmp(): string {
-  tmpRoot = mkdtempSync(join(tmpdir(), "kb-canonical-"));
+  // realpath 归一：CI 的 TEMP 可能是 8.3 短名（RUNNER~1），夹具须与 canonicalizePath 同形态
+  tmpRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "kb-canonical-")));
   return tmpRoot;
 }
 
