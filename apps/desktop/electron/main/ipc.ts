@@ -1,5 +1,4 @@
-// 用途：Main 入站 IPC 路由 —— 单通道 kanban:ipc 强制 zod 校验 + 分发到 CliAdapter 与 projects/sessions store + PTY 宿主（纯函数无 Electron 依赖：dialog 与 config 经 deps 注入）
-// 行数评估（~730 行，超 500 行阈值）：app:getInfo + 五个 :ipc 通道（kanban/memory/diff/residue/config）的 handler 聚合是既有装配模式（共享单通道校验、deps 注入与 store 装配，拆开只搬文件不减耦合），本次不拆；触发条件：第六个 IPC 通道（或任一通道 handler 独立逻辑显著膨胀）加入时按通道拆分为独立模块。
+// 用途：Main 入站 IPC 路由 —— 单通道 kanban:ipc 强制 zod 校验 + 分发到 CliAdapter 与 projects/sessions store + PTY 宿主（纯函数无 Electron 依赖：dialog 与 config 经 deps 注入）；#72 C1 Step1 起五个 :ipc 通道的信封（校验/门闸/错误形状化/日志）收敛到 ipc-envelope 工厂，本文件保留各通道路由主体
 import { homedir } from "node:os";
 import {
   configRequestSchema,
@@ -8,12 +7,16 @@ import {
   memoryRequestSchema,
   residueRequestSchema,
   type AutoArchiveScanSummary,
+  type ConfigRequest,
   type ConfigResult,
+  type DiffRequest,
   type DiffResult,
   type IpcRequest,
   type IpcResult,
+  type MemoryRequest,
   type MemoryResult,
   type ResidueProcess,
+  type ResidueRequest,
   type ResidueResult,
   type ResidueKillResult,
   type SessionRow,
@@ -23,15 +26,15 @@ import { TrackerEngine, formatRequirementId, type Cli, type NormalizedEvent, typ
 import type { AppConfig } from "./config";
 import { detectDirIdentity } from "./git-identity";
 import type { WorkspaceDiff } from "./git-diff-service";
-import type { LogFn } from "./logger";
+import { createChannelHandler, codeEnvelope, reasonEnvelope, type EnvelopeDeps } from "./ipc-envelope";
 import { type MemoryService } from "./memory-service";
 import type { PtyHost } from "./pty-host";
 import type { ProjectStore } from "./project-store";
 import type { SessionLifecycle } from "./session-lifecycle";
 import type { SessionStore } from "./session-store";
 
-/** 路由依赖：adapter + PTY 宿主 + 持久化 store + 平台能力（Electron dialog/config 由 index.ts 注入，测试可替换） */
-export interface IpcDeps {
+/** 路由依赖：adapter + PTY 宿主 + 持久化 store + 平台能力（Electron dialog/config 由 index.ts 注入，测试可替换）；isShuttingDown?/log? 经 EnvelopeDeps 注入 */
+export interface IpcDeps extends EnvelopeDeps {
   adapter: CliAdapter;
   /** PTY 终端宿主（terminal:* 通道；mock 注入可单测） */
   pty: PtyHost;
@@ -47,14 +50,10 @@ export interface IpcDeps {
   pickDirectory(): Promise<string | null>;
   getCurrentProjectId(): string | null;
   setCurrentProjectId(id: string): void;
-  /** 退出序列门闸（true=正在退出，拒绝新请求，spec H 第 1 步；缺省恒 false 供旧测试） */
-  isShuttingDown?(): boolean;
   /** #21（spec #15 E 节）：用户级 Claude 基准目录解析（CLAUDE_CONFIG_DIR 优先，否则 ~/.claude）；仅 session:create cli=claude 的同名 skill 检测用。缺省读 process.env + os.homedir，测试注入固定目录 */
   resolveUserClaudeDir?(): string;
   /** #35（spec #27 J 节）：memory 面（kanban:delete 需求删除级联清理）；index.ts 经 openMemoryService 装配注入，缺省无 memory 数据可清理（旧测试/降级装配） */
   memory?: MemoryService;
-  /** #53（spec #52 G 节）：诊断日志 —— safeParse 失败与 route 抛错记 error（error.code 原样）；业务拒绝 ok:false 不记；缺省 no-op 供既有装配夹具 */
-  log?: LogFn;
 }
 
 // CLI 显示名（新建会话默认标题「新会话 · {名}」，原型 §3.6）
@@ -65,40 +64,17 @@ const CLI_LABELS: Record<string, string> = {
   opencode: "OpenCode",
 };
 
-/** 处理一条入站请求：校验 → 退出门闸 → 路由 → 错误码形状化（spec E：Main 强制校验，非法消息明确错误码；spec H：退出中拒新请求） */
+/** 处理一条入站请求：信封（校验/门闸/错误形状化）经共享工厂，主体查 route 分发（spec E：Main 强制校验，非法消息明确错误码；spec H：退出中拒新请求） */
 export async function handleIpc(deps: IpcDeps, raw: unknown): Promise<IpcResult> {
-  const parsed = ipcRequestSchema.safeParse(raw);
-  if (!parsed.success) {
-    deps.log?.("error", "kanban:ipc", `入站请求不符合契约（E_SCHEMA）：${summarizeIssues(parsed.error.issues)}`);
-    return {
-      ok: false,
-      error: { code: "E_SCHEMA", message: summarizeIssues(parsed.error.issues) },
-    };
-  }
-  if (deps.isShuttingDown?.()) {
-    return {
-      ok: false,
-      error: { code: "E_INTERNAL", message: "应用正在退出，已停止接收新请求" },
-    };
-  }
-  try {
-    return await route(deps, parsed.data);
-  } catch (err) {
-    // #53：catch 记一条 error（error.code 原样不造新码）；AdapterError 透传 / 其余 E_INTERNAL 的既有形状不变
-    const code = err instanceof AdapterError ? err.code : "E_INTERNAL";
-    deps.log?.("error", "kanban:ipc", `处理异常（${code}）：${err instanceof Error ? err.message : String(err)}`);
-    if (err instanceof AdapterError) {
-      return { ok: false, error: { code: err.code, message: err.message } };
-    }
-    return {
-      ok: false,
-      error: { code: "E_INTERNAL", message: err instanceof Error ? err.message : String(err) },
-    };
-  }
+  return createChannelHandler<IpcRequest, IpcResult, IpcDeps>(
+    { scope: "kanban:ipc", schema: ipcRequestSchema, dialect: codeEnvelope, catchStyle: { kind: "adapter-passthrough", toError: codeEnvelope.toError } },
+    deps,
+    route,
+  )(raw);
 }
 
 /** 按 channel 分发（不变量 1：send 等只表达已提交，内容经事件流） */
-async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
+async function route(req: IpcRequest, deps: IpcDeps): Promise<IpcResult> {
   switch (req.channel) {
     case "project:list": {
       // 列表随取随探测（existsSync 便宜）：missing 标记始终新鲜
@@ -515,14 +491,6 @@ function processAndEmit(deps: IpcDeps, ev: NormalizedEvent): TrackerChange[] {
   return changes;
 }
 
-/** zod issue 摘要：路径 + 信息，定位到字段（不含堆栈噪音） */
-function summarizeIssues(issues: readonly { path: PropertyKey[]; message: string }[]): string {
-  return issues
-    .slice(0, 3)
-    .map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`)
-    .join("; ");
-}
-
 /** #21：用户级 Claude 基准目录缺省解析（生产路径：CLAUDE_CONFIG_DIR 优先，否则 ~/.claude；测试经 deps.resolveUserClaudeDir 注入） */
 function defaultUserClaudeDir(): string {
   return resolveUserClaudeDir(process.env, homedir());
@@ -530,148 +498,120 @@ function defaultUserClaudeDir(): string {
 
 // ============ #31 memory:ipc 通道（spec #27 H 节，对齐 kanban:ipc 模式：单通道 + Main 入站 zod 强制校验 + 业务拒绝 ok:false+reason） ============
 
-/** memory:ipc 路由依赖（MemoryService 由 index.ts 经 openMemoryService 装配注入） */
-export interface MemoryIpcDeps {
+/** memory:ipc 路由依赖（MemoryService 由 index.ts 经 openMemoryService 装配注入）；isShuttingDown?/log? 经 EnvelopeDeps 注入 */
+export interface MemoryIpcDeps extends EnvelopeDeps {
   memory: MemoryService;
-  /** 退出序列门闸（true=正在退出，拒绝新请求；缺省恒 false 供测试） */
-  isShuttingDown?(): boolean;
-  /** #53（spec #52 G 节）：诊断日志 —— safeParse 失败记 error（reason 原样）；route 抛错记 error 后原样 rethrow；业务拒绝不记；缺省 no-op */
-  log?: LogFn;
 }
 
-/** 处理一条 memory:ipc 入站请求：zod 强制校验 → 退出门闸 → 八通道路由（业务拒绝直达调用方，不新增全局错误码） */
+/** 处理一条 memory:ipc 入站请求：信封经共享工厂（reason 方言 + rethrow），八通道路由（业务拒绝直达调用方，不新增全局错误码） */
 export async function handleMemoryIpc(deps: MemoryIpcDeps, raw: unknown): Promise<MemoryResult> {
-  const parsed = memoryRequestSchema.safeParse(raw);
-  if (!parsed.success) {
-    deps.log?.("error", "memory:ipc", `入站请求不符合契约（invalid-request）：${summarizeIssues(parsed.error.issues)}`);
-    return { ok: false, reason: "invalid-request", detail: summarizeIssues(parsed.error.issues) };
-  }
-  if (deps.isShuttingDown?.()) {
-    return { ok: false, reason: "shutting-down", detail: "应用正在退出，已停止接收新请求" };
-  }
-  const req = parsed.data;
-  try {
-    switch (req.channel) {
-      case "memory:extract": {
-        const r = deps.memory.extract(req.requirementId);
-        return r.ok ? { ok: true, started: true, batchId: r.batchId } : r;
-      }
-      case "memory:cancel": {
-        // #32：取消管线已接线（异步等待整批落定）
-        const r = await deps.memory.cancel(req.requirementId);
-        return r.ok ? { ok: true, cancelled: true } : r;
-      }
-      case "memory:reviewCandidate": {
-        const r = deps.memory.reviewCandidate(req.candidateId, req.action, req.edit);
-        return r.ok ? { ok: true, candidate: r.candidate } : r;
-      }
-      case "memory:resolveSummary": {
-        return await deps.memory.resolveSummary(req.requirementId, req.choice);
-      }
-      case "memory:requirementMemory": {
-        return await deps.memory.requirementMemory(req.requirementId);
-      }
-      case "memory:projectMemory": {
-        return await deps.memory.projectMemory(req.projectId, req.query);
-      }
-      case "memory:editAccepted": {
-        const r = deps.memory.editAccepted(req.candidateId, { claim: req.claim, scope: req.scope });
-        return r.ok ? { ok: true, candidate: r.candidate } : r;
-      }
-      case "memory:editSummary": {
-        return await deps.memory.editSummary(req.requirementId, req.content);
-      }
+  return createChannelHandler<MemoryRequest, MemoryResult, MemoryIpcDeps>(
+    { scope: "memory:ipc", schema: memoryRequestSchema, dialect: reasonEnvelope, catchStyle: { kind: "rethrow" } },
+    deps,
+    routeMemory,
+  )(raw);
+}
+
+/** memory 八通道路由主体 */
+async function routeMemory(req: MemoryRequest, deps: MemoryIpcDeps): Promise<MemoryResult> {
+  switch (req.channel) {
+    case "memory:extract": {
+      const r = deps.memory.extract(req.requirementId);
+      return r.ok ? { ok: true, started: true, batchId: r.batchId } : r;
     }
-  } catch (err) {
-    // #53：记一条 error 后原样 rethrow（既有异常向 ipcMain.handle 传播的行为不变，不吞不造码）
-    deps.log?.("error", "memory:ipc", `处理异常：${err instanceof Error ? err.message : String(err)}`);
-    throw err;
+    case "memory:cancel": {
+      // #32：取消管线已接线（异步等待整批落定）
+      const r = await deps.memory.cancel(req.requirementId);
+      return r.ok ? { ok: true, cancelled: true } : r;
+    }
+    case "memory:reviewCandidate": {
+      const r = deps.memory.reviewCandidate(req.candidateId, req.action, req.edit);
+      return r.ok ? { ok: true, candidate: r.candidate } : r;
+    }
+    case "memory:resolveSummary": {
+      return await deps.memory.resolveSummary(req.requirementId, req.choice);
+    }
+    case "memory:requirementMemory": {
+      return await deps.memory.requirementMemory(req.requirementId);
+    }
+    case "memory:projectMemory": {
+      return await deps.memory.projectMemory(req.projectId, req.query);
+    }
+    case "memory:editAccepted": {
+      const r = deps.memory.editAccepted(req.candidateId, { claim: req.claim, scope: req.scope });
+      return r.ok ? { ok: true, candidate: r.candidate } : r;
+    }
+    case "memory:editSummary": {
+      return await deps.memory.editSummary(req.requirementId, req.content);
+    }
   }
 }
 
 // ============ #49 residue:ipc 通道（spec #40 D 节，对齐 memory:ipc 模式：单通道 + Main 入站 zod 强制校验 + 业务拒绝 ok:false+reason） ============
 
-/** residue:ipc 路由依赖（检测与终止由 index.ts 装配注入：检测为本次启动缓存的一次性结果，不重复探测） */
-export interface ResidueIpcDeps {
+/** residue:ipc 路由依赖（检测与终止由 index.ts 装配注入：检测为本次启动缓存的一次性结果，不重复探测）；isShuttingDown?/log? 经 EnvelopeDeps 注入 */
+export interface ResidueIpcDeps extends EnvelopeDeps {
   /** 残留检测（返回缓存清单；spec：每次启动只检测一次，不轮询） */
   detect(): Promise<ResidueProcess[]>;
   /** 确认式逐 pid 终止（用户显式触发；无自动清理路径） */
   kill(pids: number[]): Promise<ResidueKillResult[]>;
-  /** 退出序列门闸（true=正在退出，拒绝新请求；缺省恒 false 供测试） */
-  isShuttingDown?(): boolean;
-  /** #53（spec #52 G 节）：诊断日志 —— safeParse 失败记 error（reason 原样）；deps 抛错记 error 后原样 rethrow；业务拒绝不记；缺省 no-op */
-  log?: LogFn;
 }
 
 // ============ #43 diff:ipc 通道（spec #40 D 节，对齐 memory:ipc 独立单通道先例：入站 zod 强制校验 + 退出门闸 + 经 project store 解析 cwd） ============
 
-/** diff:ipc 路由依赖：project store（projectId → canonicalPath）+ git-diff-service 单函数（测试注入 fixture） */
-export interface DiffIpcDeps {
+/** diff:ipc 路由依赖：project store（projectId → canonicalPath）+ git-diff-service 单函数（测试注入 fixture）；isShuttingDown?/log? 经 EnvelopeDeps 注入 */
+export interface DiffIpcDeps extends EnvelopeDeps {
   projects: ProjectStore;
   /** 读取工作区未提交变更（生产 = git-diff-service readWorkspaceDiff 装配） */
   readWorkspaceDiff(cwd: string): Promise<WorkspaceDiff>;
-  /** 退出序列门闸（true=正在退出，拒绝新请求；缺省恒 false 供测试） */
-  isShuttingDown?(): boolean;
-  /** #53（spec #52 G 节）：诊断日志 —— safeParse 失败记 error（E_SCHEMA 原码）；readWorkspaceDiff 抛错记 error 后原样 rethrow；业务拒绝不记；缺省 no-op */
-  log?: LogFn;
 }
 
-/** 处理一条 residue:ipc 入站请求：zod 强制校验 → 退出门闸 → 二通道路由（业务拒绝直达调用方，不新增全局错误码） */
+/** 处理一条 residue:ipc 入站请求：信封经共享工厂（reason 方言 + rethrow），二通道路由（业务拒绝直达调用方，不新增全局错误码） */
 export async function handleResidueIpc(deps: ResidueIpcDeps, raw: unknown): Promise<ResidueResult> {
-  const parsed = residueRequestSchema.safeParse(raw);
-  if (!parsed.success) {
-    deps.log?.("error", "residue:ipc", `入站请求不符合契约（invalid-request）：${summarizeIssues(parsed.error.issues)}`);
-    return { ok: false, reason: "invalid-request", detail: summarizeIssues(parsed.error.issues) };
-  }
-  if (deps.isShuttingDown?.()) {
-    return { ok: false, reason: "shutting-down", detail: "应用正在退出，已停止接收新请求" };
-  }
-  try {
-    switch (parsed.data.channel) {
-      case "residue:detect":
-        return { ok: true, processes: await deps.detect() };
-      case "residue:kill":
-        return { ok: true, results: await deps.kill(parsed.data.pids) };
-    }
-  } catch (err) {
-    // #53：记一条 error 后原样 rethrow（既有异常向 ipcMain.handle 传播的行为不变，不吞不造码）
-    deps.log?.("error", "residue:ipc", `处理异常：${err instanceof Error ? err.message : String(err)}`);
-    throw err;
+  return createChannelHandler<ResidueRequest, ResidueResult, ResidueIpcDeps>(
+    { scope: "residue:ipc", schema: residueRequestSchema, dialect: reasonEnvelope, catchStyle: { kind: "rethrow" } },
+    deps,
+    routeResidue,
+  )(raw);
+}
+
+/** residue 二通道路由主体 */
+async function routeResidue(req: ResidueRequest, deps: ResidueIpcDeps): Promise<ResidueResult> {
+  switch (req.channel) {
+    case "residue:detect":
+      return { ok: true, processes: await deps.detect() };
+    case "residue:kill":
+      return { ok: true, results: await deps.kill(req.pids) };
   }
 }
 
-/** 处理一条 diff:ipc 入站请求：zod 强制校验 → 退出门闸 → diff:get 经 project store 解析 cwd 后透传服务结果 */
+/** 处理一条 diff:ipc 入站请求：信封经共享工厂（code 方言 + rethrow），diff:get 经 project store 解析 cwd 后透传服务结果 */
 export async function handleDiffIpc(deps: DiffIpcDeps, raw: unknown): Promise<DiffResult> {
-  const parsed = diffRequestSchema.safeParse(raw);
-  if (!parsed.success) {
-    deps.log?.("error", "diff:ipc", `入站请求不符合契约（E_SCHEMA）：${summarizeIssues(parsed.error.issues)}`);
-    return { ok: false, error: { code: "E_SCHEMA", message: summarizeIssues(parsed.error.issues) } };
-  }
-  if (deps.isShuttingDown?.()) {
-    return { ok: false, error: { code: "E_INTERNAL", message: "应用正在退出，已停止接收新请求" } };
-  }
-  try {
-    switch (parsed.data.channel) {
-      case "diff:get": {
-        const project = deps.projects.get(parsed.data.projectId);
-        if (!project) {
-          return { ok: false, error: { code: "E_PROJECT_NOT_FOUND", message: `项目不存在：${parsed.data.projectId}` } };
-        }
-        // return await：让 readWorkspaceDiff 的拒绝进 catch（记日志后原样 rethrow），而非绕过 catch 直达调用方
-        return await deps.readWorkspaceDiff(project.canonicalPath);
+  return createChannelHandler<DiffRequest, DiffResult, DiffIpcDeps>(
+    { scope: "diff:ipc", schema: diffRequestSchema, dialect: codeEnvelope, catchStyle: { kind: "rethrow" } },
+    deps,
+    routeDiff,
+  )(raw);
+}
+
+/** diff 单通道路由主体 */
+async function routeDiff(req: DiffRequest, deps: DiffIpcDeps): Promise<DiffResult> {
+  switch (req.channel) {
+    case "diff:get": {
+      const project = deps.projects.get(req.projectId);
+      if (!project) {
+        return { ok: false, error: { code: "E_PROJECT_NOT_FOUND", message: `项目不存在：${req.projectId}` } };
       }
+      // return await：让 readWorkspaceDiff 的拒绝进 catch（记日志后原样 rethrow），而非绕过 catch 直达调用方
+      return await deps.readWorkspaceDiff(project.canonicalPath);
     }
-  } catch (err) {
-    // #53：记一条 error 后原样 rethrow（既有异常向 ipcMain.handle 传播的行为不变，不吞不造码）
-    deps.log?.("error", "diff:ipc", `处理异常：${err instanceof Error ? err.message : String(err)}`);
-    throw err;
   }
 }
 
 // ============ #61 config:ipc 通道（spec #57 配置链路，对齐 diff:ipc 独立单通道先例：读 autoArchive 子集 / 写字段级合并 + 先持久化成功再改内存） ============
 
-/** config:ipc 路由依赖：内存配置对象 + 全量持久化（getConfig/persist 由 index.ts 经闭包注入，测试替换 fixture） */
-export interface ConfigIpcDeps {
+/** config:ipc 路由依赖：内存配置对象 + 全量持久化（getConfig/persist 由 index.ts 经闭包注入，测试替换 fixture）；isShuttingDown?/log? 经 EnvelopeDeps 注入 */
+export interface ConfigIpcDeps extends EnvelopeDeps {
   /** 当前内存配置（Main 闭包对象，恒返回同一引用；写盘成功后由 handler 原地更新其 autoArchive 字段，其余字段一律不触碰） */
   getConfig(): AppConfig;
   /** 持久化完整配置（生产 = saveConfig 全量写回；抛错即写盘失败，新值不生效） */
@@ -681,49 +621,49 @@ export interface ConfigIpcDeps {
   onAutoArchiveSaved?(config: AppConfig): Promise<AutoArchiveScanSummary | null>;
   /** #64：上次扫描摘要缓存（index.ts 闭包；config:get 应答携带，跨打开周期保留；缺省 null=尚未扫描） */
   getLastScan?(): AutoArchiveScanSummary | null;
-  /** 退出序列门闸（true=正在退出，拒绝新请求；缺省恒 false 供测试） */
-  isShuttingDown?(): boolean;
-  /** #53 惯例：safeParse 失败与 persist 抛错记 error；缺省 no-op */
-  log?: LogFn;
 }
 
-/** 处理一条 config:ipc 入站请求：zod 强制校验 → 退出门闸 → 读子集 / 写先持久化成功再改内存（失败明确报错，内存与磁盘不分叉） */
+/** 处理一条 config:ipc 入站请求：信封经共享工厂（code 方言 + fail——写盘失败返回明确错误不 rethrow），读子集 / 写先持久化成功再改内存（失败明确报错，内存与磁盘不分叉） */
 export async function handleConfigIpc(deps: ConfigIpcDeps, raw: unknown): Promise<ConfigResult> {
-  const parsed = configRequestSchema.safeParse(raw);
-  if (!parsed.success) {
-    deps.log?.("error", "config:ipc", `入站请求不符合契约（E_SCHEMA）：${summarizeIssues(parsed.error.issues)}`);
-    return { ok: false, error: { code: "E_SCHEMA", message: summarizeIssues(parsed.error.issues) } };
-  }
-  if (deps.isShuttingDown?.()) {
-    return { ok: false, error: { code: "E_INTERNAL", message: "应用正在退出，已停止接收新请求" } };
-  }
-  try {
-    switch (parsed.data.channel) {
-      case "config:get":
-        return { ok: true, autoArchive: deps.getConfig().autoArchive, lastScan: deps.getLastScan?.() ?? null };
-      case "config:set": {
-        const current = deps.getConfig();
-        // 先持久化成功再改内存：persist 抛错进 catch（返回明确错误，内存对象未动，新值不生效）；
-        // 写仅开放 autoArchive 子集 —— 持久化对象由内存配置字段级合并而来，项目/CLI 路径等其余字段不受请求影响
-        deps.persist({ ...current, autoArchive: parsed.data.autoArchive });
-        current.autoArchive = parsed.data.autoArchive;
-        // #64：保存成功后触发自动归档扫描（读到的已是新值）。扫描异常不改变「保存已成功」的事实——
-        // 记日志、摘要置 null，不落入下方 catch 谎报「保存失败」
-        let lastScan: AutoArchiveScanSummary | null = null;
-        if (deps.onAutoArchiveSaved) {
-          try {
-            lastScan = await deps.onAutoArchiveSaved(current);
-          } catch (err) {
-            deps.log?.("error", "config:ipc", `保存后自动归档扫描失败（配置已保存生效）：${err instanceof Error ? err.message : String(err)}`);
-          }
+  return createChannelHandler<ConfigRequest, ConfigResult, ConfigIpcDeps>(
+    {
+      scope: "config:ipc",
+      schema: configRequestSchema,
+      dialect: codeEnvelope,
+      // 写盘失败不 rethrow：配置保存是用户可见的可重试动作，返回明确错误直达调用方（新值不生效）；文案逐字保持既有锚点
+      catchStyle: {
+        kind: "fail",
+        logMessage: (message) => `配置保存失败（新值未生效）：${message}`,
+        toResult: (message) => ({ ok: false, error: { code: "E_INTERNAL", message: `配置保存失败，新值未生效：${message}` } }),
+      },
+    },
+    deps,
+    routeConfig,
+  )(raw);
+}
+
+/** config 二通道路由主体 */
+async function routeConfig(req: ConfigRequest, deps: ConfigIpcDeps): Promise<ConfigResult> {
+  switch (req.channel) {
+    case "config:get":
+      return { ok: true, autoArchive: deps.getConfig().autoArchive, lastScan: deps.getLastScan?.() ?? null };
+    case "config:set": {
+      const current = deps.getConfig();
+      // 先持久化成功再改内存：persist 抛错进 catch（返回明确错误，内存对象未动，新值不生效）；
+      // 写仅开放 autoArchive 子集 —— 持久化对象由内存配置字段级合并而来，项目/CLI 路径等其余字段不受请求影响
+      deps.persist({ ...current, autoArchive: req.autoArchive });
+      current.autoArchive = req.autoArchive;
+      // #64：保存成功后触发自动归档扫描（读到的已是新值）。扫描异常不改变「保存已成功」的事实——
+      // 记日志、摘要置 null，不落入下方 catch 谎报「保存失败」
+      let lastScan: AutoArchiveScanSummary | null = null;
+      if (deps.onAutoArchiveSaved) {
+        try {
+          lastScan = await deps.onAutoArchiveSaved(current);
+        } catch (err) {
+          deps.log?.("error", "config:ipc", `保存后自动归档扫描失败（配置已保存生效）：${err instanceof Error ? err.message : String(err)}`);
         }
-        return { ok: true, autoArchive: current.autoArchive, lastScan };
       }
+      return { ok: true, autoArchive: current.autoArchive, lastScan };
     }
-  } catch (err) {
-    // 写盘失败不 rethrow：配置保存是用户可见的可重试动作，返回明确错误直达调用方（新值不生效）
-    const message = err instanceof Error ? err.message : String(err);
-    deps.log?.("error", "config:ipc", `配置保存失败（新值不生效）：${message}`);
-    return { ok: false, error: { code: "E_INTERNAL", message: `配置保存失败，新值未生效：${message}` } };
   }
 }
