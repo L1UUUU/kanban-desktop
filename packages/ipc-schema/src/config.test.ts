@@ -1,6 +1,14 @@
-// 用途：config wire 契约测试 —— config:ipc 二请求单通道联合 + autoArchive 边界（1–365 整数）+ 结果只携带 autoArchive 子集（issue #61，spec #57 配置链路节；对齐 diff:ipc 独立单通道先例）
+// 用途：config 契约测试 —— ① wire：config:ipc 二请求单通道联合 + autoArchive 边界（1–365 整数）+ 结果只携带 autoArchive 子集（issue #61，spec #57 配置链路节）；② 文件格式：appConfigFileSchema 全默认/字段级回退/节级回退/边界常量（issue #68，不重复 main 侧 loadConfig 行为场景，只测 schema 自身）
 import { describe, expect, it } from "vitest";
-import { autoArchiveConfigSchema, configRequestSchema, configResultSchema } from "./config";
+import {
+  AUTO_ARCHIVE_DAYS_BOUNDS,
+  DIFF_LIMIT_BOUNDS,
+  LOGGING_BOUNDS,
+  appConfigFileSchema,
+  autoArchiveConfigSchema,
+  configRequestSchema,
+  configResultSchema,
+} from "./config";
 
 describe("autoArchiveConfigSchema（自动归档配置节）", () => {
   it("合法对象 parse 后与输入等值（enabled 布尔 + days 界内整数）", () => {
@@ -62,5 +70,57 @@ describe("configResultSchema（结果只携带 autoArchive 子集 + 扫描摘要
     expect(err.ok).toBe(false);
     expect(() => configResultSchema.parse({ ok: true })).toThrow();
     expect(() => configResultSchema.parse({ ok: false })).toThrow();
+  });
+});
+
+describe("appConfigFileSchema（config.json 文件格式契约，issue #68）", () => {
+  it("parse({}) = 全默认（各字段 .catch 默认值汇集，与 main defaultConfig 等值）", () => {
+    expect(appConfigFileSchema.parse({})).toEqual({
+      cliExe: { codex: null, claude: null, opencode: null },
+      currentProjectId: null,
+      gitExe: null,
+      diff: { maxBytes: 2_000_000, maxFiles: 200, maxUntrackedLines: 2000 },
+      terminal: { shell: null },
+      shutdown: { graceMs: 3000 },
+      logging: { level: "info", maxFileBytes: 5_000_000, retainRuns: 10, maxMessageChars: 2000 },
+      autoArchive: { enabled: false, days: 30 },
+    });
+  });
+
+  it("字段级回退：节内坏字段只回退该字段，不牵连整节（sectioned 内字段 .catch）", () => {
+    const cfg = appConfigFileSchema.parse({ cliExe: { codex: 123 }, diff: { maxBytes: 1.5, maxFiles: 3 } });
+    expect(cfg.cliExe.codex).toBeNull();
+    expect(cfg.diff.maxBytes).toBe(2_000_000); // 非整数 → 回退默认
+    expect(cfg.diff.maxFiles).toBe(3); // 同节合法字段不受牵连
+  });
+
+  it("节级回退：节缺失/非对象 → 整节默认（sectioned catch parse({})）", () => {
+    const cfg = appConfigFileSchema.parse({ diff: "nope", logging: 42 });
+    expect(cfg.diff).toEqual({ maxBytes: 2_000_000, maxFiles: 200, maxUntrackedLines: 2000 });
+    expect(cfg.logging).toEqual({ level: "info", maxFileBytes: 5_000_000, retainRuns: 10, maxMessageChars: 2000 });
+  });
+
+  it("边界值采纳与拒绝（DIFF_LIMIT_BOUNDS / LOGGING_BOUNDS / graceMs 上限 / autoArchive 天数）", () => {
+    expect(appConfigFileSchema.parse({ diff: { maxBytes: DIFF_LIMIT_BOUNDS.maxBytes } }).diff.maxBytes).toBe(DIFF_LIMIT_BOUNDS.maxBytes);
+    expect(appConfigFileSchema.parse({ diff: { maxBytes: DIFF_LIMIT_BOUNDS.maxBytes + 1 } }).diff.maxBytes).toBe(2_000_000);
+    expect(appConfigFileSchema.parse({ logging: { maxFileBytes: LOGGING_BOUNDS.maxFileBytes.min } }).logging.maxFileBytes).toBe(1024);
+    expect(appConfigFileSchema.parse({ logging: { maxFileBytes: LOGGING_BOUNDS.maxFileBytes.min - 1 } }).logging.maxFileBytes).toBe(5_000_000);
+    expect(appConfigFileSchema.parse({ shutdown: { graceMs: 60_000 } }).shutdown.graceMs).toBe(60_000);
+    expect(appConfigFileSchema.parse({ shutdown: { graceMs: 60_001 } }).shutdown.graceMs).toBe(3000);
+    expect(appConfigFileSchema.parse({ autoArchive: { days: AUTO_ARCHIVE_DAYS_BOUNDS.max } }).autoArchive.days).toBe(365);
+    expect(appConfigFileSchema.parse({ autoArchive: { days: AUTO_ARCHIVE_DAYS_BOUNDS.max + 1 } }).autoArchive.days).toBe(30);
+  });
+
+  it("graceMs 非整数回退默认 3000（issue #68 语义收紧：原实现 Math.floor 采纳）", () => {
+    expect(appConfigFileSchema.parse({ shutdown: { graceMs: 2500.7 } }).shutdown.graceMs).toBe(3000);
+  });
+
+  it("空串视同未设置（cliExe/gitExe/currentProjectId/terminal.shell → null）；未知顶层字段剥离", () => {
+    const cfg = appConfigFileSchema.parse({ cliExe: { codex: "" }, gitExe: "", currentProjectId: "", terminal: { shell: "" }, unknownTop: 1 });
+    expect(cfg.cliExe.codex).toBeNull();
+    expect(cfg.gitExe).toBeNull();
+    expect(cfg.currentProjectId).toBeNull();
+    expect(cfg.terminal.shell).toBeNull();
+    expect("unknownTop" in cfg).toBe(false);
   });
 });
