@@ -1,5 +1,6 @@
 // 用途：Main 入站 IPC 路由单测 —— zod 强制校验（非法消息明确错误码 E_SCHEMA）+ 各通道路由到 Adapter/store + AdapterError 错误码透传（spec E/#6 验收第 4 条/#7 project/session 通道；#17 kanban 七通道 + 原子关联 + tracker 推送）
 import { existsSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,7 +8,8 @@ import { AdapterError, FakeAdapter, VirtualClock, type CliAdapter } from "@kanba
 import { trackerChangeSchema } from "@kanban/ipc-schema";
 import { TrackerEngine, type TrackerChange } from "@kanban/tracker";
 import { openDatabase } from "./db";
-import { handleDiffIpc, handleIpc, type DiffIpcDeps, type IpcDeps } from "./ipc";
+import { defaultConfig, loadConfig, saveConfig, type AppConfig } from "./config";
+import { handleConfigIpc, handleDiffIpc, handleIpc, type ConfigIpcDeps, type DiffIpcDeps, type IpcDeps } from "./ipc";
 import { openMemoryService } from "./memory-service";
 import type { LogFn, LogLevel } from "./logger";
 import type { PtyHost } from "./pty-host";
@@ -23,9 +25,10 @@ afterEach(() => {
   }
 });
 
-/** 路由级 fake PTY 宿主：记录 spawn/kill 调用（PTY 行为由 pty-host.test.ts 覆盖） */
+/** 路由级 fake PTY 宿主：记录 spawn/write/kill 调用（PTY 行为由 pty-host.test.ts 覆盖） */
 function makePtyHost() {
   const spawned: Array<{ terminalId: string; cwd: string }> = [];
+  const writes: Array<{ terminalId: string; data: string }> = [];
   const killed: string[] = [];
   const running = new Set<string>();
   const host: PtyHost = {
@@ -34,7 +37,11 @@ function makePtyHost() {
       running.add(terminalId);
       return { ok: true, label: "pwsh", shell: "pwsh.exe", cwd: req.cwd };
     },
-    write: (terminalId) => (running.has(terminalId) ? { ok: true } : { ok: false, message: "终端未运行" }),
+    write: (terminalId, data) => {
+      if (!running.has(terminalId)) return { ok: false, message: "终端未运行" };
+      writes.push({ terminalId, data });
+      return { ok: true };
+    },
     resize: () => undefined,
     kill: (terminalId) => {
       killed.push(terminalId);
@@ -43,7 +50,7 @@ function makePtyHost() {
     isRunning: (terminalId) => running.has(terminalId),
     killAll: () => running.clear(),
   };
-  return { host, spawned, killed, drop: (id: string) => running.delete(id) };
+  return { host, spawned, writes, killed, drop: (id: string) => running.delete(id) };
 }
 
 /** 构造 VirtualClock 驱动的 FakeAdapter + 路由器（无持久化通道，#6 既有行为回归用） */
@@ -55,7 +62,7 @@ function makeRouter() {
 }
 
 /** 完整 deps：内存 store + 可注入的目录选择与当前项目存取（#17 起挂 TrackerEngine：kanban 通道落事件流） */
-function makeDeps(adapter: CliAdapter, pick: () => Promise<string | null> = async () => null): IpcDeps {
+function makeDeps(adapter: CliAdapter, pick: () => Promise<string | null> = async () => null, ptyHost = makePtyHost()): IpcDeps {
   const db = openDatabase(":memory:");
   let currentProjectId: string | null = null;
   return {
@@ -68,7 +75,7 @@ function makeDeps(adapter: CliAdapter, pick: () => Promise<string | null> = asyn
     setCurrentProjectId: (id) => {
       currentProjectId = id;
     },
-    pty: makePtyHost().host,
+    pty: ptyHost.host,
   };
 }
 
@@ -454,12 +461,13 @@ describe("terminal 通道（#12：terminalApi × terminalId 参数化）", () =>
     return { deps, ptyState, projDir, handle: (raw: unknown) => handleIpc(deps, raw) };
   }
 
-  it("terminal:create：spawn + pty 会话落库（kind=pty/cli=pty）+ 目录身份 + 默认标题「终端 · label」", async () => {
+  it("terminal:create：渲染端预生成 id 落库（kind=pty/cli=pty）+ 目录身份 + 默认标题「终端 · label」启动后回写", async () => {
     const { handle, ptyState, projDir } = makeTerminalRouter();
-    const created = await handle({ channel: "terminal:create", cwd: projDir, cols: 120, rows: 40 });
+    const terminalId = randomUUID(); // #60：渲染端草稿预生成的终端 id
+    const created = await handle({ channel: "terminal:create", terminalId, cwd: projDir, cols: 120, rows: 40 });
     expect(created.ok).toBe(true);
     if (created.ok) {
-      expect(created.sessionId).toBeTruthy();
+      expect(created.sessionId).toBe(terminalId); // 应用渲染端 id（单一 id 空间）
       expect(created.cli).toBe("pty");
       expect(created.title).toBe("终端 · pwsh");
       expect(created.dirIdentity).toBe("main");
@@ -469,22 +477,56 @@ describe("terminal 通道（#12：terminalApi × terminalId 参数化）", () =>
     const list = await handle({ channel: "session:list" });
     if (!list.ok) throw new Error("session:list 失败");
     expect(list.sessions).toHaveLength(1);
-    expect(list.sessions![0]).toMatchObject({ kind: "pty", cli: "pty", nativeSessionId: null, status: "idle", title: "终端 · pwsh" });
+    expect(list.sessions![0]).toMatchObject({
+      id: terminalId,
+      kind: "pty",
+      cli: "pty",
+      nativeSessionId: null,
+      status: "idle",
+      title: "终端 · pwsh",
+    });
   });
 
-  it("terminal:create spawn 失败 → E_INTERNAL 且不落库", async () => {
-    const { handle } = makeTerminalRouter({ failSpawn: true });
-    const res = await handle({ channel: "terminal:create", cwd: "C:\\p" });
+  it("terminal:create 携带 firstInput（#60 草稿首输入）：spawn 成功后重放（含中文/多字符不丢失）", async () => {
+    const { handle, ptyState } = makeTerminalRouter();
+    const terminalId = randomUUID();
+    const res = await handle({ channel: "terminal:create", terminalId, cwd: "C:\\p", firstInput: "中文abc\r" });
+    expect(res.ok).toBe(true);
+    expect(ptyState.spawned).toHaveLength(1); // 先 spawn
+    expect(ptyState.writes).toEqual([{ terminalId, data: "中文abc\r" }]); // 后重放首输入
+  });
+
+  it("terminal:create spawn 失败 → E_INTERNAL 且回删占位行（无孤儿记录：默认列表与重启均无）", async () => {
+    const { handle, deps } = makeTerminalRouter({ failSpawn: true });
+    const terminalId = randomUUID();
+    const res = await handle({ channel: "terminal:create", terminalId, cwd: "C:\\p" });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error.code).toBe("E_INTERNAL");
+    // 先落库占位→失败回删：结束后无行（直接查 store 等价「重启读回」视角）
+    expect(deps.sessions.get(terminalId)).toBeNull();
     const list = await handle({ channel: "session:list" });
     if (!list.ok) throw new Error("session:list 失败");
     expect(list.sessions).toHaveLength(0);
   });
 
+  it("terminal:create 终端 id 与既有会话冲突 → E_SESSION_EXISTS 明确报错（单一 id 空间保护，不启动进程）", async () => {
+    const { handle, ptyState } = makeTerminalRouter();
+    const terminalId = randomUUID();
+    // 预置同 id 会话行（模拟历史行/并发创建）
+    const seed = await handle({ channel: "terminal:create", terminalId, cwd: "C:\\p" });
+    expect(seed.ok).toBe(true);
+    const again = await handle({ channel: "terminal:create", terminalId, cwd: "C:\\p" });
+    expect(again.ok).toBe(false);
+    if (!again.ok) {
+      expect(again.error.code).toBe("E_SESSION_EXISTS");
+      expect(again.error.message).toContain(terminalId);
+    }
+    expect(ptyState.spawned).toHaveLength(1); // 冲突请求不 spawn
+  });
+
   it("terminal:write/resize/kill 路由：成功 ok；未运行/未知终端 → E_SESSION_NOT_FOUND", async () => {
     const { handle, ptyState } = makeTerminalRouter();
-    const created = await handle({ channel: "terminal:create", cwd: "C:\\p" });
+    const created = await handle({ channel: "terminal:create", terminalId: randomUUID(), cwd: "C:\\p" });
     const terminalId = created.ok ? created.sessionId! : "";
 
     expect((await handle({ channel: "terminal:write", terminalId, data: "echo hi\r" })).ok).toBe(true);
@@ -501,11 +543,13 @@ describe("terminal 通道（#12：terminalApi × terminalId 参数化）", () =>
     expect(ptyState.killed).toContain(terminalId);
   });
 
-  it("非法 terminal 载荷 → E_SCHEMA（缺 terminalId / 空 cwd）", async () => {
+  it("非法 terminal 载荷 → E_SCHEMA（缺 terminalId / 非 uuid 终端 id / 空 cwd）", async () => {
     const { handle } = makeTerminalRouter();
     const cases: unknown[] = [
       { channel: "terminal:write", data: "x" },
       { channel: "terminal:resize", terminalId: "t", cols: 0, rows: 30 },
+      { channel: "terminal:create", cwd: "C:\\p" }, // #60：缺渲染端预生成 terminalId
+      { channel: "terminal:create", terminalId: "not-a-uuid", cwd: "C:\\p" }, // #60：id 须与 randomUUID 同 uuid 格式
       { channel: "terminal:create", cwd: "" },
       { channel: "terminal:nuke", terminalId: "t" },
     ];
@@ -869,7 +913,7 @@ describe("kanban 通道（#17 spec #15 C 节：全量经 TrackerEngine.process �
     await r.handle({ channel: "kanban:create", projectId: pa });
 
     // 同项目：PTY 终端创建成功即关联（S2-12：pty 可 link）
-    const ok = await r.handle({ channel: "terminal:create", cwd: r.projA, projectId: pa, requirementId: "REQ-001" });
+    const ok = await r.handle({ channel: "terminal:create", terminalId: randomUUID(), cwd: r.projA, projectId: pa, requirementId: "REQ-001" });
     expect(ok.ok).toBe(true);
     if (ok.ok) {
       expect(ok.linked).toBe(true);
@@ -883,7 +927,7 @@ describe("kanban 通道（#17 spec #15 C 节：全量经 TrackerEngine.process �
 
     // 跨项目：终端仍创建成功，但 link 被拒并返回原因
     const eventsBefore = r.engine.store.snapshotTables().stageEventCount;
-    const mismatch = await r.handle({ channel: "terminal:create", cwd: r.projB, projectId: pb, requirementId: "REQ-001" });
+    const mismatch = await r.handle({ channel: "terminal:create", terminalId: randomUUID(), cwd: r.projB, projectId: pb, requirementId: "REQ-001" });
     expect(mismatch).toMatchObject({ ok: true, linked: false });
     if (mismatch.ok) expect(mismatch.reason).toContain("跨项目");
     expect(r.engine.store.snapshotTables().stageEventCount).toBe(eventsBefore); // 不落 link 事件
@@ -1176,3 +1220,281 @@ describe("diff:ipc 通道（#43 spec #40 D 节：独立单通道 + 入站 zod + 
     expect(res).toEqual({ ok: false, kind: "not-a-repo", message: "当前项目不是 git 仓库" });
   });
 });
+
+// ========== #58 会话归档通道（spec #57 D 节：归档/取消归档编排闭环） ============
+
+/** 归档编排观察 adapter：interruptTurn/dispose/adoptSession 调用全记录，行为透传底层（可选注入失败模拟「进程已死/登记失败」） */
+function spyAdapter(
+  base: CliAdapter,
+  fails: { interrupt?: boolean; dispose?: boolean; adopt?: boolean } = {},
+): { adapter: CliAdapter; calls: string[] } {
+  const calls: string[] = [];
+  const baseAdopt = base.adoptSession?.bind(base); // 闭包内调用需先收窄并绑定 this（可选成员的窄化不跨闭包保持）
+  const adapter: CliAdapter = {
+    capabilities: base.capabilities,
+    createSession: (i) => base.createSession(i),
+    sendTurn: (i) => base.sendTurn(i),
+    interruptTurn: async (id) => {
+      calls.push(`interrupt:${id}`);
+      if (fails.interrupt) throw new AdapterError("E_SESSION_NOT_FOUND", `会话不存在（模拟进程已死）：${id}`);
+      return base.interruptTurn(id);
+    },
+    resolveApproval: (i) => base.resolveApproval(i),
+    readHistory: (id) => base.readHistory(id),
+    readTranscript: (id) => base.readTranscript(id),
+    resume: (id) => base.resume(id),
+    dispose: async (i) => {
+      calls.push(`dispose:${i?.sessionId ?? "*"}`);
+      if (fails.dispose) throw new AdapterError("E_SESSION_NOT_FOUND", `会话不存在（模拟进程已死）：${i?.sessionId ?? ""}`);
+      return base.dispose(i);
+    },
+    adoptSession: baseAdopt
+      ? async (i) => {
+          calls.push(`adopt:${i.sessionId}`);
+          if (fails.adopt) throw new AdapterError("E_INTERNAL", `登记失败（注入）：${i.sessionId}`);
+          return baseAdopt(i);
+        }
+      : undefined,
+    subscribe: (h) => base.subscribe(h),
+  };
+  return { adapter, calls };
+}
+
+/** 组装归档测试路由：FakeAdapter（VirtualClock）+ spy 包装 + 真库 deps */
+function makeArchiveRouter(fails?: { interrupt?: boolean; dispose?: boolean; adopt?: boolean }) {
+  const clock = new VirtualClock();
+  const spy = spyAdapter(new FakeAdapter({ clock }), fails);
+  const deps = makeDeps(spy.adapter);
+  return { clock, spy, handle: (raw: unknown) => handleIpc(deps, raw) };
+}
+
+describe("会话归档通道（#58 spec #57）", () => {
+  it("session:archive 结构化：在跑先中断 → 受控终止单会话（dispose）→ 写归档标记；session:list 不再返回该行，archivedList 含归档时间", async () => {
+    const { clock, spy, handle } = makeArchiveRouter();
+    const created = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p", title: "调研" });
+    const sessionId = created.ok ? created.sessionId! : "";
+    await handle({ channel: "session:send", sessionId, text: "拆类型" }); // turn 进行中
+    const res = await handle({ channel: "session:archive", sessionId });
+    expect(res.ok).toBe(true);
+    expect(spy.calls[0]).toBe(`interrupt:${sessionId}`); // 顺序：先中断当前 turn
+    expect(spy.calls[1]).toBe(`dispose:${sessionId}`); // 再受控终止单会话
+    // 默认列表排除；归档视图含展示字段与归档时间
+    const listed = await handle({ channel: "session:list" });
+    expect(listed.ok && listed.sessions).toEqual([]);
+    const archived = await handle({ channel: "session:archivedList" });
+    expect(archived.ok && archived.sessions).toEqual([
+      expect.objectContaining({ id: sessionId, cli: "fake", title: "调研", archivedAt: expect.any(String) }),
+    ]);
+    // 终止后 adapter 无该会话（readHistory 报 SESSION_NOT_FOUND）
+    const read = await handle({ channel: "session:readHistory", sessionId });
+    expect(read.ok).toBe(false);
+    clock.runToIdle();
+  });
+
+  it("archive 终止失败（进程已死）不阻断归档；中断失败同样放行", async () => {
+    const { spy, handle } = makeArchiveRouter({ interrupt: true, dispose: true });
+    const created = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p" });
+    const sessionId = created.ok ? created.sessionId! : "";
+    const res = await handle({ channel: "session:archive", sessionId });
+    expect(res.ok).toBe(true);
+    expect(spy.calls).toEqual([`interrupt:${sessionId}`, `dispose:${sessionId}`]);
+    const archived = await handle({ channel: "session:archivedList" });
+    expect(archived.ok && archived.sessions).toHaveLength(1);
+  });
+
+  it("archive 未知会话 → E_SESSION_NOT_FOUND；重复归档幂等（返回成功、单条归档记录不重复）", async () => {
+    const { handle } = makeArchiveRouter();
+    const ghost = await handle({ channel: "session:archive", sessionId: "ghost" });
+    expect(ghost.ok).toBe(false);
+    if (!ghost.ok) expect(ghost.error.code).toBe("E_SESSION_NOT_FOUND");
+
+    const created = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p" });
+    const sessionId = created.ok ? created.sessionId! : "";
+    expect((await handle({ channel: "session:archive", sessionId })).ok).toBe(true);
+    expect((await handle({ channel: "session:archive", sessionId })).ok).toBe(true); // 幂等
+    const archived = await handle({ channel: "session:archivedList" });
+    expect(archived.ok && archived.sessions).toHaveLength(1);
+  });
+
+  it("archive PTY 会话：用终端终止（pty.kill），不触碰 adapter；行移出默认列表", async () => {
+    const spy = spyAdapter(new FakeAdapter({ clock: new VirtualClock() }));
+    const ptyRec = makePtyHost();
+    const deps = makeDeps(spy.adapter, async () => null, ptyRec);
+    const handle = (raw: unknown) => handleIpc(deps, raw);
+    const created = await handle({ channel: "terminal:create", terminalId: randomUUID(), cwd: "C:\\p" }); // #60：id 由渲染端预生成
+    const terminalId = created.ok ? created.sessionId! : "";
+    const res = await handle({ channel: "session:archive", sessionId: terminalId });
+    expect(res.ok).toBe(true);
+    expect(ptyRec.killed).toEqual([terminalId]); // PTY 用终端终止
+    expect(spy.calls).toEqual([]); // 不经 adapter dispose/interrupt
+    const listed = await handle({ channel: "session:list" });
+    expect(listed.ok && listed.sessions).toEqual([]);
+  });
+
+  it("session:unarchive 结构化：先 adopt 登记可恢复句柄 → 清标记刷新活跃时间；回默认列表（disconnected）、readHistory/resume 仍可用", async () => {
+    const { spy, handle } = makeArchiveRouter();
+    const created = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p", permMode: "auto" });
+    const sessionId = created.ok ? created.sessionId! : "";
+    await handle({ channel: "session:archive", sessionId });
+    const res = await handle({ channel: "session:unarchive", sessionId });
+    expect(res.ok).toBe(true);
+    expect(spy.calls).toContain(`adopt:${sessionId}`); // 取消归档先重新登记
+    const listed = await handle({ channel: "session:list" });
+    expect(listed.ok && listed.sessions).toEqual([
+      expect.objectContaining({ id: sessionId, status: "disconnected", archivedAt: null, lastActiveAt: expect.any(String) }),
+    ]);
+    const read = await handle({ channel: "session:readHistory", sessionId }); // adopt 后句柄可达
+    expect(read.ok).toBe(true);
+    const resume = await handle({ channel: "session:resume", sessionId });
+    expect(resume.ok).toBe(true);
+  });
+
+  it("unarchive 登记失败：留在归档态并明确报错（可重试），不写活跃时间", async () => {
+    const { spy, handle } = makeArchiveRouter({ adopt: true });
+    const created = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p" });
+    const sessionId = created.ok ? created.sessionId! : "";
+    await handle({ channel: "session:archive", sessionId });
+    const res = await handle({ channel: "session:unarchive", sessionId });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.message).toContain("登记失败");
+    expect(spy.calls).toContain(`adopt:${sessionId}`);
+    // 留在归档态：归档视图仍含该行、默认列表仍排除
+    const archived = await handle({ channel: "session:archivedList" });
+    expect(archived.ok && archived.sessions).toEqual([
+      expect.objectContaining({ id: sessionId, lastActiveAt: null }),
+    ]);
+    const listed = await handle({ channel: "session:list" });
+    expect(listed.ok && listed.sessions).toEqual([]);
+  });
+
+  it("unarchive PTY：无进程恢复（不走 adapter adopt），回列表显示已断开", async () => {
+    const spy = spyAdapter(new FakeAdapter({ clock: new VirtualClock() }));
+    const deps = makeDeps(spy.adapter);
+    const handle = (raw: unknown) => handleIpc(deps, raw);
+    const created = await handle({ channel: "terminal:create", terminalId: randomUUID(), cwd: "C:\\p" }); // #60：id 由渲染端预生成
+    const terminalId = created.ok ? created.sessionId! : "";
+    await handle({ channel: "session:archive", sessionId: terminalId });
+    const res = await handle({ channel: "session:unarchive", sessionId: terminalId });
+    expect(res.ok).toBe(true);
+    expect(spy.calls).toEqual([]); // PTY 无 adopt
+    const listed = await handle({ channel: "session:list" });
+    expect(listed.ok && listed.sessions).toEqual([
+      expect.objectContaining({ id: terminalId, kind: "pty", status: "disconnected" }),
+    ]);
+  });
+
+  it("unarchive 未知会话 → E_SESSION_NOT_FOUND；重复取消归档幂等（活跃时间不重置）", async () => {
+    const { handle } = makeArchiveRouter();
+    const ghost = await handle({ channel: "session:unarchive", sessionId: "ghost" });
+    expect(ghost.ok).toBe(false);
+    if (!ghost.ok) expect(ghost.error.code).toBe("E_SESSION_NOT_FOUND");
+
+    const created = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p" });
+    const sessionId = created.ok ? created.sessionId! : "";
+    const again = await handle({ channel: "session:unarchive", sessionId }); // 本就未归档：no-op 成功
+    expect(again.ok).toBe(true);
+    const listed = await handle({ channel: "session:list" });
+    // 创建时 lastActiveAt=null，no-op 取消归档不得凭空写入活跃时间
+    expect(listed.ok && listed.sessions).toEqual([expect.objectContaining({ id: sessionId, lastActiveAt: null })]);
+  });
+
+  it("archivedList：跨项目全部已归档行（含 PTY），按归档时间倒序，wire 行带展示字段", async () => {
+    const spy = spyAdapter(new FakeAdapter({ clock: new VirtualClock() }));
+    const ptyRec = makePtyHost();
+    const deps = makeDeps(spy.adapter, async () => null, ptyRec);
+    const handle = (raw: unknown) => handleIpc(deps, raw);
+    const s1 = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p", title: "A" });
+    const tty = await handle({ channel: "terminal:create", terminalId: randomUUID(), cwd: "C:\\p" }); // #60：id 由渲染端预生成
+    await handle({ channel: "session:archive", sessionId: s1.ok ? s1.sessionId! : "" });
+    await handle({ channel: "session:archive", sessionId: tty.ok ? tty.sessionId! : "" });
+    const archived = await handle({ channel: "session:archivedList" });
+    const rows = archived.ok ? archived.sessions! : [];
+    expect(rows.map((r) => r.kind)).toEqual(["pty", "structured"]); // 后归档在前
+    for (const r of rows) {
+      expect(r.archivedAt).toBeTruthy();
+      expect(r.title !== undefined).toBe(true);
+      expect(r.cli.length).toBeGreaterThan(0);
+    }
+  });
+});
+describe("config:ipc 通道（#61 spec #57 配置链路：读 autoArchive 子集 / 写字段级合并 + 先持久化成功再改内存）", () => {
+  /** config 专用路由：真实 AppConfig 对象（getConfig 恒返回同一引用 = Main 内存态）+ 可注入抛错的 persist */
+  function makeConfigRouter(opts: { persistThrows?: Error } = {}) {
+    const config: AppConfig = { ...defaultConfig(), currentProjectId: "p-1" };
+    const persisted: AppConfig[] = [];
+    const deps: ConfigIpcDeps = {
+      getConfig: () => config,
+      persist: (c) => {
+        if (opts.persistThrows) throw opts.persistThrows;
+        persisted.push(c);
+      },
+      isShuttingDown: () => false,
+    };
+    return { config, persisted, handle: (raw: unknown) => handleConfigIpc(deps, raw) };
+  }
+
+  it("非法请求 → E_SCHEMA；退出门闸 → E_INTERNAL（对齐 diff:ipc 门闸惯例）", async () => {
+    const { handle } = makeConfigRouter();
+    const schema = await handle({ channel: "config:nuke" });
+    expect(schema).toEqual({ ok: false, error: { code: "E_SCHEMA", message: expect.any(String) } });
+    const badDays = await handle({ channel: "config:set", autoArchive: { enabled: true, days: 0 } });
+    expect(badDays).toEqual({ ok: false, error: { code: "E_SCHEMA", message: expect.any(String) } });
+  });
+
+  it("config:get 返回 autoArchive 子集（默认关/30；不携带项目/CLI 路径等其余配置字段）", async () => {
+    const { handle, config } = makeConfigRouter();
+    const res = await handle({ channel: "config:get" });
+    expect(res).toEqual({ ok: true, autoArchive: { enabled: false, days: 30 } });
+    expect(config.autoArchive).toEqual({ enabled: false, days: 30 }); // 只读不写
+  });
+
+  it("config:set 合法值：先持久化再改内存 —— persist 收到完整配置（autoArchive 新值生效、currentProjectId 等其余字段原样保留）", async () => {
+    const { handle, config, persisted } = makeConfigRouter();
+    const res = await handle({ channel: "config:set", autoArchive: { enabled: true, days: 14 } });
+    expect(res).toEqual({ ok: true, autoArchive: { enabled: true, days: 14 } });
+    expect(persisted.length).toBe(1);
+    // persist 收到的是含新 autoArchive 的完整配置：与项目切换的写入互不覆盖（currentProjectId 不被清/不被越权值替换）
+    expect(persisted[0]).toMatchObject({ currentProjectId: "p-1", autoArchive: { enabled: true, days: 14 } });
+    // 写盘成功后内存对象（getConfig 同一引用）才更新
+    expect(config.autoArchive).toEqual({ enabled: true, days: 14 });
+  });
+
+  it("写盘失败：返回明确错误（E_INTERNAL + message）且新值不生效 —— 内存对象未被改（内存与磁盘不分叉）", async () => {
+    const { handle, config, persisted } = makeConfigRouter({ persistThrows: new Error("EACCES: permission denied") });
+    const res = await handle({ channel: "config:set", autoArchive: { enabled: true, days: 7 } });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.code).toBe("E_INTERNAL");
+      expect(res.error.message).toContain("EACCES");
+    }
+    expect(config.autoArchive).toEqual({ enabled: false, days: 30 }); // 新值不生效
+    expect(persisted.length).toBe(0);
+  });
+
+  it("config:set 携带越权字段（currentProjectId/gitExe）被剥离：持久化值来自内存对象而非请求", async () => {
+    const { handle, persisted } = makeConfigRouter();
+    const res = await handle({
+      channel: "config:set",
+      autoArchive: { enabled: true, days: 60 },
+      currentProjectId: "p-evil",
+      gitExe: "C:/evil/git.exe",
+    });
+    expect(res.ok).toBe(true);
+    expect(persisted[0]?.currentProjectId).toBe("p-1"); // 越权值不落盘
+    expect(persisted[0]?.gitExe).toBeNull();
+  });
+
+  it("真实写盘往返（重启后生效）：saveConfig 落 tmp 文件 → loadConfig 读回新 autoArchive 与既有 currentProjectId", async () => {
+    const config: AppConfig = { ...defaultConfig(), currentProjectId: "p-2" };
+    const configPath = join(tmpRoot || (tmpRoot = mkdtempSync(join(tmpdir(), "kb-config-ipc-"))), "config.json");
+    const handle = (raw: unknown) =>
+      handleConfigIpc({ getConfig: () => config, persist: (c) => saveConfig(configPath, c), isShuttingDown: () => false }, raw);
+    const res = await handle({ channel: "config:set", autoArchive: { enabled: true, days: 90 } });
+    expect(res.ok).toBe(true);
+    // 重启读入侧：autoArchive 新值生效，项目切换写入的 currentProjectId 不被本次写覆盖
+    const reloaded = loadConfig(configPath);
+    expect(reloaded.autoArchive).toEqual({ enabled: true, days: 90 });
+    expect(reloaded.currentProjectId).toBe("p-2");
+  });
+});
+

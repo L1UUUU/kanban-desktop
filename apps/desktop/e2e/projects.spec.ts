@@ -78,10 +78,14 @@ test("注册项目 → 新建会话（主仓库徽标）→ 重启完整恢复�
     await expect(first.win.getByText("Codex")).toBeVisible();
     await expect(first.win.getByText("OpenCode")).toBeVisible();
     await expect(first.win.getByRole("button", { name: /PTY 终端/ })).toBeVisible();
-    // PTY 项新建终端会话（#12 实体）：PTY 分组出现会话行 + xterm 面板挂起
+    // PTY 项打开终端草稿（#60：不落库、不进侧栏）；首个键入触发创建 → 会话行 + xterm 面板挂起
     await first.win.getByRole("button", { name: /PTY 终端/ }).click();
-    await expect(first.win.getByText(/^终端 · /).first()).toBeVisible({ timeout: 10_000 });
+    await expect(first.win.getByText(/终端草稿 · 尚未启动进程/)).toBeVisible({ timeout: 10_000 });
     await expect(first.win.locator(".xterm").first()).toBeVisible({ timeout: 10_000 });
+    // PTY 草稿首键入触发创建（#60）→ 会话行出现
+    await first.win.locator(".xterm").first().click();
+    await first.win.keyboard.type("x");
+    await expect(first.win.getByText(/^终端 · /).first()).toBeVisible({ timeout: 15_000 });
     // 切回 Claude 会话建结构化会话（PTY 已占位激活，重新 hover 打开菜单；#59 草稿发首条才建）
     await createSession(first.win, "Claude");
     // 主仓库徽标（cwd 为 Main 侧 canonical 化后的路径，用正则断言；PTY 终端行同徽标 → first）

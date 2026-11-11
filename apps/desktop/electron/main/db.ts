@@ -18,8 +18,8 @@ const DatabaseCtor = (typeof exportsRecord.Database === "function"
 export const SQLITE_ENTRY: "Database" | "DatabaseSync" =
   typeof exportsRecord.Database === "function" ? "Database" : "DatabaseSync";
 
-/** 当前 C3 基线版本号（#30 起 v3：memory 三表，spec #27 D 节；DDL/迁移由 @kanban/memory 导出） */
-export const SCHEMA_VERSION = 3;
+/** 当前 C3 基线版本号（#30 起 v3：memory 三表，spec #27 D 节；#58 起 v4：sessions.archived_at 归档列，spec #57 D 节） */
+export const SCHEMA_VERSION = 4;
 
 /** C3 表结构：projects/sessions 按 C3 列清单；requirements/stage_events 沿用 poc-4 冻结 DDL（#16 v2 起 requirements 加 project_id，新库直建 v2 形态；老库由 migrateToV2 在单事务内 ALTER） */
 const SCHEMA_SQL = `
@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   perm_mode TEXT,
   status TEXT,
   last_active_at TEXT,
+  archived_at TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
@@ -94,6 +95,7 @@ export function openDatabase(dbPath: string): SqliteDatabase {
     ensureSchema(db);
     migrateToV2(db);
     migrateMemoryToV3(db); // v3：memory 三表（#30，spec #27 D 节；tracker store.ts 先例——DDL/迁移随包）
+    migrateSessionsToV4(db); // v4：sessions 归档列（#58，spec #57 D 节）
     return db;
   } catch (err) {
     db.close(); // 迁移失败连接不外泄（Windows 文件锁）
@@ -184,4 +186,25 @@ export function listTables(db: SqliteDatabase): string[] {
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
     .all() as unknown as Array<{ name: string }>;
   return rows.map((r) => r.name);
+}
+
+/**
+ * 迁移 v4（#58，spec #57 D 节）：sessions 加 archived_at 可空时间戳列（NULL=未归档）。
+ * 纯加列不回填（现存行全部保持未归档）；DDL 与版本登记在单事务内（中断被杀 SQLite 自动回滚，重入幂等）。
+ */
+function migrateSessionsToV4(db: SqliteDatabase): void {
+  const recorded = (db.prepare("SELECT count(*) AS n FROM schema_migrations WHERE version = 4").get() as { n: number }).n;
+  if (recorded > 0) return; // 已迁移（或迁移后建的新库二次打开）
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const cols = (db.prepare("PRAGMA table_info(sessions)").all() as unknown as Array<{ name: string }>).map((r) => r.name);
+    if (!cols.includes("archived_at")) db.exec("ALTER TABLE sessions ADD COLUMN archived_at TEXT");
+    db
+      .prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (4, 'v4-sessions-archived', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))")
+      .run();
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
 }

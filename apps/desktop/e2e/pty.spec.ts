@@ -1,4 +1,4 @@
-// 用途：PTY 终端全链 E2E（#12 验收第 2 条 + 工单 E2E 项）—— 真实 ConPTY PowerShell：新建 → 键入回显 → 切结构化会话再切回（终端内容保留、进程仍活）→ 显式停止 → 重启恢复断开态条目
+// 用途：PTY 终端全链 E2E（#12 验收第 2 条 + 工单 E2E 项；#60 草稿语义）—— 真实 ConPTY PowerShell：点「＋」只开草稿（不落库不进侧栏）→ 首个键入触发创建 → 回显 → 切结构化会话再切回（终端内容保留、进程仍活）→ 显式停止 → 重启恢复断开态条目
 import { test, expect, _electron, type ElectronApplication, type Page } from "@playwright/test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -51,11 +51,11 @@ async function typeInTerminal(win: Page, line: string): Promise<void> {
   await win.keyboard.press("Enter");
 }
 
-test("PTY 终端：新建 → 回显 → 切结构化会话再切回（内容保留/进程仍活）→ 停止 → 重启恢复断开态", async () => {
+test("PTY 终端：草稿 → 首输入创建 → 回显 → 切结构化会话再切回（内容保留/进程仍活）→ 停止 → 重启恢复断开态", async () => {
   const { userData, repoDir } = makeFixture();
   const repoRoot = join(repoDir, "..");
   try {
-    // —— 第一次启动：注册项目 → 「＋」建 PTY 终端（真实 PowerShell）
+    // —— 第一次启动：注册项目 → 「＋」PTY 项只打开终端草稿（#60：不落库、不进侧栏、不起进程）
     const first = await launchApp(userData, repoDir);
     await first.win.getByRole("button", { name: "＋ 注册", exact: true }).click();
     await expect(first.win.locator("aside").getByText(PROJECT_NAME, { exact: true })).toBeVisible({ timeout: 15_000 });
@@ -64,13 +64,15 @@ test("PTY 终端：新建 → 回显 → 切结构化会话再切回（内容保
     await first.win.getByRole("button", { name: "＋", exact: true }).click();
     await first.win.getByRole("button", { name: /PTY 终端/ }).click();
 
-    // PTY 分组出现会话行（默认 shell 探测：pwsh/powershell）+ xterm 面板挂起 + 空闲徽标
-    await expect(first.win.getByText(/^终端 · /).first()).toBeVisible({ timeout: 15_000 });
+    // 草稿态：提示可见 + xterm 面板可交互 + 侧栏 PTY 分组仍为空态
+    await expect(first.win.getByText(/终端草稿 · 尚未启动进程/)).toBeVisible({ timeout: 15_000 });
     await expect(first.win.locator(".xterm").first()).toBeVisible({ timeout: 15_000 });
-    await expect(first.win.getByText("空闲").first()).toBeVisible();
+    await expect(first.win.getByText("暂无终端会话")).toBeVisible();
 
-    // 键入回显（真实 ConPTY：输入经 terminal:write → PTY → 输出流回 xterm DOM 渲染）
+    // 首个键入触发创建（真实 ConPTY；首输入由 Main 重放不丢失）→ PTY 分组出现会话行 + 空闲徽标 + 回显可见
     await typeInTerminal(first.win, "echo kb-pty-marker-1");
+    await expect(first.win.getByText(/^终端 · /).first()).toBeVisible({ timeout: 15_000 });
+    await expect(first.win.getByText("空闲").first()).toBeVisible();
     await expect(first.win.getByText(/kb-pty-marker-1/).first()).toBeVisible({ timeout: 20_000 });
 
     // 建结构化会话并切换（#59 草稿：发首条消息才建）：PTY 面板卸载（xterm 元素消失），PTY 会话行保留

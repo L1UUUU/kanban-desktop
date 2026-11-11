@@ -242,13 +242,6 @@ export class ChatStore {
     if (!wasActive) this.changed(); // 激活变化必通知；点已激活行时仅草稿丢弃自身按需通知
   }
 
-  /** #59：移除会话视图（session:create+firstMessage 失败回滚时撤销事件先至的占位行；不留空会话） */
-  removeSession(id: string): void {
-    if (!this.sessions.delete(id)) return;
-    if (this.activeId === id) this.activeId = null;
-    this.changed();
-  }
-
   /** #59：打开草稿（全局仅一个：已有草稿则替换并置 replacedHint；返回是否发生了替换） */
   openDraft(meta: DraftMeta): boolean {
     const replaced = this.draft !== null;
@@ -293,6 +286,19 @@ export class ChatStore {
   clearDraftSubmitError(): void {
     if (!this.draft?.submitError) return;
     this.draft.submitError = null;
+    this.changed();
+  }
+
+  /** #58 移除会话行（归档/删除编排的 renderer 侧）：移除的是激活会话时切到排序中的下一条，无则上一条，全无则空态；
+   *  #59 复用：session:create+firstMessage 发送失败回滚时撤销事件先至的占位行（不留空会话） */
+  removeSession(id: string): void {
+    if (!this.sessions.has(id)) return;
+    const order = [...this.sessions.keys()];
+    const ix = order.indexOf(id);
+    this.sessions.delete(id);
+    if (this.activeId === id) {
+      this.activeId = order[ix + 1] ?? order[ix - 1] ?? null;
+    }
     this.changed();
   }
 

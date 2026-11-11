@@ -37,6 +37,7 @@ function mount(props: Partial<Parameters<typeof Sidebar>[0]> = {}) {
   const onCreateSession = vi.fn();
   const onCreatePtySession = vi.fn();
   const onKillTerminal = vi.fn();
+  const onArchiveSession = vi.fn();
   render(
     <Sidebar
       projects={[]}
@@ -49,10 +50,11 @@ function mount(props: Partial<Parameters<typeof Sidebar>[0]> = {}) {
       onCreateSession={onCreateSession}
       onCreatePtySession={onCreatePtySession}
       onKillTerminal={onKillTerminal}
+      onArchiveSession={onArchiveSession}
       {...props}
     />,
   );
-  return { onSelectProject, onRegisterProject, onCreateSession, onCreatePtySession, onKillTerminal };
+  return { onSelectProject, onRegisterProject, onCreateSession, onCreatePtySession, onKillTerminal, onArchiveSession };
 }
 
 describe("侧栏项目区（原型一致项 2）", () => {
@@ -177,6 +179,27 @@ describe("侧栏会话区（原型一致项 3）", () => {
     // 点击 PTY 行切换激活（与结构化会话并列切换）
     fireEvent.click(screen.getByText("终端 · claude"));
     expect(onSelect).toHaveBeenCalledWith("tty-2");
+  });
+});
+
+describe("侧栏会话行 hover「归档」（#58 spec #57）", () => {
+  it("结构化与 PTY 行均提供归档操作，点击触发 onArchiveSession", () => {
+    const onArchiveSession = vi.fn();
+    mount({
+      projects: [P1],
+      currentProjectId: "p-1",
+      sessions: [
+        makeSession(),
+        makeSession({ sessionId: "tty-1", cli: "pty", title: "终端 · pwsh", status: "idle", projectId: "p-1" }),
+      ],
+      onArchiveSession,
+    });
+    const btns = screen.getAllByTitle("归档（移出默认列表，可在设置找回）");
+    expect(btns).toHaveLength(2); // 结构化 + PTY 行同款 hover 操作
+    fireEvent.click(btns[0]);
+    expect(onArchiveSession).toHaveBeenCalledWith("s-1");
+    fireEvent.click(btns[1]);
+    expect(onArchiveSession).toHaveBeenCalledWith("tty-1");
   });
 });
 

@@ -12,8 +12,11 @@ export const terminalCommandSchema = z.object({
 });
 export type TerminalCommand = z.infer<typeof terminalCommandSchema>;
 
-// terminal:create 请求载荷（cwd 必填=终端工作目录；cols/rows 初始尺寸缺省 80×30）
+// terminal:create 请求载荷（cwd 必填=终端工作目录；cols/rows 初始尺寸缺省 80×30）。
+// #60（spec #57 PTY 草稿）：terminalId 由渲染端预生成（草稿在首输入触发创建时携带，Main 按 uuid 同格式校验保护单一 id 空间）；
+// firstInput 为草稿期缓冲的首输入（含多字符/中文，Main 启动成功后重放，首输入不丢失）
 export const terminalCreatePayloadSchema = z.object({
+  terminalId: z.uuid(),
   cwd: z.string().min(1),
   cols: z.number().int().positive().optional(),
   rows: z.number().int().positive().optional(),
@@ -22,6 +25,8 @@ export const terminalCreatePayloadSchema = z.object({
   title: z.string().min(1).optional(),
   /** #20（spec #15 C/D 节）：从需求卡片建 PTY 终端时创建成功后由 Main 原子落 link 事件（与 session:create+requirementId 同语义） */
   requirementId: z.string().min(1).optional(),
+  /** #60：草稿首输入缓冲（创建成功后由 Main 写入 PTY） */
+  firstInput: z.string().optional(),
 });
 export type TerminalCreatePayload = z.infer<typeof terminalCreatePayloadSchema>;
 

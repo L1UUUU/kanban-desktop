@@ -28,6 +28,8 @@ export interface ChatControllerActions {
   setModel(model: string): void;
   /** 断开会话「读取原生历史并恢复」：readHistory 快照重建消息流 → resume 重连（状态经实时事件流回 idle） */
   resumeSession(sessionId: string): Promise<void>;
+  /** #58 归档会话（侧栏 hover「归档」）：Main 编排中断+终止+写标记；成功后本地移除行（含激活切换），失败在该会话上报错 */
+  archiveSession(sessionId: string): Promise<void>;
   /** #21：关闭同名 skill 冲突提示条（仅隐藏不影响会话） */
   dismissSkillConflict(sessionId: string): void;
 }
@@ -222,6 +224,15 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
         if (!r2.ok) {
           store.markResumeFailed(sessionId, r2.error.code, r2.error.message);
           window.api?.log?.("error", "chat", "会话恢复失败（resume）", { sessionId, code: r2.error.code, message: r2.error.message });
+        }
+      },
+      archiveSession: async (sessionId) => {
+        if (!transport) return;
+        const r = await transport.invoke({ channel: "session:archive", sessionId });
+        if (r.ok) store.removeSession(sessionId);
+        else {
+          store.setError(sessionId, r.error.code, r.error.message);
+          window.api?.log?.("error", "chat", "会话归档失败", { sessionId, code: r.error.code, message: r.error.message });
         }
       },
     };

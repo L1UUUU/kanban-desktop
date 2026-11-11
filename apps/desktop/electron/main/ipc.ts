@@ -1,12 +1,13 @@
 // 用途：Main 入站 IPC 路由 —— 单通道 kanban:ipc 强制 zod 校验 + 分发到 CliAdapter 与 projects/sessions store + PTY 宿主（纯函数无 Electron 依赖：dialog 与 config 经 deps 注入）
-// 行数评估（~560 行，超 500 行阈值）：app:getInfo + 四个 :ipc 通道（kanban/memory/diff/residue）的 handler 聚合是既有装配模式（共享单通道校验、deps 注入与 store 装配，拆开只搬文件不减耦合），本次不拆；触发条件：第六个 IPC 通道（或任一通道 handler 独立逻辑显著膨胀）加入时按通道拆分为独立模块。
-import { randomUUID } from "node:crypto";
+// 行数评估（~660 行，超 500 行阈值）：app:getInfo + 五个 :ipc 通道（kanban/memory/diff/residue/config）的 handler 聚合是既有装配模式（共享单通道校验、deps 注入与 store 装配，拆开只搬文件不减耦合），本次不拆；触发条件：第六个 IPC 通道（或任一通道 handler 独立逻辑显著膨胀）加入时按通道拆分为独立模块。
 import { homedir } from "node:os";
 import {
+  configRequestSchema,
   diffRequestSchema,
   ipcRequestSchema,
   memoryRequestSchema,
   residueRequestSchema,
+  type ConfigResult,
   type DiffResult,
   type IpcRequest,
   type IpcResult,
@@ -18,6 +19,7 @@ import {
 } from "@kanban/ipc-schema";
 import { AdapterError, detectSkillConflicts, resolveUserClaudeDir, type CliAdapter } from "@kanban/cli-host";
 import { TrackerEngine, formatRequirementId, type Cli, type NormalizedEvent, type TrackerChange } from "@kanban/tracker";
+import type { AppConfig } from "./config";
 import { detectDirIdentity } from "./git-identity";
 import type { WorkspaceDiff } from "./git-diff-service";
 import type { LogFn } from "./logger";
@@ -120,6 +122,47 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
       const rows = deps.sessions.list(req.projectId).map(toSessionRow);
       return { ok: true, sessions: rows };
     }
+    case "session:archivedList": {
+      // #58 归档视图（设置面板用）：含归档时间等展示字段
+      return { ok: true, sessions: deps.sessions.listArchived().map(toSessionRow) };
+    }
+    case "session:archive": {
+      // #58 归档编排（spec #57 D 节）：中断当前 turn（interruptTurn 幂等，无活动 turn 自然 no-op）→
+      // 受控终止单会话（PTY 用终端终止）→ 写归档标记；终止失败（进程已死等）不阻断归档；重复归档幂等（不重复编排）
+      const rec = deps.sessions.get(req.sessionId);
+      if (!rec) return sessionNotFound(req.sessionId);
+      if (rec.archivedAt == null) {
+        if (rec.kind === "pty") deps.pty.kill(rec.id);
+        else {
+          await bestEffort(() => deps.adapter.interruptTurn(rec.id), deps, `归档前中断失败（放行）：${rec.id}`);
+          await bestEffort(() => deps.adapter.dispose({ sessionId: rec.id }), deps, `归档终止失败（放行）：${rec.id}`);
+        }
+        deps.sessions.archive(rec.id, nowIso());
+      }
+      return { ok: true };
+    }
+    case "session:unarchive": {
+      // #58 取消归档编排：先重新登记可恢复句柄（adopt）→ 成功才清标记并刷新活跃时间；失败留在归档态报错（可重试）。
+      // PTY 无进程恢复能力（与重启后行为一致）：仅清标记回列表显示已断开
+      const rec = deps.sessions.get(req.sessionId);
+      if (!rec) return sessionNotFound(req.sessionId);
+      if (rec.archivedAt != null) {
+        if (rec.kind === "structured") {
+          if (!deps.adapter.adoptSession) {
+            return { ok: false, error: { code: "E_INTERNAL", message: `当前 CLI 不支持会话收养，无法取消归档：${rec.cli}` } };
+          }
+          await deps.adapter.adoptSession({
+            sessionId: rec.id,
+            nativeSessionId: rec.nativeSessionId ?? "",
+            cwd: rec.cwd ?? "",
+            permMode: rec.permMode ?? undefined,
+            cli: rec.cli,
+          });
+        }
+        deps.sessions.unarchive(rec.id, nowIso());
+      }
+      return { ok: true };
+    }
     case "session:create": {
       const { sessionId, nativeSessionId } = await deps.adapter.createSession({
         cwd: req.cwd,
@@ -141,6 +184,7 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
         permMode: req.permMode ?? "auto",
         status: "idle",
         lastActiveAt: null,
+        archivedAt: null,
       });
       // #59（spec #57）：草稿首条消息 —— 创建+发送原子化：发送失败受控终止并回滚删除已插记录（不留空会话），错误直达调用方
       if (req.firstMessage !== undefined) {
@@ -201,27 +245,38 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
       await deps.adapter.resume(req.sessionId);
       return { ok: true };
     // PTY 终端通道（spec E/H：切换/关标签不停止；kill 为用户显式停止的唯一入口）
+    // #60（spec #57 PTY 草稿）：terminalId 由渲染端预生成（uuid 格式经契约校验）；先落库占位 → 启动进程 → 失败回删（无孤儿记录）；firstInput 为草稿缓冲的首输入，启动成功后重放
     case "terminal:create": {
-      const terminalId = randomUUID();
-      const spawned = deps.pty.spawn(terminalId, { cwd: req.cwd, cols: req.cols ?? 80, rows: req.rows ?? 30, command: req.command });
-      if (!spawned.ok) {
-        return { ok: false, error: { code: "E_INTERNAL", message: spawned.message } };
+      const terminalId = req.terminalId;
+      if (deps.sessions.get(terminalId)) {
+        return { ok: false, error: { code: "E_SESSION_EXISTS", message: `终端 id 已存在：${terminalId}（会话 id 空间冲突）` } };
       }
-      const title = req.title ?? `终端 · ${spawned.label}`;
-      const identity = detectDirIdentity(req.cwd);
+      // 先落库占位（占位标题在 spawn 成功后回写为「终端 · shell」；启动失败整行回删）
       deps.sessions.insert({
         id: terminalId,
         kind: "pty",
         cli: "pty",
         nativeSessionId: null,
         projectId: req.projectId ?? null,
-        title,
+        title: req.title ?? "终端",
         cwd: req.cwd,
         permMode: null,
         status: "idle",
         lastActiveAt: null,
+        archivedAt: null,
       });
-      // #20（spec #15 C/D 节）：从需求卡片建 PTY 终端——创建成功后原子落 link 事件（与 session:create+requirementId 同语义）
+      const spawned = deps.pty.spawn(terminalId, { cwd: req.cwd, cols: req.cols ?? 80, rows: req.rows ?? 30, command: req.command });
+      if (!spawned.ok) {
+        deps.sessions.delete(terminalId); // 回删占位行：默认列表与重启均无该会话
+        return { ok: false, error: { code: "E_INTERNAL", message: spawned.message } };
+      }
+      const title = req.title ?? `终端 · ${spawned.label}`;
+      if (title !== (req.title ?? "终端")) deps.sessions.updateTitle(terminalId, title);
+      // 草稿首输入重放（含多字符/中文，首输入不丢失；失败路径已提前 return 不会写进未启动的终端）
+      if (req.firstInput) deps.pty.write(terminalId, req.firstInput);
+      const identity = detectDirIdentity(req.cwd);
+      // #20（spec #15 C/D 节）：从需求卡片建 PTY 终端——创建成功后原子落 link 事件（与 session:create+requirementId 同语义；
+      // #60 起关联随首输入触发的创建一并落）
       const linkedResult = req.requirementId
         ? linkAfterCreate(deps, terminalId, req.requirementId, req.projectId ?? null, "pty")
         : undefined;
@@ -357,9 +412,24 @@ function toSessionRow(rec: ReturnType<SessionStore["list"]>[number]): SessionRow
     permMode: rec.permMode,
     status: rec.status,
     lastActiveAt: rec.lastActiveAt,
+    archivedAt: rec.archivedAt,
     dirIdentity: identity.kind,
     worktreeName: identity.kind === "worktree" ? identity.name : null,
   };
+}
+
+/** #58 归档编排的 best-effort 步骤：失败只记日志不阻断（进程已死等不应挡住归档） */
+async function bestEffort(fn: () => Promise<void>, deps: IpcDeps, context: string): Promise<void> {
+  try {
+    await fn();
+  } catch (err) {
+    deps.log?.("warn", "kanban:ipc", `${context}：${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/** #58 未知会话 → E_SESSION_NOT_FOUND（session:archive / session:unarchive 共用） */
+function sessionNotFound(sessionId: string): IpcResult {
+  return { ok: false, error: { code: "E_SESSION_NOT_FOUND", message: `会话不存在：${sessionId}` } };
 }
 
 // ============ #17 kanban 通道辅助（spec #15 C 节） ============
@@ -607,5 +677,50 @@ export async function handleDiffIpc(deps: DiffIpcDeps, raw: unknown): Promise<Di
     // #53：记一条 error 后原样 rethrow（既有异常向 ipcMain.handle 传播的行为不变，不吞不造码）
     deps.log?.("error", "diff:ipc", `处理异常：${err instanceof Error ? err.message : String(err)}`);
     throw err;
+  }
+}
+
+// ============ #61 config:ipc 通道（spec #57 配置链路，对齐 diff:ipc 独立单通道先例：读 autoArchive 子集 / 写字段级合并 + 先持久化成功再改内存） ============
+
+/** config:ipc 路由依赖：内存配置对象 + 全量持久化（getConfig/persist 由 index.ts 经闭包注入，测试替换 fixture） */
+export interface ConfigIpcDeps {
+  /** 当前内存配置（Main 闭包对象，恒返回同一引用；写盘成功后由 handler 原地更新其 autoArchive 字段，其余字段一律不触碰） */
+  getConfig(): AppConfig;
+  /** 持久化完整配置（生产 = saveConfig 全量写回；抛错即写盘失败，新值不生效） */
+  persist(config: AppConfig): void;
+  /** 退出序列门闸（true=正在退出，拒绝新请求；缺省恒 false 供测试） */
+  isShuttingDown?(): boolean;
+  /** #53 惯例：safeParse 失败与 persist 抛错记 error；缺省 no-op */
+  log?: LogFn;
+}
+
+/** 处理一条 config:ipc 入站请求：zod 强制校验 → 退出门闸 → 读子集 / 写先持久化成功再改内存（失败明确报错，内存与磁盘不分叉） */
+export async function handleConfigIpc(deps: ConfigIpcDeps, raw: unknown): Promise<ConfigResult> {
+  const parsed = configRequestSchema.safeParse(raw);
+  if (!parsed.success) {
+    deps.log?.("error", "config:ipc", `入站请求不符合契约（E_SCHEMA）：${summarizeIssues(parsed.error.issues)}`);
+    return { ok: false, error: { code: "E_SCHEMA", message: summarizeIssues(parsed.error.issues) } };
+  }
+  if (deps.isShuttingDown?.()) {
+    return { ok: false, error: { code: "E_INTERNAL", message: "应用正在退出，已停止接收新请求" } };
+  }
+  try {
+    switch (parsed.data.channel) {
+      case "config:get":
+        return { ok: true, autoArchive: deps.getConfig().autoArchive };
+      case "config:set": {
+        const current = deps.getConfig();
+        // 先持久化成功再改内存：persist 抛错进 catch（返回明确错误，内存对象未动，新值不生效）；
+        // 写仅开放 autoArchive 子集 —— 持久化对象由内存配置字段级合并而来，项目/CLI 路径等其余字段不受请求影响
+        deps.persist({ ...current, autoArchive: parsed.data.autoArchive });
+        current.autoArchive = parsed.data.autoArchive;
+        return { ok: true, autoArchive: current.autoArchive };
+      }
+    }
+  } catch (err) {
+    // 写盘失败不 rethrow：配置保存是用户可见的可重试动作，返回明确错误直达调用方（新值不生效）
+    const message = err instanceof Error ? err.message : String(err);
+    deps.log?.("error", "config:ipc", `配置保存失败（新值不生效）：${message}`);
+    return { ok: false, error: { code: "E_INTERNAL", message: `配置保存失败，新值未生效：${message}` } };
   }
 }

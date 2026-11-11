@@ -28,6 +28,7 @@ describe("chat-store 恢复会话登记（#7 重启恢复）", () => {
       permMode: "ask",
       status: "running", // 上次退出前的落库状态：恢复后统一显示断开
       lastActiveAt: "2026-11-04T00:00:00.000Z",
+      archivedAt: null,
       dirIdentity: "worktree",
       worktreeName: "poc7",
     });
@@ -193,6 +194,7 @@ describe("chat-store 断开会话恢复（#9：readHistory 快照 + 实时增量
       permMode: "auto",
       status: "idle",
       lastActiveAt: null,
+      archivedAt: null,
       dirIdentity: "none",
       worktreeName: null,
     });
@@ -254,6 +256,7 @@ describe("chat-store 恢复引导三态（#42：banner 状态机 idle/resuming/f
       permMode: "auto",
       status: "idle",
       lastActiveAt: null,
+      archivedAt: null,
       dirIdentity: "none",
       worktreeName: null,
     });
@@ -398,5 +401,42 @@ describe("chat-store 草稿生命周期（#59：点「＋」只开草稿不落�
     const store = makeStore();
     store.openDraft({ ...META, requirementId: "REQ-001" });
     expect(store.getSnapshot().draft?.requirementId).toBe("REQ-001");
+  });
+});
+
+// ========== #58 会话行移除（归档/删除编排的 renderer 侧；spec #57 D 节） ==========
+describe("removeSession（#58）", () => {
+  function reg(store: ChatStore, id: string): void {
+    store.registerSession({ sessionId: id, cli: "fake", title: id, permMode: "auto", model: "默认模型" });
+  }
+
+  it("移除行；激活会话被移除时切到下一条，无则上一条，全无则空态", () => {
+    const store = new ChatStore();
+    reg(store, "s-1");
+    reg(store, "s-2");
+    reg(store, "s-3");
+    store.setActive("s-1");
+    store.removeSession("s-1");
+    expect(store.getSnapshot().sessions.map((s) => s.sessionId)).toEqual(["s-2", "s-3"]);
+    expect(store.getSnapshot().activeId).toBe("s-2"); // 排序中的下一条
+
+    store.setActive("s-3");
+    store.removeSession("s-3");
+    expect(store.getSnapshot().activeId).toBe("s-2"); // 无下一条 → 上一条
+
+    store.removeSession("s-2");
+    expect(store.getSnapshot().sessions).toEqual([]);
+    expect(store.getSnapshot().activeId).toBeNull(); // 全无 → 空态
+  });
+
+  it("移除非激活会话不动激活；未知 id no-op", () => {
+    const store = new ChatStore();
+    reg(store, "s-1");
+    reg(store, "s-2");
+    store.setActive("s-2");
+    store.removeSession("s-1");
+    expect(store.getSnapshot().activeId).toBe("s-2");
+    store.removeSession("ghost");
+    expect(store.getSnapshot().sessions).toHaveLength(1);
   });
 });

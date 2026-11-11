@@ -1,29 +1,71 @@
-// 用途：PTY 终端控制器 hook —— terminal:create/kill 请求接线 + terminal:event 订阅（data→manager 路由、started/exit→会话状态）；PTY 会话与 ChatStore 共享会话列表与激活态（cli="pty" 进 PTY 分组）
-import { useEffect, useMemo, useState } from "react";
-import type { TerminalCommand } from "@kanban/ipc-schema";
+// 用途：PTY 终端控制器 hook —— terminal:create/kill 请求接线 + terminal:event 订阅（data→manager 路由、started/exit→会话状态）；#60 草稿：点「＋」只开草稿（不落库不进侧栏不起进程），首输入触发创建（渲染端预生成 id + 首输入缓冲，失败保留可重试）；PTY 会话与 ChatStore 共享会话列表与激活态（cli="pty" 进 PTY 分组）
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import type { IpcResult, TerminalCommand } from "@kanban/ipc-schema";
 import type { ChatTransport } from "../../lib/kanban-api";
 import type { ChatController } from "../chat/use-chat";
 import { DEFAULT_MODEL } from "../chat/use-chat";
 import { TerminalManager } from "./TerminalManager";
+import { TerminalDraftController, type TerminalDraftSnapshot } from "./terminal-draft";
 
 export interface TerminalController {
-  /** 新建终端会话（无 command=交互 shell；command=直接跑 CLI TUI；requirementId=#20 从需求卡片建终端时自动关联） */
-  create(opts: { projectId: string | null; cwd: string; command?: TerminalCommand; requirementId?: string }): Promise<void>;
+  /** 打开 PTY 终端草稿（#60：全局仅一个，已有草稿被替换；无 command=交互 shell；requirementId 随首输入触发的创建落关联） */
+  openDraft(opts: { projectId: string | null; cwd: string; command?: TerminalCommand; requirementId?: string }): void;
   /** 显式停止终端（PTY 进程终止唯一入口；切换/关标签不触发） */
   kill(terminalId: string): void;
+  /** 丢弃当前草稿（切换会话/项目时静默丢弃；在途创建不取消，迟到成功仍登记会话） */
+  discardDraft(): void;
   manager: TerminalManager;
+  /** 当前 PTY 草稿（null=无；中央区渲染终端草稿视图的依据） */
+  draft: TerminalDraftSnapshot | null;
 }
 
 export function useTerminals(transport: ChatTransport | null, chat: ChatController): TerminalController {
-  // shortcut: manager 闭包直接捕获首帧 transport（App 经 useMemo 同步建桥、测试首帧给定，身份稳定；
+  // shortcut: drafts/manager 闭包直接捕获首帧 transport 与 chat.store（App 经 useMemo 同步建桥、测试首帧给定，身份稳定；
   // 复查触发：若未来出现「挂载时 transport=null、之后才可用」的路径，需改回 ref/effect 同步）
+  const [drafts] = useState(
+    () =>
+      new TerminalDraftController({
+        invoke: (req) =>
+          transport?.invoke(req) ??
+          Promise.resolve({ ok: false, error: { code: "E_INTERNAL", message: "transport 不可用" } } satisfies IpcResult),
+        onCreated: (ev) => {
+          // #20：卡片建终端的自动关联由 Main 原子完成（session_linked 推送回流看板 store）；拒绝仅报告不阻断终端
+          if (ev.ok.linked === false)
+            window.api?.log?.("error", "terminal", "终端创建后自动关联被拒绝", {
+              sessionId: ev.terminalId,
+              ...(ev.ok.reason ? { reason: ev.ok.reason } : {}),
+            });
+          chat.store.registerSession({
+            sessionId: ev.terminalId,
+            cli: "pty",
+            title: ev.ok.title ?? "终端",
+            permMode: "auto",
+            model: DEFAULT_MODEL,
+            projectId: ev.opts.projectId,
+            cwd: ev.opts.cwd,
+            dirIdentity: ev.ok.dirIdentity ?? "none",
+            worktreeName: ev.ok.worktreeName ?? null,
+          });
+          // 创建在途期间到达的输入补写（首输入已由 Main 在启动成功后重放，此处保持顺序补剩余）
+          if (ev.remainder) void transport?.invoke({ channel: "terminal:write", terminalId: ev.terminalId, data: ev.remainder });
+        },
+        onFailed: (ev) => {
+          window.api?.log?.("error", "terminal", "终端创建失败", { terminalId: ev.terminalId, code: ev.code, message: ev.message });
+        },
+      }),
+  );
+  const draft = useSyncExternalStore(drafts.subscribe, drafts.getSnapshot);
   const [manager] = useState(
     () =>
       new TerminalManager({
+        // #60：草稿态输入不直写通道（首输入触发创建、失败保留缓冲）；非草稿按原路径直写
         write: (terminalId, data) => {
+          if (drafts.handleInput(terminalId, data)) return;
           void transport?.invoke({ channel: "terminal:write", terminalId, data });
         },
         resize: (terminalId, cols, rows) => {
+          // 草稿无进程可 resize：仅记录尺寸，随创建请求携带
+          if (drafts.recordSize(terminalId, cols, rows)) return;
           void transport?.invoke({ channel: "terminal:resize", terminalId, cols, rows });
         },
       }),
@@ -42,41 +84,23 @@ export function useTerminals(transport: ChatTransport | null, chat: ChatControll
   return useMemo<TerminalController>(
     () => ({
       manager,
-      create: async (opts) => {
-        if (!transport) return;
-        const r = await transport.invoke({
-          channel: "terminal:create",
-          cwd: opts.cwd,
-          projectId: opts.projectId ?? undefined,
-          command: opts.command,
-          requirementId: opts.requirementId,
-        });
-        if (r.ok && r.sessionId) {
-          // #20：卡片建终端的自动关联由 Main 原子完成（session_linked 推送回流看板 store）；拒绝仅报告不阻断终端
-          if (r.linked === false)
-            window.api?.log?.("error", "terminal", "终端创建后自动关联被拒绝", {
-              sessionId: r.sessionId,
-              ...(r.reason ? { reason: r.reason } : {}),
-            });
-          chat.store.registerSession({
-            sessionId: r.sessionId,
-            cli: "pty",
-            title: r.title ?? "终端",
-            permMode: "auto",
-            model: DEFAULT_MODEL,
-            projectId: opts.projectId,
-            cwd: opts.cwd,
-            dirIdentity: r.dirIdentity ?? "none",
-            worktreeName: r.worktreeName ?? null,
-          });
-        } else if (!r.ok) {
-          window.api?.log?.("error", "terminal", "终端创建失败", { code: r.error.code, message: r.error.message });
-        }
+      draft,
+      openDraft: (opts) => {
+        // 全局仅一个草稿：替换时释放旧草稿的 xterm 实例（在途创建不取消，迟到成功仍登记）
+        const prev = drafts.getSnapshot();
+        if (prev) manager.dispose(prev.terminalId);
+        drafts.open(opts);
+      },
+      discardDraft: () => {
+        const prev = drafts.getSnapshot();
+        if (!prev) return;
+        manager.dispose(prev.terminalId);
+        drafts.discard();
       },
       kill: (terminalId) => {
         void transport?.invoke({ channel: "terminal:kill", terminalId });
       },
     }),
-    [chat, manager, transport],
+    [manager, transport, drafts, draft],
   );
 }
