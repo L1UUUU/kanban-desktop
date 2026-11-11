@@ -2,9 +2,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { AdapterEvent, ApprovalDecision, ChatEvent, CliKind, IpcResult, PermMode, ProjectRow } from "@kanban/ipc-schema";
 import type { ChatTransport } from "../../lib/kanban-api";
-import { ChatStore, type DraftSession, type SessionView } from "./chat-store";
-
-export const DEFAULT_MODEL = "默认模型";
+import { ChatStore, DEFAULT_MODEL, type DraftSession, type SessionView } from "./chat-store";
 
 /** #59 草稿打开可选项（cwd 必填：挂当前项目的会话传项目 canonicalPath；权限/模型缺省继承当前 composer 选定值） */
 export interface OpenDraftOptions {

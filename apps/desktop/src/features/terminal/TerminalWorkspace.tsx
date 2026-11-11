@@ -53,7 +53,8 @@ export function TerminalWorkspace({
       <div className="grid min-h-0 grid-rows-[auto_1fr]">
         {draft ? (
           <div className="border-b border-border bg-muted px-4 py-1.5 text-[11px] leading-relaxed">
-            <p className="text-warn">🖥 终端草稿 · 尚未启动进程（不落库、不进侧栏）— 输入任意字符即启动 PTY 并落库</p>
+            {/* 替换提示与结构化草稿（DraftPane）同款文案：全局单草稿替换的明确反馈（spec #57 Story 4） */}
+            <p className="text-warn">🖥 终端草稿 · 尚未启动进程（不落库、不进侧栏）— 输入任意字符即启动 PTY 并落库{draft.replacedHint ? "（已替换上一个草稿：全局仅一个）" : ""}</p>
             {draft.error ? (
               <p className="mt-0.5 text-destructive">启动失败：{draft.error.message}（{draft.error.code}）— 输入已保留，继续输入即重试</p>
             ) : null}

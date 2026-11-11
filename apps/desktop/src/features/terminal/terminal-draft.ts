@@ -18,6 +18,8 @@ export interface TerminalDraftSnapshot {
   buffer: string;
   /** 本次 create 已携带的 buffer 前缀长度（成功后仅补写 slice(launchedLength)） */
   launchedLength: number;
+  /** 本草稿替换过已有草稿（提示行显示「已替换上一个草稿」，与结构化草稿同款文案，spec #57 Story 4） */
+  replacedHint: boolean;
   /** 最近一次创建失败（IPC 错误；null=无） */
   error: { code: string; message: string } | null;
 }
@@ -70,6 +72,7 @@ export class TerminalDraftController {
 
   /** 打开（或替换为）新草稿：全局仅一个；在途创建不取消（迟到结果仍上报） */
   open(opts: OpenDraftOptions): void {
+    const replaced = this.state !== null;
     this.state = {
       terminalId: globalThis.crypto.randomUUID(),
       projectId: opts.projectId,
@@ -81,6 +84,7 @@ export class TerminalDraftController {
       creating: false,
       buffer: "",
       launchedLength: 0,
+      replacedHint: replaced,
       error: null,
     };
     this.changed();

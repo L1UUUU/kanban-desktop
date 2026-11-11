@@ -1,6 +1,7 @@
 // 用途：composer 控件共享件 —— 权限档位 chip（三档下拉带说明）+ 模型选择（#59 起会话 composer 与草稿面板共用，DOM 输出与原 Composer 内联形态一致）
 import { useState } from "react";
 import type { PermMode } from "@kanban/ipc-schema";
+import { DEFAULT_MODEL } from "../chat-store";
 
 // 权限三档元数据（原型 §3.3 文案硬约束；fake 非 OpenCode，full 用通用说明）
 const PERM_META: Record<PermMode, { icon: string; label: string; menuTitle: string; desc: string }> = {
@@ -30,8 +31,8 @@ const PERM_CHIP_CLS: Record<PermMode, string> = {
   full: "text-muted-foreground border-border",
 };
 
-// composer 模型下拉候选项（当前为固定选项；「默认模型」= 不指定，由后端按各 CLI 探测链自选）
-const MODELS = ["默认模型", "gpt-5.6-luna"];
+// composer 模型下拉候选项（当前为固定选项；「默认模型」= 不指定，由后端按各 CLI 探测链自选；占位串统一引自 chat-store）
+const MODELS = [DEFAULT_MODEL, "gpt-5.6-luna"];
 
 /** 权限档位 chip + 下拉菜单（三档带说明；原型一致项 6） */
 export function PermChip({ value, onChange }: { value: PermMode; onChange(mode: PermMode): void }) {

@@ -54,11 +54,15 @@ export function ChatWorkspace({
   const terminals = useTerminals(transport, controller);
   if (onController) onController(controller);
 
-  // #59：切项目丢弃草稿（不弹确认、输入不保留；store 引用稳定，仅项目 id 变化触发）
+  // #59/#60：切项目丢弃两类草稿——聊天与 PTY（不弹确认、输入不保留）；单一 effect 统一覆盖所有切项目路径
+  // （含 register() 成功后 Main 自动切项目——不经侧栏点击，命令式 discard 会漏，spec #57 Story 5）；
+  // discardPtyDraft 为 useCallback 稳定引用（draft 快照变化不重建），仅项目 id 变化触发
   const currentProjectId = projects.currentProjectId;
+  const discardPtyDraft = terminals.discardDraft;
   useEffect(() => {
     controller.store.discardDraft();
-  }, [currentProjectId, controller.store]);
+    discardPtyDraft();
+  }, [currentProjectId, controller.store, discardPtyDraft]);
 
   // 活跃会话为 PTY 终端时中央渲染终端面板（与结构化聊天区并列切换，spec I）
   const active = controller.activeSession;
@@ -110,7 +114,7 @@ export function ChatWorkspace({
           controller.switchTo(sessionId);
         }}
         onSelectProject={(id) => {
-          terminals.discardDraft(); // #60：切换项目同样丢弃草稿
+          // #59/#60：切项目丢弃两类草稿由上方统一 effect 负责（currentProjectId 变化即触发）
           void projects.switchTo(id);
         }}
         onRegisterProject={() => void projects.register()}

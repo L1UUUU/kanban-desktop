@@ -28,13 +28,13 @@ export function DraftPane({
 }) {
   const [submitting, setSubmitting] = useState(false);
 
-  // 提交中禁用输入与按钮（防双发）；失败时 draft 仍在（输入保留在草稿上）
+  // 提交中禁用输入与按钮（防双发）；失败时 draft 仍在（输入保留在草稿上）；
+  // 返回值不在此消费：成功草稿消失 / 失败经 draft.submitError 渲染失败卡（均由 store 状态驱动）
   const submit = async (): Promise<void> => {
     if (draft.input.trim().length === 0 || submitting) return;
     setSubmitting(true);
-    const ok = await actions.onSubmit();
+    await actions.onSubmit();
     setSubmitting(false);
-    void ok;
   };
 
   return (

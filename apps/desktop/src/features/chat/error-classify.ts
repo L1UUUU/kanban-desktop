@@ -21,12 +21,13 @@ export function classifyError(code: string): ErrorKind {
   return KIND_BY_CODE[code] ?? "unknown";
 }
 
-/** CLI 显示名（错误卡标题「找不到 CLI 程序（Claude）」等用） */
+/** CLI 显示名（错误卡标题「找不到 CLI 程序（Claude）」、设置面板归档行 meta 等共用；含 pty 终端） */
 export const CLI_LABELS: Record<string, string> = {
   codex: "Codex",
   claude: "Claude",
   opencode: "OpenCode",
   fake: "Fake",
+  pty: "PTY",
 };
 
 /**

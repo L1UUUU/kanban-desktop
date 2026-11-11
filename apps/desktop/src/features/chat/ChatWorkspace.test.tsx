@@ -829,6 +829,56 @@ describe("PTY 终端链路（#12：mock PTY 驱动 TerminalPanel 与多路复用
     expect(screen.queryByTestId("draft-hint")).toBeNull();
   });
 
+  it("再点「＋」→ PTY 终端：替换已有 PTY 草稿并显示明确提示（与结构化草稿同款替换文案，Story 4）", async () => {
+    const { transport } = recordInvoke(makePtyFixture().transport);
+    const t = await boot(transport);
+
+    // 首开 PTY 草稿：无替换提示
+    fireEvent.click(screen.getByRole("button", { name: "＋" }));
+    fireEvent.click(screen.getByRole("button", { name: /PTY 终端/ }));
+    await t.flush();
+    expect(screen.getByText(/终端草稿 · 尚未启动进程/)).toBeTruthy();
+    expect(screen.queryByText(/已替换上一个草稿/)).toBeNull();
+
+    // 再点「＋」→ PTY 终端：草稿被替换，提示行给出与结构化草稿（DraftPane）同款的明确反馈
+    fireEvent.click(screen.getByRole("button", { name: "＋" }));
+    fireEvent.click(screen.getByRole("button", { name: /PTY 终端/ }));
+    await t.flush();
+    expect(screen.getByText(/终端草稿 · 尚未启动进程/)).toBeTruthy();
+    expect(screen.getByText(/已替换上一个草稿：全局仅一个/)).toBeTruthy();
+  });
+
+  it("切换项目丢弃 PTY 草稿（register 成功自动切项目路径同样覆盖）：提示消失、xterm 卸载、无创建请求（Story 5）", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "kb-ws-pty-proj-"));
+    const projA = join(tmpRoot, "proj-a");
+    const projB = join(tmpRoot, "proj-b");
+    mkdirSync(join(projA, ".git"), { recursive: true });
+    mkdirSync(join(projB, ".git"), { recursive: true });
+    const dirs = [projA, projB];
+    const adapter = new FakeAdapter({ clock: new VirtualClock() });
+    const base = makeTransport(adapter, { dbPath: join(tmpRoot, "state.db"), pick: async () => dirs.shift() ?? null });
+    const { transport, calls } = recordInvoke(base);
+    const t = mount(transport);
+    await t.flush();
+
+    // 注册项目 A → 开 PTY 草稿（不输入：无创建请求、无会话行）
+    fireEvent.click(screen.getByRole("button", { name: "＋ 注册本地目录…" }));
+    await t.flush();
+    expect(await screen.findByText("proj-a")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "＋" }));
+    fireEvent.click(screen.getByRole("button", { name: /PTY 终端/ }));
+    await t.flush();
+    expect(screen.getByText(/终端草稿 · 尚未启动进程/)).toBeTruthy();
+
+    // 注册项目 B（成功后 Main 自动切到 B，不经侧栏点击路径）→ PTY 草稿被丢弃
+    fireEvent.click(screen.getByRole("button", { name: "＋ 注册" }));
+    await t.flush();
+    expect(await screen.findByText("proj-b")).toBeTruthy();
+    expect(screen.queryByText(/终端草稿 · 尚未启动进程/)).toBeNull();
+    expect(document.querySelector(".xterm")).toBeNull();
+    expect(calls.filter((c) => c.channel === "terminal:create")).toHaveLength(0);
+  });
+
   it("创建失败：草稿保留 + 错误提示 + 缓冲保留；再输入合并缓冲重试成功入库", async () => {
     const fixture = makePtyFixture();
     const calls: IpcRequest[] = [];

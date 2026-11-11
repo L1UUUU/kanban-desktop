@@ -1,9 +1,9 @@
 // 用途：PTY 终端控制器 hook —— terminal:create/kill 请求接线 + terminal:event 订阅（data→manager 路由、started/exit→会话状态）；#60 草稿：点「＋」只开草稿（不落库不进侧栏不起进程），首输入触发创建（渲染端预生成 id + 首输入缓冲，失败保留可重试）；PTY 会话与 ChatStore 共享会话列表与激活态（cli="pty" 进 PTY 分组）
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { IpcResult, TerminalCommand } from "@kanban/ipc-schema";
 import type { ChatTransport } from "../../lib/kanban-api";
 import type { ChatController } from "../chat/use-chat";
-import { DEFAULT_MODEL } from "../chat/use-chat";
+import { DEFAULT_MODEL } from "../chat/chat-store";
 import { TerminalManager } from "./TerminalManager";
 import { TerminalDraftController, type TerminalDraftSnapshot } from "./terminal-draft";
 
@@ -81,6 +81,14 @@ export function useTerminals(transport: ChatTransport | null, chat: ChatControll
     });
   }, [transport, manager, chat]);
 
+  // #57：丢弃当前草稿（useCallback 引用稳定——ChatWorkspace 切项目 effect 依赖它，draft 快照变化不得重建）
+  const discardDraft = useCallback(() => {
+    const prev = drafts.getSnapshot();
+    if (!prev) return;
+    manager.dispose(prev.terminalId);
+    drafts.discard();
+  }, [manager, drafts]);
+
   return useMemo<TerminalController>(
     () => ({
       manager,
@@ -91,16 +99,11 @@ export function useTerminals(transport: ChatTransport | null, chat: ChatControll
         if (prev) manager.dispose(prev.terminalId);
         drafts.open(opts);
       },
-      discardDraft: () => {
-        const prev = drafts.getSnapshot();
-        if (!prev) return;
-        manager.dispose(prev.terminalId);
-        drafts.discard();
-      },
+      discardDraft,
       kill: (terminalId) => {
         void transport?.invoke({ channel: "terminal:kill", terminalId });
       },
     }),
-    [manager, transport, drafts, draft],
+    [manager, transport, drafts, draft, discardDraft],
   );
 }

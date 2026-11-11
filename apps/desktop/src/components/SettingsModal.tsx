@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { AUTO_ARCHIVE_DAYS_BOUNDS, type AutoArchiveConfig, type AutoArchiveScanSummary, type ProjectRow, type SessionRow } from "@kanban/ipc-schema";
 import { copyText } from "../lib/copy-text";
+import { CLI_LABELS } from "../features/chat/error-classify";
 import { CLI_DOT_CLS } from "./Sidebar";
 import { DeleteSessionDialog } from "./DeleteSessionDialog";
 
@@ -22,9 +23,6 @@ const copyLogPath = (): void => {
 const NONE_PROJECT_KEY = "__none__";
 /** 未关联项目分组显示名 */
 const NONE_PROJECT_LABEL = "未关联项目";
-
-/** CLI 展示名（已归档条目 meta 用；与侧栏 CLI 色点同源的文本形态） */
-const CLI_LABELS: Record<string, string> = { codex: "Codex", claude: "Claude", opencode: "OpenCode", fake: "Fake", pty: "PTY" };
 
 /** ISO 时间 → 本地展示 YYYY-MM-DD HH:mm（null/不可解析显示 —） */
 function fmtTime(iso: string | null): string {
