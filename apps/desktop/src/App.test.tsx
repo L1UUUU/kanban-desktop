@@ -98,17 +98,6 @@ describe("设置面板取消归档 → 侧栏行回默认列表（#63 AppShell �
   });
 
   it("取消归档 PTY 已归档行：设置面板行移出，侧栏 PTY 组出现该行且状态徽标「已断开」；结构化行同链路回列表", async () => {
-    // chat 侧 Fake transport：无项目、无历史会话（侧栏初始空）
-    const transport: ChatTransport = {
-      invoke: async (req) => {
-        if (req.channel === "project:list") return { ok: true, projects: [], currentProjectId: null };
-        if (req.channel === "session:list") return { ok: true, sessions: [] };
-        return { ok: true };
-      },
-      onEvent: () => () => undefined,
-      onTerminalEvent: () => () => undefined,
-      onTrackerEvent: () => () => undefined,
-    };
     const archivedPty: SessionRow = {
       id: "a-pty",
       kind: "pty",
@@ -124,14 +113,22 @@ describe("设置面板取消归档 → 侧栏行回默认列表（#63 AppShell �
       dirIdentity: "none",
       worktreeName: null,
     };
-    // 设置面板侧 fake 桥：archivedList 返回该行；unarchive 成功
-    window.api = {
-      invokeConfig: async () => ({ ok: true, autoArchive: { enabled: false, days: 30 }, lastScan: null }),
-      invoke: async (req: { channel: string }) => {
+    // 单一 fake transport（#74 归档三通道收敛进 ChatTransport）：chat 侧无项目无历史；archivedList 返回已归档 PTY 行，unarchive 成功
+    const transport: ChatTransport = {
+      invoke: async (req) => {
+        if (req.channel === "project:list") return { ok: true, projects: [], currentProjectId: null };
+        if (req.channel === "session:list") return { ok: true, sessions: [] };
         if (req.channel === "session:archivedList") return { ok: true, sessions: [archivedPty] };
         if (req.channel === "session:unarchive") return { ok: true };
         return { ok: true };
       },
+      onEvent: () => () => undefined,
+      onTerminalEvent: () => () => undefined,
+      onTrackerEvent: () => () => undefined,
+    };
+    // 设置面板 config 区仍走 invokeConfig 桥（C4 界限，#74 不动）
+    window.api = {
+      invokeConfig: async () => ({ ok: true, autoArchive: { enabled: false, days: 30 }, lastScan: null }),
     } as unknown as typeof window.api;
     render(<AppShell transport={transport} />);
     // 打开设置 → 未关联项目组默认展开（无当前项目）→ 取消归档

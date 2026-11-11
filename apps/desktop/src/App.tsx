@@ -5,6 +5,7 @@ import { AppInfoLine } from "./components/Sidebar";
 import { TopBar } from "./components/TopBar";
 import { ChatWorkspace } from "./features/chat/ChatWorkspace";
 import type { ChatController } from "./features/chat/use-chat";
+import { useArchivedSessions } from "./features/chat/use-archived-sessions";
 import { KanbanEntryButton } from "./features/kanban/KanbanWorkspace";
 import { useKanban } from "./features/kanban/use-kanban";
 import { MemoryEntryButton, MemoryWorkspace } from "./features/memory/MemoryWorkspace";
@@ -109,8 +110,10 @@ export function AppShell({
   const [view, setView] = useState<AppView>("chat");
   const projects = useProjects(transport);
   const kanban = useKanban(transport);
-  // #63 chat controller 常驻引用（ChatWorkspace 经 effect 上抛）：设置面板取消归档成功 → registerRestored 行回默认列表
+  // #63 chat controller 常驻引用（ChatWorkspace 经 effect 上抛）：取消归档成功 → registerRestored 行回默认列表
   const chatRef = useRef<ChatController | null>(null);
+  // #74 已归档会话控制器（归档三通道单执行路径 transport.invoke，错误面自持）：设置面板经 TopBar 消费；取消归档成功回 store.registerRestored
+  const archived = useArchivedSessions(transport, (row) => chatRef.current?.registerRestored(row));
   // #34：memory transport 缺省走 preload 桥接（window.api 缺失时为 null → 视图降级）；useState 初始化器保证实例稳定
   const [memoryTransport_] = useState(() => memoryTransport ?? createWindowMemoryTransport());
   const memory = useMemory(memoryTransport_, projects.currentProjectId);
@@ -123,7 +126,7 @@ export function AppShell({
       <TopBar
         currentProject={projects.currentProject}
         projects={projects.projects}
-        onSessionRestored={(row) => chatRef.current?.registerRestored(row)}
+        archived={archived}
       />
       {shutdownNotice ? (
         <div data-testid="shutdown-banner" className="flex-none border-b border-warn/40 bg-warn/10 px-4 py-1.5 text-xs text-warn">

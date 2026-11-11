@@ -1,18 +1,19 @@
-// 用途：顶栏 —— 应用名 + 当前项目名徽标 + 右侧设置入口（#61：点击打开设置面板 modal，原 #55 浮层两项日志动作平移进面板「日志」区；原型一致项：bg-card 底、下边框、42px 高）；#63 透传项目列表与取消归档回调（已归档管理区分组/回列表接线）
+// 用途：顶栏 —— 应用名 + 当前项目名徽标 + 右侧设置入口（#61：点击打开设置面板 modal，原 #55 浮层两项日志动作平移进面板「日志」区；原型一致项：bg-card 底、下边框、42px 高）；#63 透传项目列表；#74 透传已归档会话控制器（AppShell 经 useArchivedSessions 创建）
 import { useState } from "react";
-import type { ProjectRow, SessionRow } from "@kanban/ipc-schema";
+import type { ProjectRow } from "@kanban/ipc-schema";
+import type { ArchivedSessionsController } from "../features/chat/use-archived-sessions";
 import { SettingsModal } from "./SettingsModal";
 
 export function TopBar({
   currentProject,
   projects = [],
-  onSessionRestored,
+  archived = null,
 }: {
   currentProject: ProjectRow | null;
   /** #63：项目列表（设置面板已归档分组头名称数据源） */
   projects?: ProjectRow[];
-  /** #63：取消归档成功回调（行回默认列表；AppShell 接 controller.registerRestored） */
-  onSessionRestored?: (row: SessionRow) => void;
+  /** #74：已归档会话控制器（设置面板归档分区数据源；缺省 null=分区降级提示） */
+  archived?: ArchivedSessionsController | null;
 }) {
   // #61：设置面板 modal 展开态（spec #57：设置从两项日志动作升级为面板，两项动作保留可用）
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -32,7 +33,7 @@ export function TopBar({
           onClose={() => setSettingsOpen(false)}
           projects={projects}
           currentProjectId={currentProject?.id ?? null}
-          onSessionRestored={onSessionRestored}
+          archived={archived}
         />
       ) : null}
     </header>

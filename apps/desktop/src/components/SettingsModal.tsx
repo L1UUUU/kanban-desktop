@@ -1,13 +1,10 @@
-// 用途：设置面板 modal（#61 spec #57 / 原型 stage5 演示③）—— 日志区（两项动作平移自旧顶栏浮层）+ 会话自动归档区（开关/天数经 config:ipc 读写、#64 扫描结果反馈）+ 已归档会话管理区（#63：archivedList 按项目分组，取消归档/删除同款二次确认）
+// 用途：设置面板 modal（#61 spec #57 / 原型 stage5 演示③）—— 日志区（两项动作平移自旧顶栏浮层）+ 会话自动归档区（开关/天数经 config:ipc 读写、#64 扫描结果反馈）+ 已归档会话管理区（#63：archivedList 按项目分组，取消归档/删除同款二次确认）；#74 起归档区为纯展示——数据与三通道动作收敛进 use-archived-sessions 控制器（AppShell 注入），本组件只剩分组/展开/确认弹窗纯视图态
 import { useEffect, useState } from "react";
 import { AUTO_ARCHIVE_DAYS_BOUNDS, type AutoArchiveConfig, type AutoArchiveScanSummary, type ProjectRow, type SessionRow } from "@kanban/ipc-schema";
 import { copyText } from "../lib/copy-text";
-import { createScopedLogger } from "../lib/logger";
 import { CLI_DOT_CLS, sessionCliLabel } from "../lib/cli-catalog";
+import type { ArchivedSessionsController } from "../features/chat/use-archived-sessions";
 import { DeleteSessionDialog } from "./DeleteSessionDialog";
-
-// 本文件日志出口（scope 固定 settings，经 lib/logger 唯一出口发出；#74 双轨收敛前仅迁移出口）
-const log = createScopedLogger("settings");
 
 /** 「打开日志文件」：资源管理器中定位当前启动主日志文件（Main 侧 shell.showItemInFolder 主文件）；jsdom 无桥可选链降级 */
 const openLog = (): void => {
@@ -61,15 +58,15 @@ export function SettingsModal({
   onClose,
   projects = [],
   currentProjectId = null,
-  onSessionRestored,
+  archived = null,
 }: {
   onClose: () => void;
   /** #63：项目列表（归档分组头名称数据源；AppShell 经 TopBar 注入） */
   projects?: ProjectRow[];
   /** #63：当前项目 id（默认展开其分组；null=无项目，默认展开「未关联项目」组） */
   currentProjectId?: string | null;
-  /** #63：取消归档成功回调（行回默认列表；AppShell 接 controller.registerRestored） */
-  onSessionRestored?: (row: SessionRow) => void;
+  /** #74：已归档会话控制器（AppShell 经 useArchivedSessions 创建；null/缺省=归档分区降级提示） */
+  archived?: ArchivedSessionsController | null;
 }) {
   // autoArchive=null = 初始值未加载（或桥不可用降级）；daysDraft 为天数输入框本地草稿（blur 时校验提交）；
   // unavailable 初始即按桥存在性判定（render 期同步可知，不在 effect 内同步 setState）
@@ -80,13 +77,16 @@ export function SettingsModal({
   const [unavailable, setUnavailable] = useState(() => !window.api);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // #63 已归档会话：rows=null = 未拉取完成或桥不可用降级；opsError 为取消归档/删除失败提示（行保留可重试）
-  const [archivedRows, setArchivedRows] = useState<SessionRow[] | null>(null);
-  const [archivedError, setArchivedError] = useState<string | null>(null);
   // #63 分组展开集（null=未交互过，按默认集：当前项目分组，无当前项目则「未关联项目」组）
   const [expandedKeys, setExpandedKeys] = useState<Set<string> | null>(null);
   // #63 待二次确认删除的已归档行（null=确认弹窗关闭）
   const [deleteTarget, setDeleteTarget] = useState<SessionRow | null>(null);
+
+  // #74 打开即拉取已归档会话列表（控制器自持状态；降级/失败呈现由控制器 rows/error 驱动，不阻塞日志与配置区）
+  const refreshArchived = archived?.refresh;
+  useEffect(() => {
+    refreshArchived?.();
+  }, [refreshArchived]);
 
   // 打开即拉取当前 autoArchive（无桥时上方初始态已降级；失败 → 配置区降级提示，不阻塞日志区）
   useEffect(() => {
@@ -111,23 +111,9 @@ export function SettingsModal({
     };
   }, []);
 
-  // #63 打开即拉取已归档会话列表（无桥/部分桥时保持 null 渲染降级；失败 → 分区报错，不阻塞日志与配置区）
-  useEffect(() => {
-    let alive = true;
-    const api = window.api;
-    if (!api?.invoke) return () => undefined;
-    void api
-      .invoke({ channel: "session:archivedList" })
-      .then((r) => {
-        if (!alive) return;
-        if (r.ok) setArchivedRows(r.sessions ?? []);
-        else setArchivedError(`读取已归档会话失败：${r.error.message}`);
-      })
-      .catch(() => alive && setArchivedError("读取已归档会话失败：IPC 调用异常"));
-    return () => {
-      alive = false;
-    };
-  }, []);
+  // #74 归档区纯展示：行与错误从控制器读（null=未拉取/降级 → 不可用提示）
+  const archivedRows = archived?.rows ?? null;
+  const archivedError = archived?.error ?? null;
 
   // 分组（组序按最近归档首次出现、组内归档时间倒序——顺序由 main listArchived 保证，此处不重排）
   const archivedGroups = archivedRows === null ? [] : groupArchivedSessions(archivedRows, projects);
@@ -139,35 +125,6 @@ export function SettingsModal({
     if (next.has(key)) next.delete(key);
     else next.add(key);
     setExpandedKeys(next);
-  };
-
-  /** 取消归档（#63）：成功后行移出本列表并回调 onSessionRestored（回默认列表）；失败留在归档态报错可重试 */
-  const unarchiveRow = (row: SessionRow): void => {
-    setArchivedError(null);
-    void (async () => {
-      const r = await window.api?.invoke({ channel: "session:unarchive", sessionId: row.id });
-      if (r?.ok) {
-        setArchivedRows((prev) => (prev ? prev.filter((x) => x.id !== row.id) : prev));
-        onSessionRestored?.(row);
-      } else {
-        setArchivedError(r && !r.ok ? `取消归档失败：${r.error.message}` : "取消归档失败：IPC 服务不可用");
-        log.error("取消归档失败", { sessionId: row.id });
-      }
-    })();
-  };
-
-  /** 删除已归档会话（#63 二次确认后）：走既有 session:delete 编排；失败行保留报错可重试 */
-  const deleteRow = (row: SessionRow): void => {
-    setArchivedError(null);
-    void (async () => {
-      const r = await window.api?.invoke({ channel: "session:delete", sessionId: row.id });
-      if (r?.ok) {
-        setArchivedRows((prev) => (prev ? prev.filter((x) => x.id !== row.id) : prev));
-      } else {
-        setArchivedError(r && !r.ok ? `删除失败：${r.error.message}` : "删除失败：IPC 服务不可用");
-        log.error("删除已归档会话失败", { sessionId: row.id });
-      }
-    })();
   };
 
   /** 保存 autoArchive（config:set）：按应答更新生效态与扫描反馈 —— 失败时旧值保持（新值不生效，UI 与主进程不分叉） */
@@ -341,7 +298,7 @@ export function SettingsModal({
                           type="button"
                           data-testid="archived-unarchive"
                           className="rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted"
-                          onClick={() => unarchiveRow(row)}
+                          onClick={() => archived?.unarchive(row)}
                         >
                           取消归档
                         </button>
@@ -381,7 +338,7 @@ export function SettingsModal({
           onConfirm={() => {
             const row = deleteTarget;
             setDeleteTarget(null);
-            deleteRow(row);
+            archived?.remove(row);
           }}
         />
       ) : null}
