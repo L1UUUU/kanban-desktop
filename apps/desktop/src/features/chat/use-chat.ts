@@ -2,7 +2,11 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { AdapterEvent, ApprovalDecision, ChatEvent, CliKind, IpcResult, PermMode, ProjectRow } from "@kanban/ipc-schema";
 import type { ChatTransport } from "../../lib/kanban-api";
+import { createScopedLogger } from "../../lib/logger";
 import { ChatStore, DEFAULT_MODEL, type DraftSession, type SessionView } from "./chat-store";
+
+// 本文件日志出口（scope 固定 chat，经 lib/logger 唯一出口发出）
+const log = createScopedLogger("chat");
 
 /** #59 草稿打开可选项（cwd 必填：挂当前项目的会话传项目 canonicalPath；权限/模型缺省继承当前 composer 选定值） */
 export interface OpenDraftOptions {
@@ -124,7 +128,7 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
         // cwd 必须显式携带，或（仅 fake）回落注入的演示目录；真实 CLI 缺 cwd 直接拒绝，不以任何隐式路径建草稿
         const resolved = opts ?? (cli === "fake" && demoCwd ? { cwd: demoCwd } : null);
         if (!resolved) {
-          window.api?.log?.("error", "chat", "草稿打开失败：缺少 cwd（真实会话须挂已注册项目，演示目录未注入）");
+          log.error("草稿打开失败：缺少 cwd（真实会话须挂已注册项目，演示目录未注入）");
           return;
         }
         // 模型继承当前 composer 选定值：优先当前草稿，其次当前激活会话（权限档位不继承，草稿内自选）
@@ -158,7 +162,7 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
         if (r.ok && r.sessionId) {
           // #20：卡片进草稿的自动关联由 Main 原子完成（session_linked 推送回流看板 store）；拒绝仅报告不阻断会话
           if (r.linked === false)
-            window.api?.log?.("error", "chat", "会话创建后自动关联被拒绝", {
+            log.error("会话创建后自动关联被拒绝", {
               sessionId: r.sessionId,
               ...(r.reason ? { reason: r.reason } : {}),
             });
@@ -185,7 +189,7 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
         // Main 回滚时事件（session_status 等）可能已先至渲染端建占位行——按回滚 id 撤销，不留空会话
         if (!r.ok && r.error.rolledBackSessionId) store.removeSession(r.error.rolledBackSessionId);
         // #55（spec #52 G 节）：提交失败留痕（带关键参数；requirementId 可选键条件携带，防 ctx 出现 undefined）
-        window.api?.log?.("error", "chat", "草稿提交失败（创建+发送首条消息）", {
+        log.error("草稿提交失败（创建+发送首条消息）", {
           cli: d.cli,
           code,
           message,
@@ -216,14 +220,14 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
         if (!r.ok) {
           store.markResumeFailed(sessionId, r.error.code, r.error.message);
           // #55（spec #52 G 节）：恢复失败留痕（带会话标识；jsdom 无桥可选链降级）
-          window.api?.log?.("error", "chat", "会话恢复失败（readHistory）", { sessionId, code: r.error.code, message: r.error.message });
+          log.error("会话恢复失败（readHistory）", { sessionId, code: r.error.code, message: r.error.message });
           return;
         }
         store.applySnapshot(sessionId, r.events ?? []);
         const r2 = await transport.invoke({ channel: "session:resume", sessionId });
         if (!r2.ok) {
           store.markResumeFailed(sessionId, r2.error.code, r2.error.message);
-          window.api?.log?.("error", "chat", "会话恢复失败（resume）", { sessionId, code: r2.error.code, message: r2.error.message });
+          log.error("会话恢复失败（resume）", { sessionId, code: r2.error.code, message: r2.error.message });
         }
       },
       archiveSession: async (sessionId) => {
@@ -232,7 +236,7 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
         if (r.ok) store.removeSession(sessionId);
         else {
           store.setError(sessionId, r.error.code, r.error.message);
-          window.api?.log?.("error", "chat", "会话归档失败", { sessionId, code: r.error.code, message: r.error.message });
+          log.error("会话归档失败", { sessionId, code: r.error.code, message: r.error.message });
         }
       },
       deleteSession: async (sessionId) => {
@@ -241,7 +245,7 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
         if (r.ok) store.removeSession(sessionId);
         else {
           store.setError(sessionId, r.error.code, r.error.message);
-          window.api?.log?.("error", "chat", "会话删除失败", { sessionId, code: r.error.code, message: r.error.message });
+          log.error("会话删除失败", { sessionId, code: r.error.code, message: r.error.message });
         }
       },
     };

@@ -2,6 +2,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MemoryCandidateRow, MemorySummaryRow } from "@kanban/ipc-schema";
 import type { MemoryTransport } from "./memory-transport";
+import { createScopedLogger } from "../../lib/logger";
+
+// 本文件日志出口（scope 固定 memory，经 lib/logger 唯一出口发出）
+const log = createScopedLogger("memory");
 
 /** 一次拉取快照（projectMemory 成功载荷） */
 interface MemorySnapshot {
@@ -45,7 +49,7 @@ export function useMemory(transport: MemoryTransport | null, projectId: string |
       });
       if (seq !== seqRef.current) return null; // 过期响应丢弃
       if (!res.ok) {
-        window.api?.log?.("error", "memory", "拉取项目记忆失败", { projectId, reason: res.reason, ...(res.detail ? { detail: res.detail } : {}) });
+        log.error("拉取项目记忆失败", { projectId, reason: res.reason, ...(res.detail ? { detail: res.detail } : {}) });
         return null;
       }
       return { knowledge: res.knowledge ?? [], summaries: res.summaries ?? [] };

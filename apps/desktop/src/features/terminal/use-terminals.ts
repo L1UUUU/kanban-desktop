@@ -2,10 +2,14 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { IpcResult, TerminalCommand } from "@kanban/ipc-schema";
 import type { ChatTransport } from "../../lib/kanban-api";
+import { createScopedLogger } from "../../lib/logger";
 import type { ChatController } from "../chat/use-chat";
 import { DEFAULT_MODEL } from "../chat/chat-store";
 import { TerminalManager } from "./TerminalManager";
 import { TerminalDraftController, type TerminalDraftSnapshot } from "./terminal-draft";
+
+// 本文件日志出口（scope 固定 terminal，经 lib/logger 唯一出口发出）
+const log = createScopedLogger("terminal");
 
 export interface TerminalController {
   /** 打开 PTY 终端草稿（#60：全局仅一个，已有草稿被替换；无 command=交互 shell；requirementId 随首输入触发的创建落关联） */
@@ -31,7 +35,7 @@ export function useTerminals(transport: ChatTransport | null, chat: ChatControll
         onCreated: (ev) => {
           // #20：卡片建终端的自动关联由 Main 原子完成（session_linked 推送回流看板 store）；拒绝仅报告不阻断终端
           if (ev.ok.linked === false)
-            window.api?.log?.("error", "terminal", "终端创建后自动关联被拒绝", {
+            log.error("终端创建后自动关联被拒绝", {
               sessionId: ev.terminalId,
               ...(ev.ok.reason ? { reason: ev.ok.reason } : {}),
             });
@@ -50,7 +54,7 @@ export function useTerminals(transport: ChatTransport | null, chat: ChatControll
           if (ev.remainder) void transport?.invoke({ channel: "terminal:write", terminalId: ev.terminalId, data: ev.remainder });
         },
         onFailed: (ev) => {
-          window.api?.log?.("error", "terminal", "终端创建失败", { terminalId: ev.terminalId, code: ev.code, message: ev.message });
+          log.error("终端创建失败", { terminalId: ev.terminalId, code: ev.code, message: ev.message });
         },
       }),
   );

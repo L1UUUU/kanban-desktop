@@ -2,8 +2,12 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import type { KanbanStageInput, RequirementCardRow } from "@kanban/ipc-schema";
 import type { ChatTransport } from "../../lib/kanban-api";
+import { createScopedLogger } from "../../lib/logger";
 import { KanbanStore } from "./kanban-store";
 import { useRequirementMemory, type RequirementMemoryController } from "./use-requirement-memory";
+
+// 本文件日志出口（scope 固定 kanban，经 lib/logger 唯一出口发出）
+const log = createScopedLogger("kanban");
 
 export interface KanbanController {
   requirements: RequirementCardRow[];
@@ -69,7 +73,7 @@ export function useKanban(transport: ChatTransport | null): KanbanController {
     async (projectId: string, title?: string) => {
       if (!transport) return;
       const r = await transport.invoke({ channel: "kanban:create", projectId, ...(title ? { title } : {}) });
-      if (!r.ok) window.api?.log?.("error", "kanban", "建卡失败", { code: r.error.code, message: r.error.message, projectId });
+      if (!r.ok) log.error("建卡失败", { code: r.error.code, message: r.error.message, projectId });
     },
     [transport],
   );
@@ -78,7 +82,7 @@ export function useKanban(transport: ChatTransport | null): KanbanController {
     async (requirementId: string, title: string) => {
       if (!transport) return;
       const r = await transport.invoke({ channel: "kanban:rename", requirementId, title });
-      if (!r.ok) window.api?.log?.("error", "kanban", "重命名失败", { code: r.error.code, message: r.error.message, requirementId });
+      if (!r.ok) log.error("重命名失败", { code: r.error.code, message: r.error.message, requirementId });
     },
     [transport],
   );
@@ -87,7 +91,7 @@ export function useKanban(transport: ChatTransport | null): KanbanController {
     async (requirementId: string, stage: KanbanStageInput) => {
       if (!transport) return;
       const r = await transport.invoke({ channel: "kanban:setStage", requirementId, stage });
-      if (!r.ok) window.api?.log?.("error", "kanban", "阶段修正失败", { code: r.error.code, message: r.error.message, requirementId, stage });
+      if (!r.ok) log.error("阶段修正失败", { code: r.error.code, message: r.error.message, requirementId, stage });
     },
     [transport],
   );
@@ -96,7 +100,7 @@ export function useKanban(transport: ChatTransport | null): KanbanController {
     async (requirementId: string) => {
       if (!transport) return;
       const r = await transport.invoke({ channel: "kanban:delete", requirementId });
-      if (!r.ok) window.api?.log?.("error", "kanban", "删除需求失败", { code: r.error.code, message: r.error.message, requirementId });
+      if (!r.ok) log.error("删除需求失败", { code: r.error.code, message: r.error.message, requirementId });
     },
     [transport],
   );
@@ -117,7 +121,7 @@ export function useKanban(transport: ChatTransport | null): KanbanController {
     async (sessionId: string) => {
       if (!transport) return;
       const r = await transport.invoke({ channel: "kanban:unlink", sessionId });
-      if (!r.ok) window.api?.log?.("error", "kanban", "解除关联失败", { code: r.error.code, message: r.error.message, sessionId });
+      if (!r.ok) log.error("解除关联失败", { code: r.error.code, message: r.error.message, sessionId });
     },
     [transport],
   );

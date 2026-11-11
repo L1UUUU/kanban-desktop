@@ -17,6 +17,7 @@ import { ChatWorkspace } from "./ChatWorkspace";
 import type { ChatController, OpenDraftOptions } from "./use-chat";
 import { resolveSessionCwd } from "./use-chat";
 import type { ChatTransport } from "../../lib/kanban-api";
+import { setLogSinkForTest } from "../../lib/logger";
 import { useProjects } from "../projects/use-projects";
 
 // 未关闭的 db 连接（afterEach 统一关，避免 Windows 上临时目录删除 EPERM）
@@ -1288,6 +1289,31 @@ describe("草稿提交失败卡（#59：session:create+firstMessage 失败在草
     expect(card.textContent).toContain("thread/start 未返回 thread id（协议异常）");
     expect(screen.getByRole("button", { name: "重试发送" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "复制错误详情" })).toBeTruthy();
+  });
+
+  it("提交失败留痕（#55 spec #52 G 节 / issue #69）：注入 sink 断言 error/chat 条目（cli/code/message/cwd）—— jsdom 不再静默 no-op", async () => {
+    const entries: Array<{ level: string; scope: string; message: string; ctx?: Record<string, string | number | boolean> }> = [];
+    const restore = setLogSinkForTest((level, scope, message, ctx) => entries.push({ level, scope, message, ctx }));
+    try {
+      const transport = makeFailingTransport({ code: "E_SPAWN_NOT_FOUND", message: "未找到 claude 可执行文件（已尝试：npm 全局；where）" });
+      const t = mount(transport);
+      await t.flush();
+      await act(async () => {
+        t.ctl().openDraft("claude", { cwd: DEMO_CWD });
+      });
+      await act(async () => {
+        send("首条消息");
+      });
+      expect(screen.getByTestId("create-error-card")).toBeTruthy();
+      expect(entries).toContainEqual({
+        level: "error",
+        scope: "chat",
+        message: "草稿提交失败（创建+发送首条消息）",
+        ctx: { cli: "claude", code: "E_SPAWN_NOT_FOUND", message: "未找到 claude 可执行文件（已尝试：npm 全局；where）", cwd: DEMO_CWD },
+      });
+    } finally {
+      restore();
+    }
   });
 });
 
