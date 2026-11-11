@@ -1,5 +1,5 @@
 // 用途：renderer 根组件 —— 原型变体 A 三区布局：42px 顶栏（当前项目名）+ 退出提示条（生命周期序列 UI 提示，#13）+ 残留通知条（#49 确认式清理，全局层、退出条之下）+ 主区（240px 侧栏 + 中央聊天/看板视图切换，#18）；transport 经 preload 桥接（不可用时聊天区降级占位）；AppShell 为可注入骨架（组件测试直挂 Fake transport）
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { AppInfo, ResidueKillResult, ResidueProcess } from "@kanban/ipc-schema";
 import { AppInfoLine } from "./components/Sidebar";
 import { TopBar } from "./components/TopBar";
@@ -108,6 +108,8 @@ export function AppShell({
   const [view, setView] = useState<"chat" | "kanban" | "memory" | "diff">("chat");
   const projects = useProjects(transport);
   const kanban = useKanban(transport);
+  // #63 chat controller 常驻引用（ChatWorkspace 每渲染上抛）：设置面板取消归档成功 → registerRestored 行回默认列表
+  const chatRef = useRef<ChatController | null>(null);
   // #34：memory transport 缺省走 preload 桥接（window.api 缺失时为 null → 视图降级）；useState 初始化器保证实例稳定
   const [memoryTransport_] = useState(() => memoryTransport ?? createWindowMemoryTransport());
   const memory = useMemory(memoryTransport_, projects.currentProjectId);
@@ -117,7 +119,11 @@ export function AppShell({
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
-      <TopBar currentProject={projects.currentProject} />
+      <TopBar
+        currentProject={projects.currentProject}
+        projects={projects.projects}
+        onSessionRestored={(row) => chatRef.current?.store.registerRestored(row)}
+      />
       {shutdownNotice ? (
         <div data-testid="shutdown-banner" className="flex-none border-b border-warn/40 bg-warn/10 px-4 py-1.5 text-xs text-warn">
           正在退出应用：已停止接收新请求，正在有序结束会话…
@@ -132,7 +138,10 @@ export function AppShell({
         projects={projects}
         demoCwd={demoCwd}
         configPath={configPath}
-        onController={onChatController}
+        onController={(c) => {
+          chatRef.current = c;
+          onChatController?.(c);
+        }}
         view={view}
         kanban={kanban}
         onSetView={setView}

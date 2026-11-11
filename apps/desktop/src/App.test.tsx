@@ -1,9 +1,10 @@
-// 用途：三区布局组件冒烟 —— 顶栏/侧栏三分组/聊天区占位在 jsdom 中可见（无 window.api 时降级不崩溃）+ 顶部 banner 叠加顺序规则（#42/spec G/F18）
-import { act, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+// 用途：三区布局组件冒烟 —— 顶栏/侧栏三分组/聊天区占位在 jsdom 中可见（无 window.api 时降级不崩溃）+ 顶部 banner 叠加顺序规则（#42/spec G/F18）；#63 设置面板取消归档 → 侧栏行回默认列表显示已断开（AppShell 全接线）
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { App, AppShell } from "./App";
 import type { ChatController } from "./features/chat/use-chat";
 import type { ChatTransport } from "./lib/kanban-api";
+import type { SessionRow } from "@kanban/ipc-schema";
 
 describe("App 三区布局骨架（原型一致项 1）", () => {
   it("顶栏：应用名、项目名徽标（无项目引导态）与设置入口可见", () => {
@@ -87,5 +88,72 @@ describe("顶部 banner 叠加顺序（#42 / spec G·F18：全局条在上，会
     expect(shutdown.compareDocumentPosition(conflict) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(conflict.compareDocumentPosition(skillConflict) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(skillConflict.compareDocumentPosition(resume) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
+describe("设置面板取消归档 → 侧栏行回默认列表（#63 AppShell 全接线）", () => {
+  afterEach(() => {
+    cleanup();
+    window.api = undefined;
+  });
+
+  it("取消归档 PTY 已归档行：设置面板行移出，侧栏 PTY 组出现该行且状态徽标「已断开」；结构化行同链路回列表", async () => {
+    // chat 侧 Fake transport：无项目、无历史会话（侧栏初始空）
+    const transport: ChatTransport = {
+      invoke: async (req) => {
+        if (req.channel === "project:list") return { ok: true, projects: [], currentProjectId: null };
+        if (req.channel === "session:list") return { ok: true, sessions: [] };
+        return { ok: true };
+      },
+      onEvent: () => () => undefined,
+      onTerminalEvent: () => () => undefined,
+      onTrackerEvent: () => () => undefined,
+    };
+    const archivedPty: SessionRow = {
+      id: "a-pty",
+      kind: "pty",
+      cli: "pty",
+      nativeSessionId: null,
+      projectId: null,
+      title: "终端 · shell",
+      cwd: "C:\\repo",
+      permMode: null,
+      status: null,
+      lastActiveAt: null,
+      archivedAt: "2026-11-10T08:00:00.000Z",
+      dirIdentity: "none",
+      worktreeName: null,
+    };
+    // 设置面板侧 fake 桥：archivedList 返回该行；unarchive 成功
+    window.api = {
+      invokeConfig: async () => ({ ok: true, autoArchive: { enabled: false, days: 30 }, lastScan: null }),
+      invoke: async (req: { channel: string }) => {
+        if (req.channel === "session:archivedList") return { ok: true, sessions: [archivedPty] };
+        if (req.channel === "session:unarchive") return { ok: true };
+        return { ok: true };
+      },
+    } as unknown as typeof window.api;
+    render(<AppShell transport={transport} />);
+    // 打开设置 → 未关联项目组默认展开（无当前项目）→ 取消归档
+    fireEvent.click(screen.getByText("设置"));
+    const unarchiveBtn = await waitFor(() => {
+      const btn = screen.getByTestId("archived-unarchive");
+      expect(btn).toBeTruthy();
+      return btn;
+    });
+    fireEvent.click(unarchiveBtn);
+    // 侧栏 PTY 组出现该行，状态徽标已断开（PTY 取消归档无进程恢复，与重启后行为一致）
+    await waitFor(() => {
+      const rows = [...document.querySelectorAll("[data-testid='session-row']")];
+      expect(rows.some((r) => r.textContent?.includes("终端 · shell"))).toBe(true);
+    });
+    const row = [...document.querySelectorAll("[data-testid='session-row']")].find((r) =>
+      r.textContent?.includes("终端 · shell"),
+    ) as HTMLElement;
+    expect(row.textContent).toContain("已断开");
+    // 设置面板中该行已移出（空态或无该条目）
+    await waitFor(() =>
+      expect(document.querySelector("[data-testid='archived-item'][data-session-id='a-pty']")).toBeNull(),
+    );
   });
 });
