@@ -1,6 +1,6 @@
 // 用途：日志系统整机验收 E2E（issue #56 / spec #52 验收 1/2/3/7 的 C 类证据）—— 读真实运行产出的 <userData>/logs/*.jsonl：
 // 四来源汇聚（main/worker/renderer + CLI stderr run-once）与到达顺序、worker 意外退出 vs 正常停机假阳性回归、E_SCHEMA 入站非法请求、
-// KANBAN_LOG_LEVEL 两态与 env 不回写 config、顶栏浮层两项截图 + getLogPath 主文件 + openLogDir、轮转分片合并读。
+// KANBAN_LOG_LEVEL 两态与 env 不回写 config、顶栏设置面板（#61 由两项浮层升级为 modal）日志区两项截图 + getLogPath 主文件 + openLogDir、轮转分片合并读。
 // 全部 Fake 注入驱动（KANBAN_DISABLE_*；CLI stderr 经 run-once 以 where.exe 假 exe 触发，不真实调用 codex/claude 模型、不设 KANBAN_CODEX_MODEL/KANBAN_REAL_E2E）。
 // 多启动文件选取（N17）：按启动横幅 + <pid>（app.evaluate 取真主进程 pid，与文件名 pid 一致）选当前运行文件组，禁止跨启动拼接；
 // 分片按 <pid> 前缀合并全部 .1/.2 再按到达顺序读取（M9：分片属同次运行续写）。
@@ -315,17 +315,18 @@ test("验收 3：KANBAN_LOG_LEVEL 两态 —— debug 生效（debug 条目落�
   }
 });
 
-test("验收 7：浮层两项展开态截图 + getLogPath 返回含横幅主文件 + openLogDir 定位主文件", async () => {
+test("验收 7：设置面板展开态截图（日志区两项）+ getLogPath 返回含横幅主文件 + openLogDir 定位主文件", async () => {
   const { userData, repoDir, repoRoot } = makeFixture();
   try {
     const { app, win } = await launchApp(userData, repoDir);
     const pid = await mainPid(app);
 
-    // 顶栏「设置」点击 → 浮层含且仅含两项（spec #52 H 节：不新增其它入口）
+    // 顶栏「设置」点击 → 设置面板 modal 打开（#61：原浮层升级为面板，日志两项动作平移进「日志」区）
     await win.getByRole("button", { name: "设置", exact: true }).click();
     await expect(win.getByRole("button", { name: "打开日志文件", exact: true })).toBeVisible();
     await expect(win.getByRole("button", { name: "复制日志文件路径", exact: true })).toBeVisible();
-    await shot(win, SHOT_DIR, "01-settings-log-popover.png");
+    await expect(win.getByText("会话自动归档", { exact: true })).toBeVisible();
+    await shot(win, SHOT_DIR, "01-settings-modal.png");
 
     // getLogPath：主文件（无分片后缀）、存在于盘、首条为启动横幅
     const logPath = await win.evaluate(async () => {

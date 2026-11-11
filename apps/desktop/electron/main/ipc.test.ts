@@ -7,7 +7,8 @@ import { FakeAdapter, VirtualClock, type CliAdapter } from "@kanban/cli-host";
 import { trackerChangeSchema } from "@kanban/ipc-schema";
 import { TrackerEngine, type TrackerChange } from "@kanban/tracker";
 import { openDatabase } from "./db";
-import { handleDiffIpc, handleIpc, type DiffIpcDeps, type IpcDeps } from "./ipc";
+import { defaultConfig, loadConfig, saveConfig, type AppConfig } from "./config";
+import { handleConfigIpc, handleDiffIpc, handleIpc, type ConfigIpcDeps, type DiffIpcDeps, type IpcDeps } from "./ipc";
 import { openMemoryService } from "./memory-service";
 import type { LogFn, LogLevel } from "./logger";
 import type { PtyHost } from "./pty-host";
@@ -1040,3 +1041,85 @@ describe("diff:ipc 通道（#43 spec #40 D 节：独立单通道 + 入站 zod + 
     expect(res).toEqual({ ok: false, kind: "not-a-repo", message: "当前项目不是 git 仓库" });
   });
 });
+
+describe("config:ipc 通道（#61 spec #57 配置链路：读 autoArchive 子集 / 写字段级合并 + 先持久化成功再改内存）", () => {
+  /** config 专用路由：真实 AppConfig 对象（getConfig 恒返回同一引用 = Main 内存态）+ 可注入抛错的 persist */
+  function makeConfigRouter(opts: { persistThrows?: Error } = {}) {
+    const config: AppConfig = { ...defaultConfig(), currentProjectId: "p-1" };
+    const persisted: AppConfig[] = [];
+    const deps: ConfigIpcDeps = {
+      getConfig: () => config,
+      persist: (c) => {
+        if (opts.persistThrows) throw opts.persistThrows;
+        persisted.push(c);
+      },
+      isShuttingDown: () => false,
+    };
+    return { config, persisted, handle: (raw: unknown) => handleConfigIpc(deps, raw) };
+  }
+
+  it("非法请求 → E_SCHEMA；退出门闸 → E_INTERNAL（对齐 diff:ipc 门闸惯例）", async () => {
+    const { handle } = makeConfigRouter();
+    const schema = await handle({ channel: "config:nuke" });
+    expect(schema).toEqual({ ok: false, error: { code: "E_SCHEMA", message: expect.any(String) } });
+    const badDays = await handle({ channel: "config:set", autoArchive: { enabled: true, days: 0 } });
+    expect(badDays).toEqual({ ok: false, error: { code: "E_SCHEMA", message: expect.any(String) } });
+  });
+
+  it("config:get 返回 autoArchive 子集（默认关/30；不携带项目/CLI 路径等其余配置字段）", async () => {
+    const { handle, config } = makeConfigRouter();
+    const res = await handle({ channel: "config:get" });
+    expect(res).toEqual({ ok: true, autoArchive: { enabled: false, days: 30 } });
+    expect(config.autoArchive).toEqual({ enabled: false, days: 30 }); // 只读不写
+  });
+
+  it("config:set 合法值：先持久化再改内存 —— persist 收到完整配置（autoArchive 新值生效、currentProjectId 等其余字段原样保留）", async () => {
+    const { handle, config, persisted } = makeConfigRouter();
+    const res = await handle({ channel: "config:set", autoArchive: { enabled: true, days: 14 } });
+    expect(res).toEqual({ ok: true, autoArchive: { enabled: true, days: 14 } });
+    expect(persisted.length).toBe(1);
+    // persist 收到的是含新 autoArchive 的完整配置：与项目切换的写入互不覆盖（currentProjectId 不被清/不被越权值替换）
+    expect(persisted[0]).toMatchObject({ currentProjectId: "p-1", autoArchive: { enabled: true, days: 14 } });
+    // 写盘成功后内存对象（getConfig 同一引用）才更新
+    expect(config.autoArchive).toEqual({ enabled: true, days: 14 });
+  });
+
+  it("写盘失败：返回明确错误（E_INTERNAL + message）且新值不生效 —— 内存对象未被改（内存与磁盘不分叉）", async () => {
+    const { handle, config, persisted } = makeConfigRouter({ persistThrows: new Error("EACCES: permission denied") });
+    const res = await handle({ channel: "config:set", autoArchive: { enabled: true, days: 7 } });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.code).toBe("E_INTERNAL");
+      expect(res.error.message).toContain("EACCES");
+    }
+    expect(config.autoArchive).toEqual({ enabled: false, days: 30 }); // 新值不生效
+    expect(persisted.length).toBe(0);
+  });
+
+  it("config:set 携带越权字段（currentProjectId/gitExe）被剥离：持久化值来自内存对象而非请求", async () => {
+    const { handle, persisted } = makeConfigRouter();
+    const res = await handle({
+      channel: "config:set",
+      autoArchive: { enabled: true, days: 60 },
+      currentProjectId: "p-evil",
+      gitExe: "C:/evil/git.exe",
+    });
+    expect(res.ok).toBe(true);
+    expect(persisted[0]?.currentProjectId).toBe("p-1"); // 越权值不落盘
+    expect(persisted[0]?.gitExe).toBeNull();
+  });
+
+  it("真实写盘往返（重启后生效）：saveConfig 落 tmp 文件 → loadConfig 读回新 autoArchive 与既有 currentProjectId", async () => {
+    const config: AppConfig = { ...defaultConfig(), currentProjectId: "p-2" };
+    const configPath = join(tmpRoot || (tmpRoot = mkdtempSync(join(tmpdir(), "kb-config-ipc-"))), "config.json");
+    const handle = (raw: unknown) =>
+      handleConfigIpc({ getConfig: () => config, persist: (c) => saveConfig(configPath, c), isShuttingDown: () => false }, raw);
+    const res = await handle({ channel: "config:set", autoArchive: { enabled: true, days: 90 } });
+    expect(res.ok).toBe(true);
+    // 重启读入侧：autoArchive 新值生效，项目切换写入的 currentProjectId 不被本次写覆盖
+    const reloaded = loadConfig(configPath);
+    expect(reloaded.autoArchive).toEqual({ enabled: true, days: 90 });
+    expect(reloaded.currentProjectId).toBe("p-2");
+  });
+});
+
