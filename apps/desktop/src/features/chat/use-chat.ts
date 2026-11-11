@@ -66,6 +66,92 @@ function isChatEvent(e: AdapterEvent): e is ChatEvent {
 }
 
 /**
+ * #59 提交编排（模块级可直测）：session:create+firstMessage 原子链 ——
+ * 成功：登记会话 + 首条消息本地回显 + 丢弃草稿；失败：草稿与输入保留（可重试），错误直达失败卡，
+ * Main 回滚时事件先至的占位行按 rolledBackSessionId 撤销（不留空会话）。
+ */
+export async function submitDraftChain(store: ChatStore, transport: ChatTransport): Promise<boolean> {
+  const d = store.getSnapshot().draft;
+  if (!d || d.input.trim().length === 0) return false;
+  // 「默认模型」是 UI 占位串不下发（后端按各 CLI 探测链自选）
+  const model = d.model === DEFAULT_MODEL ? undefined : d.model;
+  const r = await transport.invoke({
+    channel: "session:create",
+    cli: d.cli,
+    cwd: d.cwd,
+    projectId: d.projectId ?? undefined,
+    title: d.title,
+    ...(model ? { model } : {}),
+    permMode: d.permMode,
+    requirementId: d.requirementId,
+    firstMessage: d.input,
+  });
+  if (r.ok && r.sessionId) {
+    // #20：卡片进草稿的自动关联由 Main 原子完成（session_linked 推送回流看板 store）；拒绝仅报告不阻断会话
+    if (r.linked === false)
+      log.error("会话创建后自动关联被拒绝", {
+        sessionId: r.sessionId,
+        ...(r.reason ? { reason: r.reason } : {}),
+      });
+    store.registerSession({
+      sessionId: r.sessionId,
+      cli: r.cli ?? d.cli,
+      title: r.title ?? d.title,
+      permMode: d.permMode,
+      model: d.model,
+      projectId: d.projectId,
+      cwd: d.cwd,
+      dirIdentity: r.dirIdentity ?? "none",
+      worktreeName: r.worktreeName ?? null,
+      // #21：Main 仅对 claude 会话附同名 skill 冲突名（其余 CLI 缺省无冲突）
+      skillConflicts: r.skillConflicts ?? [],
+    });
+    store.appendUserMessage(r.sessionId, d.input); // 首条消息本地回显（内容不经事件流回传）
+    store.discardDraft();
+    return true;
+  }
+  // 失败：草稿与输入保留（可重试），错误直达失败卡；不留空会话（Main 已回滚记录）
+  const code = r.ok ? "E_INTERNAL" : r.error.code;
+  const message = r.ok ? "未知错误" : r.error.message;
+  // Main 回滚时事件（session_status 等）可能已先至渲染端建占位行——按回滚 id 撤销，不留空会话
+  if (!r.ok && r.error.rolledBackSessionId) store.removeSession(r.error.rolledBackSessionId);
+  // #55（spec #52 G 节）：提交失败留痕（带关键参数；requirementId 可选键条件携带，防 ctx 出现 undefined）
+  log.error("草稿提交失败（创建+发送首条消息）", {
+    cli: d.cli,
+    code,
+    message,
+    cwd: d.cwd,
+    ...(d.projectId ? { projectId: d.projectId } : {}),
+    ...(d.requirementId ? { requirementId: d.requirementId } : {}),
+  });
+  store.setDraftSubmitError(code, message);
+  return false;
+}
+
+/**
+ * #42 恢复编排（模块级可直测）：两步 IPC —— readHistory 快照重建消息流 → resume 重连。
+ * 发出即「恢复中」（不可中断，D1）；任一步失败进「失败」态（重试/复制详情）；
+ * 成功收敛由 resume 后实时 session_status 驱动（store 复位 resumeState + 状态徽标回 idle）。
+ */
+export async function resumeChain(store: ChatStore, transport: ChatTransport, sessionId: string): Promise<void> {
+  store.markResuming(sessionId);
+  // 第一步：读原生历史（事件溯源快照）重建消息流；第二步：resume 重连，状态经实时事件流回 idle
+  const r = await transport.invoke({ channel: "session:readHistory", sessionId });
+  if (!r.ok) {
+    store.markResumeFailed(sessionId, r.error.code, r.error.message);
+    // #55（spec #52 G 节）：恢复失败留痕（带会话标识；jsdom 无桥可选链降级）
+    log.error("会话恢复失败（readHistory）", { sessionId, code: r.error.code, message: r.error.message });
+    return;
+  }
+  store.applySnapshot(sessionId, r.events ?? []);
+  const r2 = await transport.invoke({ channel: "session:resume", sessionId });
+  if (!r2.ok) {
+    store.markResumeFailed(sessionId, r2.error.code, r2.error.message);
+    log.error("会话恢复失败（resume）", { sessionId, code: r2.error.code, message: r2.error.message });
+  }
+}
+
+/**
  * 聊天控制器 hook。demoCwd 为 Fake 演示草稿 cwd（App 层经 AppInfo 注入：Main 读 KANBAN_FAKE_DEMO_CWD、
  * 缺省用户主目录）；未注入（null/undefined）前不自举 boot 演示草稿，真实会话 cwd 一律来自已注册项目。
  */
@@ -144,61 +230,8 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
         });
       },
       submitDraft: async () => {
-        const d = store.getSnapshot().draft;
-        if (!d || d.input.trim().length === 0 || !transport) return false;
-        // 「默认模型」是 UI 占位串不下发（后端按各 CLI 探测链自选）
-        const model = d.model === DEFAULT_MODEL ? undefined : d.model;
-        const r = await transport.invoke({
-          channel: "session:create",
-          cli: d.cli,
-          cwd: d.cwd,
-          projectId: d.projectId ?? undefined,
-          title: d.title,
-          ...(model ? { model } : {}),
-          permMode: d.permMode,
-          requirementId: d.requirementId,
-          firstMessage: d.input,
-        });
-        if (r.ok && r.sessionId) {
-          // #20：卡片进草稿的自动关联由 Main 原子完成（session_linked 推送回流看板 store）；拒绝仅报告不阻断会话
-          if (r.linked === false)
-            log.error("会话创建后自动关联被拒绝", {
-              sessionId: r.sessionId,
-              ...(r.reason ? { reason: r.reason } : {}),
-            });
-          store.registerSession({
-            sessionId: r.sessionId,
-            cli: r.cli ?? d.cli,
-            title: r.title ?? d.title,
-            permMode: d.permMode,
-            model: d.model,
-            projectId: d.projectId,
-            cwd: d.cwd,
-            dirIdentity: r.dirIdentity ?? "none",
-            worktreeName: r.worktreeName ?? null,
-            // #21：Main 仅对 claude 会话附同名 skill 冲突名（其余 CLI 缺省无冲突）
-            skillConflicts: r.skillConflicts ?? [],
-          });
-          store.appendUserMessage(r.sessionId, d.input); // 首条消息本地回显（内容不经事件流回传）
-          store.discardDraft();
-          return true;
-        }
-        // 失败：草稿与输入保留（可重试），错误直达失败卡；不留空会话（Main 已回滚记录）
-        const code = r.ok ? "E_INTERNAL" : r.error.code;
-        const message = r.ok ? "未知错误" : r.error.message;
-        // Main 回滚时事件（session_status 等）可能已先至渲染端建占位行——按回滚 id 撤销，不留空会话
-        if (!r.ok && r.error.rolledBackSessionId) store.removeSession(r.error.rolledBackSessionId);
-        // #55（spec #52 G 节）：提交失败留痕（带关键参数；requirementId 可选键条件携带，防 ctx 出现 undefined）
-        log.error("草稿提交失败（创建+发送首条消息）", {
-          cli: d.cli,
-          code,
-          message,
-          cwd: d.cwd,
-          ...(d.projectId ? { projectId: d.projectId } : {}),
-          ...(d.requirementId ? { requirementId: d.requirementId } : {}),
-        });
-        store.setDraftSubmitError(code, message);
-        return false;
+        if (!transport) return false;
+        return submitDraftChain(store, transport);
       },
       switchTo: (sessionId) => store.setActive(sessionId),
       dismissSkillConflict: (sessionId) => store.dismissSkillConflict(sessionId),
@@ -212,23 +245,7 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
       },
       resumeSession: async (sessionId) => {
         if (!transport) return;
-        // #42：恢复引导条三态驱动——发出即「恢复中」（不可中断，D1），任一步 IPC 失败进「失败」态（重试/复制详情），
-        // 成功收敛由 resume 后实时 session_status 驱动（store 复位 resumeState + 状态徽标回 idle）
-        store.markResuming(sessionId);
-        // 第一步：读原生历史（事件溯源快照）重建消息流；第二步：resume 重连，状态经实时事件流回 idle
-        const r = await transport.invoke({ channel: "session:readHistory", sessionId });
-        if (!r.ok) {
-          store.markResumeFailed(sessionId, r.error.code, r.error.message);
-          // #55（spec #52 G 节）：恢复失败留痕（带会话标识；jsdom 无桥可选链降级）
-          log.error("会话恢复失败（readHistory）", { sessionId, code: r.error.code, message: r.error.message });
-          return;
-        }
-        store.applySnapshot(sessionId, r.events ?? []);
-        const r2 = await transport.invoke({ channel: "session:resume", sessionId });
-        if (!r2.ok) {
-          store.markResumeFailed(sessionId, r2.error.code, r2.error.message);
-          log.error("会话恢复失败（resume）", { sessionId, code: r2.error.code, message: r2.error.message });
-        }
+        await resumeChain(store, transport, sessionId);
       },
       archiveSession: async (sessionId) => {
         if (!transport) return;
