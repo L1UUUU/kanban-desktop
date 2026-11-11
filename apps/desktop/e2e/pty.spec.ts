@@ -75,10 +75,13 @@ test("PTY 终端：草稿 → 首输入创建 → 回显 → 切结构化会话�
     await expect(first.win.getByText("空闲").first()).toBeVisible();
     await expect(first.win.getByText(/kb-pty-marker-1/).first()).toBeVisible({ timeout: 20_000 });
 
-    // 建结构化会话并切换：PTY 面板卸载（xterm 元素消失），PTY 会话行保留
+    // 建结构化会话并切换（#59 草稿：发首条消息才建）：PTY 面板卸载（xterm 元素消失），PTY 会话行保留
     await first.win.locator("aside").getByText(PROJECT_NAME, { exact: true }).hover();
     await first.win.getByRole("button", { name: "＋", exact: true }).click();
     await first.win.getByRole("button", { name: "Claude", exact: true }).click();
+    await expect(first.win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
+    await first.win.getByPlaceholder("输入消息，/ 开头触发 Skill…").fill("首条消息（建立会话）");
+    await first.win.getByRole("button", { name: "发送 ➤" }).click();
     await expect(first.win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
     await expect(first.win.getByPlaceholder("输入消息，/ 开头触发 Skill…")).toBeVisible();
     await expect(first.win.locator(".xterm")).toHaveCount(0);

@@ -103,6 +103,9 @@ async function registerAndCreate(win: Page): Promise<void> {
   await win.locator("aside").getByText(PROJECT_NAME, { exact: true }).hover();
   await win.getByRole("button", { name: "＋", exact: true }).click();
   await win.getByRole("button", { name: "Claude", exact: true }).click();
+  // #59 草稿：点 CLI 只开草稿，发出首条消息才创建会话（侧栏行出现）
+  await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
+  await send(win, "首条消息（建立会话）");
   await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
 }
 

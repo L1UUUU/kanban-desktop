@@ -107,7 +107,8 @@ export class SessionStore {
       .run(at, id);
   }
 
-  /** 删除（#58/#62）：移除整行（含 native_session_id；删除编排经 IPC 调用）并记内存墓碑；幂等——无行即 no-op */
+  /** 删除（#58/#62）：移除整行（含 native_session_id；#62 删除编排经 IPC 调用）并记内存墓碑；幂等——无行即 no-op；
+   *  #59 复用：session:create+firstMessage 发送失败回滚（回滚后重试生成全新 sessionId，不撞墓碑）；#60 复用：PTY spawn 失败回删占位行 */
   delete(id: string): void {
     this.db.prepare("DELETE FROM sessions WHERE id = ?").run(id);
     this.deletedIds.add(id);
@@ -123,6 +124,7 @@ export class SessionStore {
   updateTitle(id: string, title: string): void {
     this.db.prepare("UPDATE sessions SET title = ? WHERE id = ?").run(title, id);
   }
+
 }
 
 /** snake_case 行 → camelCase 记录 */

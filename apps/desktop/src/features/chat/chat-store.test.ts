@@ -327,34 +327,80 @@ describe("chat-store CLI 异常退出终态化（#13/spec H：不崩溃、不自
   });
 });
 
-describe("chat-store 会话创建失败与错误卡数据源（#46）", () => {
-  it("setCreateFailure：记录失败（含原参数供重试创建）并进快照；clearCreateFailure 清除", () => {
-    const store = makeStore();
-    store.setCreateFailure({
-      cli: "claude",
-      code: "E_SPAWN_NOT_FOUND",
-      message: "未找到 claude 可执行文件（已尝试：where）",
-      cwd: "C:\repo",
-      projectId: "p-1",
-    });
-    expect(store.getSnapshot().createFailure).toMatchObject({ cli: "claude", code: "E_SPAWN_NOT_FOUND", projectId: "p-1" });
-    store.clearCreateFailure();
-    expect(store.getSnapshot().createFailure).toBeNull();
-  });
-
-  it("registerSession 成功登记时清除创建失败记录（新卡不残留旧失败）", () => {
-    const store = makeStore();
-    store.setCreateFailure({ cli: "claude", code: "E_SPAWN_NOT_FOUND", message: "m", cwd: "C:\repo", projectId: "p-1" });
-    store.registerSession({ sessionId: "s-2", cli: "claude", title: "新会话 · Claude", permMode: "auto", model: "默认模型" });
-    expect(store.getSnapshot().createFailure).toBeNull();
-  });
-
+describe("chat-store 会话内错误清除（#46）", () => {
   it("clearError：清除会话 lastError（错误卡「知道了」动作数据源）", () => {
     const store = makeStore();
     store.setError("s-1", "E_INTERNAL", "x");
     expect(store.getSession("s-1")!.lastError).not.toBeNull();
     store.clearError("s-1");
     expect(store.getSession("s-1")!.lastError).toBeNull();
+  });
+});
+
+describe("chat-store 草稿生命周期（#59：点「＋」只开草稿不落库；单草稿；失败保留；切走即丢）", () => {
+  const META = { cli: "claude" as const, cwd: "C:\\repo", projectId: "p-1" };
+
+  it("openDraft：草稿就位（不进 sessions、不改 activeId）+ 标题缺省归一「新会话 · CLI 名」", () => {
+    const store = makeStore();
+    const before = store.getSnapshot().sessions.length;
+    const replaced = store.openDraft(META);
+    expect(replaced).toBe(false);
+    const d = store.getSnapshot().draft;
+    expect(d).toMatchObject({ cli: "claude", cwd: "C:\\repo", projectId: "p-1", title: "新会话 · Claude", input: "", submitError: null });
+    // 不落库不进列表：sessions 不变、activeId 保持原会话
+    expect(store.getSnapshot().sessions).toHaveLength(before);
+    expect(store.getSnapshot().activeId).toBe("s-1");
+  });
+
+  it("单草稿：已有草稿再 openDraft = 替换（replacedHint 置位、旧输入与参数丢弃）", () => {
+    const store = makeStore();
+    store.openDraft(META);
+    store.updateDraft({ input: "没发出去的话" });
+    const replaced = store.openDraft({ cli: "codex", cwd: "C:\\repo2", projectId: null });
+    expect(replaced).toBe(true);
+    const d = store.getSnapshot().draft;
+    expect(d).toMatchObject({ cli: "codex", cwd: "C:\\repo2", projectId: null, replacedHint: true, input: "" });
+  });
+
+  it("切会话（setActive）自动丢弃草稿；discardDraft 显式丢弃后快照为 null", () => {
+    const store = makeStore();
+    store.registerSession({ sessionId: "s-2", cli: "fake", title: "另一会话", permMode: "auto", model: "默认模型" });
+    // registerSession 会激活 s-2；先回 s-1 再开草稿
+    store.setActive("s-1");
+    store.openDraft(META);
+    store.updateDraft({ input: "草稿输入" });
+    store.setActive("s-2");
+    expect(store.getSnapshot().draft).toBeNull();
+    // 显式丢弃同效
+    store.openDraft(META);
+    store.discardDraft();
+    expect(store.getSnapshot().draft).toBeNull();
+  });
+
+  it("updateDraft：input/permMode/model 可改（提交失败保留输入的数据基础）", () => {
+    const store = makeStore();
+    store.openDraft(META);
+    store.updateDraft({ input: "首条消息草稿", permMode: "ask", model: "gpt-5.6-luna" });
+    expect(store.getSnapshot().draft).toMatchObject({ input: "首条消息草稿", permMode: "ask", model: "gpt-5.6-luna" });
+  });
+
+  it("提交失败：setDraftSubmitError 记录错误且草稿与输入保留；clearDraftSubmitError 清除", () => {
+    const store = makeStore();
+    store.openDraft(META);
+    store.updateDraft({ input: "要重试的首条" });
+    store.setDraftSubmitError("E_SPAWN_NOT_FOUND", "未找到 claude 可执行文件");
+    const d = store.getSnapshot().draft;
+    expect(d?.submitError).toMatchObject({ code: "E_SPAWN_NOT_FOUND", message: "未找到 claude 可执行文件" });
+    expect(d?.input).toBe("要重试的首条"); // 失败保留输入
+    expect(store.getSnapshot().sessions).toHaveLength(1); // 无空会话行
+    store.clearDraftSubmitError();
+    expect(store.getSnapshot().draft?.submitError).toBeNull();
+  });
+
+  it("requirementId 随草稿携带（看板卡片进入草稿：随首条消息落到新会话的数据源）", () => {
+    const store = makeStore();
+    store.openDraft({ ...META, requirementId: "REQ-001" });
+    expect(store.getSnapshot().draft?.requirementId).toBe("REQ-001");
   });
 });
 

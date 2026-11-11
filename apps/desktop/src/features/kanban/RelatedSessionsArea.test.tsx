@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AdapterEvent, IpcRequest, TerminalEvent, TrackerChangeWire } from "@kanban/ipc-schema";
+import type { AdapterEvent, CliKind, IpcRequest, TerminalEvent, TrackerChangeWire } from "@kanban/ipc-schema";
 import { FakeAdapter, VirtualClock } from "@kanban/cli-host";
 import { TrackerEngine } from "@kanban/tracker";
 import { openDatabase } from "../../../electron/main/db";
@@ -15,13 +15,20 @@ import { createPtyHost, type PtyLike, type PtyProcess } from "../../../electron/
 import { ProjectStore } from "../../../electron/main/project-store";
 import { SessionStore } from "../../../electron/main/session-store";
 import { AppShell } from "../../App";
-import type { ChatController } from "../chat/use-chat";
+import type { ChatController, OpenDraftOptions } from "../chat/use-chat";
 import type { SessionView } from "../chat/chat-store";
 import type { ChatTransport } from "../../lib/kanban-api";
 import { RelatedSessionsArea } from "./RelatedSessionsArea";
 
 // 未关闭的 db 连接（afterEach 统一关，避免 Windows 上临时目录删除 EPERM）
 const openDbs: Array<{ close(): void }> = [];
+
+/** #59 草稿创建会话：打开草稿并发送首条消息（原 createSession 直建的草稿语义等价物；text 可携带剧本关键词） */
+async function createViaDraft(ctl: ChatController, cli: CliKind, opts?: OpenDraftOptions, text = "默认演示"): Promise<void> {
+  ctl.openDraft(cli, opts);
+  ctl.store.updateDraft({ input: text });
+  await ctl.submitDraft();
+}
 
 // jsdom 缺 ResizeObserver/matchMedia：xterm 服务需要（生产 Chromium 原生具备；PTY 会话激活时 TerminalPanel 挂载）
 if (typeof globalThis.ResizeObserver === "undefined") {
@@ -228,12 +235,9 @@ describe("详情面板关联区（#20；原型一致项 4 关联区）", () => {
     fireEvent.click(screen.getByRole("button", { name: "＋ 注册本地目录…" }));
     await screen.findAllByText("demo-repo");
     await act(async () => {
-      await t.ctl().createSession("claude", { cwd: projDir, projectId: await currentProjectId() });
+      await createViaDraft(t.ctl(), "claude", { cwd: projDir, projectId: await currentProjectId() }, "/design-feature verified");
     });
     await screen.findByText("新会话 · Claude");
-    await act(async () => {
-      send("/design-feature verified");
-    });
     t.advance();
   }
 
@@ -249,7 +253,7 @@ describe("详情面板关联区（#20；原型一致项 4 关联区）", () => {
   async function createOpencodeSession(): Promise<string> {
     const projectId = await currentProjectId();
     await act(async () => {
-      await t.ctl().createSession("opencode", { cwd: projDir, projectId });
+      await createViaDraft(t.ctl(), "opencode", { cwd: projDir, projectId });
     });
     await screen.findByText("新会话 · OpenCode");
     const s = t.ctl().sessions.find((x) => x.cli === "opencode");
@@ -374,9 +378,17 @@ describe("详情面板关联区（#20；原型一致项 4 关联区）", () => {
     }
     expect(screen.getByTestId("new-session-item-pty").textContent).toContain("无 skill 信号");
 
-    // OpenCode：创建即出现在侧栏 + 关联列表 + 会话数（session:create+requirementId 原子关联）
+    // OpenCode：点卡片菜单项打开草稿并切回聊天视图（#59：不落库、侧栏无新行）；发首条消息 →
+    // 会话出现在侧栏 + 关联列表 + 会话数（requirementId 随首条消息落到新会话）
     fireEvent.click(screen.getByTestId("new-session-item-opencode"));
-    await screen.findAllByText("新会话 · OpenCode"); // 侧栏行 + 面板关联行（同名多处，易踩坑 3）
+    expect(screen.getByTestId("draft-hint").textContent).toContain("新会话 · OpenCode");
+    expect(screen.queryAllByTestId("session-row").filter((r) => r.textContent?.includes("OpenCode"))).toHaveLength(0);
+    await act(async () => {
+      send("从卡片来的首条");
+    });
+    await screen.findAllByText("新会话 · OpenCode"); // 侧栏行（同名多处，易踩坑 3）
+    // 切回看板验证：关联列表 + 会话数 + 徽标（requirementId 随首条消息落到新会话）
+    enterKanban();
     await waitFor(() => expect(within(col("Design")).getByText("◍ 2 会话")).toBeTruthy());
     await waitFor(() => expect(screen.getAllByTestId("related-session").length).toBe(2));
     await waitFor(() => expect(within(sidebarRow("新会话 · OpenCode")).getByTestId("req-badge").textContent).toBe("REQ-001"));

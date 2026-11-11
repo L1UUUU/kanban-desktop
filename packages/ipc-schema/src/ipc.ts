@@ -67,6 +67,8 @@ export const ipcRequestSchema = z.discriminatedUnion("channel", [
     permMode: permModeSchema.optional(),
     /** #17（spec #15 C 节）：创建成功后由 Main 原子落 link 事件（会话须与需求同项目，避免 renderer 两步编排竞态） */
     requirementId: z.string().min(1).optional(),
+    /** #59（spec #57）：草稿提交携带的首条消息 —— Main 内原子完成「创建原生会话→落库→发送」；发送失败受控终止并回滚删除记录 */
+    firstMessage: z.string().min(1).optional(),
   }),
   z.object({
     channel: z.literal("session:send"),
@@ -126,10 +128,11 @@ export const ipcRequestSchema = z.discriminatedUnion("channel", [
 ]);
 export type IpcRequest = z.infer<typeof ipcRequestSchema>;
 
-// 错误结果：code + 可读 message（入站校验拒绝时 message 含 zod 摘要）
+// 错误结果：code + 可读 message（入站校验拒绝时 message 含 zod 摘要）；
+// #59：rolledBackSessionId 仅 session:create+firstMessage 发送失败回滚时附带（渲染端撤销事件先至的占位会话行，不留空会话）
 export const ipcErrorSchema = z.object({
   ok: z.literal(false),
-  error: z.object({ code: errorCodeSchema, message: z.string() }),
+  error: z.object({ code: errorCodeSchema, message: z.string(), rolledBackSessionId: z.string().optional() }),
 });
 export type IpcError = z.infer<typeof ipcErrorSchema>;
 

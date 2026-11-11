@@ -1,11 +1,11 @@
-// 用途：聊天工作区 —— useChatController + useTerminals + useProjects 接线侧栏与中央区（transport 可注入：生产 window.api，测试 FakeAdapter 直连；活跃会话为 PTY 时中央渲染终端面板；主仓库并行冲突判据驱动提示条；#18 起中央区在聊天/看板视图间切换，本组件常挂 → 会话与 CLI 生命周期与视图切换无关）
-import type { ReactNode } from "react";
+// 用途：聊天工作区 —— useChatController + useTerminals + useProjects 接线侧栏与中央区（transport 可注入：生产 window.api，测试 FakeAdapter 直连；活跃会话为 PTY 时中央渲染终端面板；#59/#60 起「＋」/卡片建会话只开草稿（结构化首条消息、PTY 首输入才创建）；#18 起中央区在聊天/看板视图间切换，本组件常挂 → 会话与 CLI 生命周期与视图切换无关）
+import { useEffect, type ReactNode } from "react";
 import type { CliKind, RequirementCardRow, TerminalCommand } from "@kanban/ipc-schema";
 import { Sidebar } from "../../components/Sidebar";
 import type { ProjectsController } from "../projects/use-projects";
 import type { ChatTransport } from "../../lib/kanban-api";
 import { ChatPane } from "./ChatPane";
-import { CreateErrorCard } from "./components/CreateErrorCard";
+import { DraftPane } from "./components/DraftPane";
 import { detectMainRepoConflict } from "./conflict";
 import { resolveSessionCwd, useChatController, type ChatController } from "./use-chat";
 import { KanbanWorkspace } from "../kanban/KanbanWorkspace";
@@ -30,7 +30,7 @@ export function ChatWorkspace({
   transport: ChatTransport | null;
   /** 项目控制器（App 层创建，TopBar 与侧栏共享状态） */
   projects: ProjectsController;
-  /** Fake 演示会话 cwd（App 经 AppInfo 注入：Main 读 KANBAN_FAKE_DEMO_CWD、缺省用户主目录；未取到为 null，boot 演示会话暂缓） */
+  /** Fake 演示草稿 cwd（App 经 AppInfo 注入：Main 读 KANBAN_FAKE_DEMO_CWD、缺省用户主目录；未取到为 null，boot 演示草稿暂缓） */
   demoCwd?: string | null;
   /** 暴露 controller（测试驱动用；生产不传） */
   onController?: (controller: ChatController) => void;
@@ -54,12 +54,18 @@ export function ChatWorkspace({
   const terminals = useTerminals(transport, controller);
   if (onController) onController(controller);
 
+  // #59：切项目丢弃草稿（不弹确认、输入不保留；store 引用稳定，仅项目 id 变化触发）
+  const currentProjectId = projects.currentProjectId;
+  useEffect(() => {
+    controller.store.discardDraft();
+  }, [currentProjectId, controller.store]);
+
   // 活跃会话为 PTY 终端时中央渲染终端面板（与结构化聊天区并列切换，spec I）
   const active = controller.activeSession;
   // 主仓库并行冲突判据（spec I-4）：当前会话同目录 ≥2 活跃结构化会话 → 聊天区顶部提示条（仅提示不阻止，随快照动态更新）
   const conflictTitles = detectMainRepoConflict(controller.sessions, controller.activeId);
 
-  // #20 卡片建会话：cwd 解析与侧栏「＋」同规则（项目查不到不回退任何路径）
+  // #20/#59 卡片建会话：改为打开草稿（cwd 解析与侧栏「＋」同规则；需求关联随首条消息落到新会话）
   const createSessionForCard = (cli: CliKind | "pty", card: RequirementCardRow): void => {
     const projectId = card.projectId;
     if (!projectId) {
@@ -76,8 +82,11 @@ export function ChatWorkspace({
       openPtyDraft({ projectId, cwd, requirementId: card.id });
       return;
     }
-    terminals.discardDraft(); // 切换焦点到新会话：草稿静默丢弃
-    void controller.createSession(cli, { projectId, cwd, requirementId: card.id });
+    // 结构化会话（#59）：打开草稿并切回聊天视图（草稿在中央区；需求关联随首条消息落到新会话）；
+    // 切换焦点丢弃 PTY 草稿（全局单草稿，#60）
+    terminals.discardDraft();
+    controller.openDraft(cli, { projectId, cwd, requirementId: card.id });
+    onSetView?.("chat");
   };
 
   // #60：打开 PTY 终端草稿并切回聊天视图（草稿须可见可交互——首输入才能触发创建；从看板/记忆等视图发起时带回）
@@ -104,14 +113,15 @@ export function ChatWorkspace({
         }}
         onRegisterProject={() => void projects.register()}
         onCreateSession={(projectId, cli) => {
-          // cwd 用项目 canonicalPath；项目查不到不回退任何路径——真实 CLI 拒绝新建并提示，Fake 回落注入的演示 cwd
+          // #59：点「＋」只打开草稿（不 invoke、不落库、侧栏无新行）；cwd 用项目 canonicalPath，
+          // 项目查不到不回退任何路径——真实 CLI 拒绝并提示，Fake 回落注入的演示 cwd
           const cwd = resolveSessionCwd(projects.projects, projectId, cli, demoCwd ?? null);
           if (!cwd) {
             projects.setNotice("新建失败：项目不存在或已失效，请刷新项目列表后重试");
             return;
           }
-          terminals.discardDraft(); // #60：切换焦点到新会话：草稿静默丢弃
-          void controller.createSession(cli, { projectId, cwd });
+          terminals.discardDraft(); // #60：切换焦点到结构化草稿：PTY 草稿静默丢弃（全局单草稿）
+          controller.openDraft(cli, { projectId, cwd });
         }}
         onCreatePtySession={(projectId) => {
           const cwd = resolveSessionCwd(projects.projects, projectId, "pty", demoCwd ?? null);
@@ -133,24 +143,6 @@ export function ChatWorkspace({
         }}
         info={
           <>
-            {/* #46 会话创建失败卡（session:create 失败无会话视图可挂——创建入口/侧栏反馈，spec #40 F1） */}
-            {controller.createFailure ? (
-              <CreateErrorCard
-                failure={controller.createFailure}
-                configPath={configPath}
-                onRetry={() => {
-                  const f = controller.createFailure;
-                  if (!f) return;
-                  void controller.createSession(f.cli, {
-                    cwd: f.cwd,
-                    projectId: f.projectId ?? undefined,
-                    title: f.title,
-                    requirementId: f.requirementId,
-                  });
-                }}
-                onDismiss={controller.dismissCreateFailure}
-              />
-            ) : null}
             {projects.notice ? <p className="mb-1 text-warn">{projects.notice}</p> : null}
             {sidebarFooter}
           </>
@@ -182,6 +174,19 @@ export function ChatWorkspace({
       ) : view === "diff" ? (
         // #43：Diff 视图中央区（节点由 App 层注入；读取由视图挂载触发——进入视图自动读取一次）
         diff
+      ) : controller.draft ? (
+        // #59：结构化草稿优先于会话视图（草稿占据中央区；切会话/项目即丢弃）
+        <DraftPane
+          draft={controller.draft}
+          configPath={configPath}
+          actions={{
+            onSubmit: controller.submitDraft,
+            onInput: (input) => controller.store.updateDraft({ input }),
+            onPermChange: (mode) => controller.store.updateDraft({ permMode: mode }),
+            onModelChange: (model) => controller.store.updateDraft({ model }),
+            onDismissError: () => controller.store.clearDraftSubmitError(),
+          }}
+        />
       ) : terminals.draft ? (
         // #60：PTY 终端草稿（点「＋」后、首输入前：提示 + 可交互面板，优先于会话视图渲染）
         <TerminalWorkspace session={null} draft={terminals.draft} manager={terminals.manager} onKill={terminals.kill} />

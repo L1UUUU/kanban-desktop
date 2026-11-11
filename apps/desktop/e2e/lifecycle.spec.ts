@@ -53,6 +53,9 @@ async function registerAndCreate(win: Page): Promise<void> {
   await win.locator("aside").getByText(PROJECT_NAME, { exact: true }).hover();
   await win.getByRole("button", { name: "＋", exact: true }).click();
   await win.getByRole("button", { name: "Claude", exact: true }).click();
+  // #59 草稿：点 CLI 只开草稿，发出首条消息才创建会话（侧栏行出现）
+  await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
+  await send(win, "首条消息（建立会话）");
   await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
 }
 
@@ -85,8 +88,10 @@ test("切页不停止（§6.1）：A 流式中切 B 再切回，增量无缝、�
     await win.locator("aside").getByText(PROJECT_NAME, { exact: true }).hover();
     await win.getByRole("button", { name: "＋", exact: true }).click();
     await win.getByRole("button", { name: "Claude", exact: true }).click();
-    await expect(win.getByText("新会话 · Claude").nth(1)).toBeVisible({ timeout: 10_000 });
+    // #59 草稿：第二会话以「第二轮：再确认一遍导出面」为首条（随创建原子发出，行出现）
+    await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
     await send(win, "第二轮：再确认一遍导出面");
+    await expect(win.getByText("新会话 · Claude").nth(1)).toBeVisible({ timeout: 10_000 });
     // 切回 A（流式中）：B 继续在后台跑（切页不停止）
     await win.getByText("新会话 · Claude").nth(0).click();
     await expect(win.getByText("好的，我先跑一遍现有测试确认基线，然后开始拆分。")).toBeVisible({ timeout: 20_000 });
@@ -187,14 +192,15 @@ test("冲突提示条（spec I-4）：主仓库两会话并行运行出现（列
     const { app, win } = await launchApp(userData, repoDir);
     await registerAndCreate(win);
 
-    // 第二个会话（同项目同主仓库目录）
+    // 第二个会话（同项目同主仓库目录；#59 草稿：首条「拆类型」随创建发出，行出现）
     await win.locator("aside").getByText(PROJECT_NAME, { exact: true }).hover();
     await win.getByRole("button", { name: "＋", exact: true }).click();
     await win.getByRole("button", { name: "Claude", exact: true }).click();
+    await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
+    await send(win, "拆类型");
     await expect(win.getByText("新会话 · Claude").nth(1)).toBeVisible({ timeout: 10_000 });
 
-    // 两会话并行运行（当前活跃为第二个）：提示条出现
-    await send(win, "拆类型");
+    // 两会话并行运行（第二个已起 turn；切回第一个再发）：提示条出现
     await win.getByText("新会话 · Claude").nth(0).click();
     await send(win, "拆类型");
     const banner = win.getByTestId("conflict-banner");

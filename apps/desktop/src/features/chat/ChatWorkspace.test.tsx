@@ -5,8 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AdapterEvent, IpcRequest, IpcResult, ProjectRow, TerminalEvent } from "@kanban/ipc-schema";
-import { FakeAdapter, VirtualClock } from "@kanban/cli-host";
+import type { AdapterEvent, CliKind, ErrorCode, IpcRequest, IpcResult, ProjectRow, TerminalEvent } from "@kanban/ipc-schema";
+import { AdapterError, FakeAdapter, VirtualClock, type SendTurnInput } from "@kanban/cli-host";
 import { TrackerEngine } from "@kanban/tracker";
 import { openDatabase } from "../../../electron/main/db";
 import { handleIpc, type IpcDeps } from "../../../electron/main/ipc";
@@ -14,7 +14,7 @@ import { createPtyHost, type PtyLike, type PtyProcess } from "../../../electron/
 import { ProjectStore } from "../../../electron/main/project-store";
 import { SessionStore } from "../../../electron/main/session-store";
 import { ChatWorkspace } from "./ChatWorkspace";
-import type { ChatController } from "./use-chat";
+import type { ChatController, OpenDraftOptions } from "./use-chat";
 import { resolveSessionCwd } from "./use-chat";
 import type { ChatTransport } from "../../lib/kanban-api";
 import { useProjects } from "../projects/use-projects";
@@ -192,21 +192,41 @@ function mount(transport?: ChatTransport, opts?: { configPath?: string | null })
   };
 }
 
-/** 输入并发送一条消息 */
+/** 输入并发送一条消息（草稿面板与会话 composer 同款 placeholder：首条消息即草稿提交） */
 function send(text: string): void {
   const box = screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…");
   fireEvent.change(box, { target: { value: text } });
   fireEvent.click(screen.getByRole("button", { name: "发送 ➤" }));
 }
 
+/** #59 经草稿建立会话：打开草稿 → 输入首条消息 → 提交（原 createSession 直建的草稿语义等价物） */
+async function createViaDraft(ctl: ChatController, cli: CliKind, opts?: OpenDraftOptions, text = "默认演示"): Promise<void> {
+  ctl.openDraft(cli, opts);
+  ctl.store.updateDraft({ input: text });
+  await ctl.submitDraft();
+}
+
+/** #59 点项目行「＋」菜单选 CLI 后在草稿面板发首条消息（草稿 → 会话出现在侧栏） */
+async function createViaMenu(cliLabel = "Claude", text = "默认演示"): Promise<void> {
+  fireEvent.click(screen.getByRole("button", { name: "＋" }));
+  fireEvent.click(screen.getByText(cliLabel));
+  await act(async () => {
+    send(text);
+  });
+  await screen.findByText(`新会话 · ${cliLabel}`);
+}
+
 describe("聊天区（原型一致项 5/6/7）", () => {
-  it("启动自动创建首个会话：侧栏会话行 + composer 可用", async () => {
+  it("启动打开演示草稿（#59）：中央区草稿面板可交互，侧栏无会话行（空会话永不进历史）", async () => {
     const t = mount();
     await t.flush();
-    expect(screen.getByText("演示会话 · Fake")).toBeTruthy();
+    expect(screen.getByTestId("draft-hint").textContent).toContain("演示会话 · Fake");
+    expect(screen.getByTestId("draft-hint").textContent).toContain("发出第一条消息后才创建会话");
     expect(screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…")).toBeTruthy();
     expect(screen.getByRole("button", { name: "发送 ➤" })).toBeTruthy();
-    expect(screen.getByText("空闲")).toBeTruthy();
+    // 不落库不进列表：无会话行、无「空闲」状态徽标（会话尚未创建）
+    expect(screen.queryAllByTestId("session-row")).toHaveLength(0);
+    expect(screen.queryByText("空闲")).toBeNull();
   });
 
   it("默认演示：用户回显 + 助手全文 + 工具卡完成（名称/参数/时长/输出）", async () => {
@@ -382,32 +402,36 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("gpt-5.6-luna");
   });
 
-  it("composer 模型选择：选定值随新建会话下发，默认模型占位不下发", async () => {
+  it("composer 模型选择：选定值随草稿提交下发（firstMessage 携带），默认模型占位不下发", async () => {
     const seen: IpcRequest[] = [];
     const base = makeTransport(new FakeAdapter({ clock: new VirtualClock() }));
     const spy: ChatTransport = { ...base, invoke: (req) => { seen.push(req); return base.invoke(req); } };
     const t = mount(spy);
     await t.flush();
-    const creates = () => seen.filter((r) => r.channel === "session:create") as Array<IpcRequest & { model?: string; title?: string }>;
-    // 启动演示会话用默认模型：占位值不下发（后端按各 CLI 探测链自选）
+    const creates = () => seen.filter((r) => r.channel === "session:create") as Array<IpcRequest & { model?: string; title?: string; firstMessage?: string }>;
+    // boot 演示草稿发首条消息：默认模型为占位值不下发（后端按各 CLI 探测链自选）；首条消息随 create 携带
+    await act(async () => {
+      send("默认演示");
+    });
     const boot = creates().find((r) => r.title === "演示会话 · Fake");
-    expect(boot, "启动演示会话应存在").toBeTruthy();
+    expect(boot, "boot 演示草稿提交应发出 session:create").toBeTruthy();
     expect(boot!.model, "默认模型为占位值，不下发").toBeUndefined();
+    expect(boot!.firstMessage).toBe("默认演示");
 
-    // 选具体模型 → 新建会话：随 session:create 下发，且新会话 composer 回显该值
+    // 选具体模型 → 再开草稿提交：继承选定值随 session:create 下发，且新会话 composer 回显该值
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "gpt-5.6-luna" } });
     await act(async () => {
-      await t.ctl().createSession("fake", { cwd: DEMO_CWD, title: "带模型的会话" });
+      await createViaDraft(t.ctl(), "fake", { cwd: DEMO_CWD, title: "带模型的会话" });
     });
     const withModel = creates().find((r) => r.title === "带模型的会话");
-    expect(withModel, "新建会话应发出 session:create").toBeTruthy();
+    expect(withModel, "草稿提交应发出 session:create").toBeTruthy();
     expect(withModel!.model).toBe("gpt-5.6-luna");
     expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("gpt-5.6-luna");
 
-    // 切回默认模型 → 再新建：占位值仍不下发
+    // 切回默认模型 → 再开草稿提交：占位值仍不下发
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "默认模型" } });
     await act(async () => {
-      await t.ctl().createSession("fake", { cwd: DEMO_CWD, title: "默认模型会话" });
+      await createViaDraft(t.ctl(), "fake", { cwd: DEMO_CWD, title: "默认模型会话" });
     });
     const withoutModel = creates().find((r) => r.title === "默认模型会话");
     expect(withoutModel, "默认模型会话应发出 session:create").toBeTruthy();
@@ -417,9 +441,13 @@ describe("聊天区（原型一致项 5/6/7）", () => {
   it("composer：OpenCode 会话明示权限档位为 server 级（同项目共享）；其他 CLI 无此说明（spec B UI 明示）", async () => {
     const t = mount();
     await t.flush();
-    expect(screen.queryByText(/OpenCode 权限档位为 server 级/)).toBeNull(); // fake 会话不显示
+    expect(screen.queryByText(/OpenCode 权限档位为 server 级/)).toBeNull(); // boot 演示草稿（fake）不显示
     await act(async () => {
-      await t.ctl().createSession("opencode", { cwd: DEMO_CWD, title: "演示会话 · OpenCode" });
+      send("默认演示"); // boot 演示草稿提交 → fake 会话（供稍后切回）
+    });
+    expect(screen.queryByText(/OpenCode 权限档位为 server 级/)).toBeNull(); // fake 会话也不显示
+    await act(async () => {
+      await createViaDraft(t.ctl(), "opencode", { cwd: DEMO_CWD, title: "演示会话 · OpenCode" });
     });
     expect(screen.getByText(/OpenCode 权限档位为 server 级（同项目下会话共享）；切换后新会话生效/)).toBeTruthy();
     // 切回 fake 会话：说明消失
@@ -433,15 +461,17 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     await act(async () => {
       send("默认演示"); // A 开始流式
     });
-    // A 流式中新建并切到 B
+    const aId = t.ctl().activeId;
+    // A 流式中经草稿新建并切到 B（B 的首条也跑默认剧本，与 A 同文 → 用激活态区分视图）
     await act(async () => {
-      await t.ctl().createSession("fake");
+      await createViaDraft(t.ctl(), "fake");
     });
-    const activeId = t.ctl().activeId;
-    expect(activeId).toBeTruthy();
+    const bId = t.ctl().activeId;
+    expect(bId).toBeTruthy();
+    expect(bId).not.toBe(aId);
     expect(screen.getByText("新会话 · Fake")).toBeTruthy();
-    t.advance(); // A 在后台完成
-    expect(screen.queryByText(/基线全绿/)).toBeNull(); // 当前视图是 B，不显示 A 内容
+    t.advance(); // A/B 都在后台完成
+    expect(t.ctl().activeId).toBe(bId); // 当前视图仍是 B
     // 切回 A：全文在（流式未被切换打断）
     fireEvent.click(screen.getByText("演示会话 · Fake"));
     expect(
@@ -449,20 +479,31 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     ).toBeTruthy();
   });
 
-  it("新建会话：侧栏「＋」菜单（一致项 2 的 Fake 入口）新增会话行并激活", async () => {
+  it("打开草稿（#59）：不落库、不进侧栏；发出首条消息后行出现、草稿消失并激活", async () => {
     const t = mount();
     await t.flush();
     await act(async () => {
-      await t.ctl().createSession("fake");
+      t.ctl().openDraft("fake", { cwd: DEMO_CWD });
     });
-    await t.flush();
+    // 草稿就位：中央区草稿面板，侧栏无会话行
+    expect(screen.getByTestId("draft-hint").textContent).toContain("新会话 · Fake");
+    expect(screen.queryAllByTestId("session-row")).toHaveLength(0);
+    // 发出首条消息：经创建链落库，侧栏新增一行并激活，草稿面板消失
+    await act(async () => {
+      send("默认演示");
+    });
     expect(screen.getByText("新会话 · Fake")).toBeTruthy();
-    expect(screen.getAllByText("新会话 · Fake").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByTestId("draft-hint")).toBeNull();
+    expect(t.ctl().draft).toBeNull();
   });
 
   it("#58 归档：会话行 hover「归档」→ Main 编排（中断+终止+写标记）→ 侧栏行移除", async () => {
     const t = mount();
     await t.flush();
+    // #59：boot 演示草稿先发首条消息建立会话（行出现后才可 hover 归档）
+    await act(async () => {
+      send("默认演示");
+    });
     expect(screen.getByText("演示会话 · Fake")).toBeTruthy();
     fireEvent.click(screen.getByTitle("归档（移出默认列表，可在设置找回）"));
     await t.flush();
@@ -471,6 +512,10 @@ describe("聊天区（原型一致项 5/6/7）", () => {
 
   it("#62 删除：hover「删除」→ 二次确认 → Main 编排（unlink+终止+删记录）→ 侧栏行移除（唯一会话删除后空态）", async () => {
     const t = mount();
+    await t.flush();
+    await act(async () => {
+      send("默认演示"); // #59：boot 演示草稿先发首条消息建立会话（行出现后才可 hover 删除）
+    });
     await t.flush();
     expect(screen.getByText("演示会话 · Fake")).toBeTruthy();
     fireEvent.click(screen.getAllByTitle("删除（终止进程并移除会话记录，不可撤销）")[0]);
@@ -486,7 +531,11 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     const t = mount();
     await t.flush();
     await act(async () => {
-      await t.ctl().createSession("fake"); // 新会话登记为激活（排序最前，演示会话在后）
+      send("默认演示"); // #59：boot 演示草稿先成会话（作为删除后切换的相邻目标）
+    });
+    await t.flush();
+    await act(async () => {
+      await createViaDraft(t.ctl(), "fake"); // #59：再经草稿建第二个会话，登记为激活（排序最前，演示会话在后）
     });
     await t.flush();
     const deleted = t.ctl().activeId;
@@ -517,6 +566,10 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     };
     const t = mount(stub);
     await t.flush();
+    await act(async () => {
+      send("默认演示"); // #59：boot 演示草稿经 stub 的 session:create（含 firstMessage 原子链）成会话
+    });
+    await t.flush();
     expect(screen.getByText("演示会话 · Fake")).toBeTruthy();
     fireEvent.click(screen.getAllByTitle("删除（终止进程并移除会话记录，不可撤销）")[0]);
     fireEvent.click(screen.getByTestId("delete-session-confirm"));
@@ -525,22 +578,23 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     expect(await screen.findByText(/sqlite 写入失败/)).toBeTruthy(); // 错误在会话上呈现
   });
 
-  it("真实 CLI 无显式 cwd：拒绝创建（不得以任何隐式演示目录创建真实会话，code-review 硬违规回归）", async () => {
+  it("真实 CLI 无显式 cwd：拒绝打开草稿（不得以任何隐式演示目录创建真实会话，code-review 硬违规回归）", async () => {
     const t = mount();
     await t.flush();
     const before = t.ctl().sessions.length;
     await act(async () => {
-      await t.ctl().createSession("claude");
+      t.ctl().openDraft("claude");
     });
     await t.flush();
     expect(t.ctl().sessions.length).toBe(before);
+    expect(t.ctl().draft?.cli).toBe("fake"); // boot 演示草稿保留，未被 claude 草稿替换（不以隐式路径创建）
   });
 
   it("Fake 无显式 cwd：用注入的演示目录创建（cwd 来自注入而非 renderer 内置路径）", async () => {
     const t = mount();
     await t.flush();
     await act(async () => {
-      await t.ctl().createSession("fake");
+      await createViaDraft(t.ctl(), "fake");
     });
     await t.flush();
     const created = t.ctl().sessions.filter((s) => s.title === "新会话 · Fake");
@@ -566,7 +620,10 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     const t = mount(stub);
     await t.flush();
     await act(async () => {
-      send("任何消息");
+      send("任何消息"); // 首条 = 草稿提交（session:create+firstMessage，stub 返回 ok）
+    });
+    await act(async () => {
+      send("任何消息"); // 第二条走 session:send → stub 返回错误
     });
     expect(await screen.findByText(/会话不存在/)).toBeTruthy();
   });
@@ -606,10 +663,15 @@ describe("项目注册与会话恢复（#7 全链，除 Electron dialog）", () 
     await t1.flush();
     expect(await screen.findByText("demo-repo")).toBeTruthy();
 
-    // 「＋」菜单：Claude 新建会话（一致项 2/3：菜单四项入口 + CLI 色点 + 主仓库徽标）
+    // 「＋」菜单选 Claude 打开草稿（一致项 2/3：菜单四项入口 + CLI 色点）；发出首条消息才建会话（#59）
     fireEvent.click(screen.getByRole("button", { name: "＋" }));
     fireEvent.click(screen.getByText("Claude"));
     await t1.flush();
+    expect(screen.getByTestId("draft-hint").textContent).toContain("新会话 · Claude");
+    expect(screen.queryAllByTestId("session-row")).toHaveLength(0); // 草稿不进侧栏
+    await act(async () => {
+      send("首条消息");
+    });
     expect(await screen.findByText("新会话 · Claude")).toBeTruthy();
     expect(screen.getByTitle(`工作在主仓库（${projDir}）`)).toBeTruthy();
     // 当前项目过滤：boot 演示会话（无项目）不显示
@@ -722,11 +784,9 @@ describe("PTY 终端链路（#12：mock PTY 驱动 TerminalPanel 与多路复用
     if (writes[0].channel !== "terminal:write") throw new Error("非 write 请求");
     expect(writes[0].data).toBe("b");
 
-    // 切到结构化会话（建 Claude）再切回：面板保留（同一持久元素重新挂入，进程未停）
-    fireEvent.click(screen.getByRole("button", { name: "＋" }));
-    fireEvent.click(screen.getByText("Claude"));
-    await t.flush();
-    await screen.findByText("新会话 · Claude");
+    // 切到结构化会话（#59 草稿：发首条消息建 Claude）再切回：面板保留（同一持久元素重新挂入，进程未停）
+    await createViaMenu("Claude");
+    expect(screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…")).toBeTruthy();
     expect(document.querySelector(".xterm")).toBeNull();
     fireEvent.click(screen.getAllByText("终端 · pwsh")[0]);
     await waitFor(() => expect(document.querySelector(".xterm")).toBeTruthy());
@@ -843,7 +903,9 @@ describe("断开会话「读取原生历史并恢复」（#9 / #42 顶部恢复�
     const adapter = new FakeAdapter({ clock: clock1 });
     const t1 = mount(makeTransport(adapter, { dbPath }));
     await t1.flush();
-    send("拆类型");
+    await act(async () => {
+      send("拆类型"); // 首条消息 = 草稿提交（创建+落库+发送原子链）
+    });
     act(() => {
       clock1.runToIdle();
     });
@@ -888,7 +950,9 @@ describe("断开会话「读取原生历史并恢复」（#9 / #42 顶部恢复�
     const adapter = new FakeAdapter({ clock: clock1, failResumeFirst: 1 });
     const t1 = mount(makeTransport(adapter, { dbPath }));
     await t1.flush();
-    send("拆类型");
+    await act(async () => {
+      send("拆类型");
+    });
     act(() => {
       clock1.runToIdle();
     });
@@ -940,24 +1004,18 @@ describe("主仓库并行冲突提示条（spec I-4/#13）", () => {
     const t = mount(transport);
     await t.flush();
 
-    // 注册项目 + 两个 Claude 会话（同一主仓库目录）
+    // 注册项目 + 经草稿建两个 Claude 会话（同一主仓库目录）
     fireEvent.click(screen.getByRole("button", { name: "＋ 注册本地目录…" }));
     await t.flush();
     expect(await screen.findByText("demo-repo")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "＋" }));
-    fireEvent.click(screen.getByText("Claude"));
-    await t.flush();
-    expect(await screen.findByText("新会话 · Claude")).toBeTruthy();
+    // 两个会话各以首条消息起一个 turn（VirtualClock 不自动推进 → 保持 running）
+    await createViaMenu("Claude", "拆类型");
     fireEvent.click(screen.getByRole("button", { name: "＋" }));
     fireEvent.click(screen.getAllByText("Claude")[0]);
-    await t.flush();
+    await act(async () => {
+      send("拆类型"); // 第二个会话的首条（草稿提交，起 turn 后保持 running）
+    });
     expect((await screen.findAllByText("新会话 · Claude")).length).toBe(2);
-
-    // 两个会话各跑一个 turn（VirtualClock 不自动推进 → 保持 running）
-    send("拆类型"); // 当前活跃（第二个会话）
-    const rows = screen.getAllByText("新会话 · Claude");
-    fireEvent.click(rows[0]); // 切到第一个会话并发送
-    send("拆类型");
     await t.flush();
     // 提示条出现：计数 2 + 会话名（同默认标题出现两次）
     const banner = await screen.findByTestId("conflict-banner");
@@ -1017,13 +1075,10 @@ describe("Claude 同名 skill 提示条（#21 / 原型一致项 7：warn 样式�
 
   it("有冲突：Claude 会话顶部出现提示条（列冲突名 + 项目级优先生效 + 行为不稳定说明）；出现前（Fake 会话）不出现", async () => {
     const { transport } = makeSkillConflictFixture(["Design-Feature", "user-only"]);
-    const t = await boot(transport);
-    expect(screen.queryByTestId("skill-conflict-banner")).toBeNull(); // 当前活跃为 boot 的 Fake 会话：不提示
+    await boot(transport);
+    expect(screen.queryByTestId("skill-conflict-banner")).toBeNull(); // 当前活跃为 boot 的 Fake 演示草稿：不提示
 
-    fireEvent.click(screen.getByRole("button", { name: "＋" }));
-    fireEvent.click(screen.getByText("Claude"));
-    await t.flush();
-    expect(await screen.findByText("新会话 · Claude")).toBeTruthy();
+    await createViaMenu("Claude");
     const banner = await screen.findByTestId("skill-conflict-banner");
     expect(banner.textContent).toContain("检测到同名 skill");
     expect(banner.textContent).toContain("design-feature"); // 冲突名（项目侧命名）
@@ -1034,19 +1089,15 @@ describe("Claude 同名 skill 提示条（#21 / 原型一致项 7：warn 样式�
   it("可关闭：点「知道了」提示条消失；关闭后会话正常使用（发消息照常回显与回复）", async () => {
     const { clock, transport } = makeSkillConflictFixture(["design-feature"]);
     const t = await boot(transport);
-    fireEvent.click(screen.getByRole("button", { name: "＋" }));
-    fireEvent.click(screen.getByText("Claude"));
-    await t.flush();
+    // 首条消息即「继续工作」（建会话 + 起 turn 一步完成）
+    await createViaMenu("Claude", "继续工作");
     expect(await screen.findByTestId("skill-conflict-banner")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "知道了" }));
     await t.flush();
     expect(screen.queryByTestId("skill-conflict-banner")).toBeNull(); // 关闭仅隐藏
 
-    // 会话正常：发消息本地回显 + Fake 全 turn 回复（非阻塞：关闭不影响会话）
-    await act(async () => {
-      send("继续工作");
-    });
+    // 会话正常：turn 推进完成（本地回显 + Fake 全 turn 回复；非阻塞：关闭不影响会话）
     act(() => {
       clock.runToIdle();
     });
@@ -1057,21 +1108,15 @@ describe("Claude 同名 skill 提示条（#21 / 原型一致项 7：warn 样式�
 
   it("无冲突（用户级无同名）：Claude 会话不出现提示条", async () => {
     const { transport } = makeSkillConflictFixture(["user-only"]);
-    const t = await boot(transport);
-    fireEvent.click(screen.getByRole("button", { name: "＋" }));
-    fireEvent.click(screen.getByText("Claude"));
-    await t.flush();
-    expect(await screen.findByText("新会话 · Claude")).toBeTruthy();
+    await boot(transport);
+    await createViaMenu("Claude");
     expect(screen.queryByTestId("skill-conflict-banner")).toBeNull();
   });
 
   it("非 claude 会话不提示：同目录 Codex 会话无提示条（§7-4 决策：仅 Claude 检测）", async () => {
     const { transport } = makeSkillConflictFixture(["design-feature"]);
-    const t = await boot(transport);
-    fireEvent.click(screen.getByRole("button", { name: "＋" }));
-    fireEvent.click(screen.getByText("Codex"));
-    await t.flush();
-    expect(await screen.findByText("新会话 · Codex")).toBeTruthy();
+    await boot(transport);
+    await createViaMenu("Codex");
     expect(screen.queryByTestId("skill-conflict-banner")).toBeNull();
   });
 });
@@ -1096,68 +1141,83 @@ describe("「＋」新建 cwd 解析（resolveSessionCwd：项目查不到不回
   });
 });
 
-describe("会话创建失败卡（#46：session:create 失败在侧栏创建入口呈现，spec #40 F1）", () => {
-  it("spawn 失败（E_SPAWN_NOT_FOUND）：卡 3 信息结构（标题/指引/配置路径）+「重试创建」+「复制配置路径」+「知道了」", async () => {
-    const t = mount(undefined, { configPath: "C:\\UserData\\config.json" });
+describe("草稿提交失败卡（#59：session:create+firstMessage 失败在草稿面板呈现，输入保留可重试；卡 3 信息结构沿 #46）", () => {
+  /** spy transport：session:create 首次返回注入错误（之后透传真实链路）——驱动草稿失败卡 */
+  function makeFailingTransport(fail: { code: ErrorCode; message: string }): ChatTransport {
+    const base = makeTransport(new FakeAdapter({ clock: new VirtualClock() }));
+    let failed = false;
+    return {
+      ...base,
+      invoke: (req): Promise<IpcResult> => {
+        if (req.channel === "session:create" && !failed) {
+          failed = true;
+          return Promise.resolve({ ok: false, error: { code: fail.code, message: fail.message } });
+        }
+        return base.invoke(req);
+      },
+    };
+  }
+
+  it("创建失败（E_SPAWN_NOT_FOUND）：失败卡信息结构（标题/指引/配置路径）+「重试发送」+「复制配置路径」+「知道了」；草稿与输入保留", async () => {
+    const transport = makeFailingTransport({ code: "E_SPAWN_NOT_FOUND", message: "未找到 claude 可执行文件（已尝试：npm 全局；where）" });
+    const t = mount(transport, { configPath: "C:\\UserData\\config.json" });
     await t.flush();
     await act(async () => {
-      t.ctl().store.setCreateFailure({
-        cli: "claude",
-        code: "E_SPAWN_NOT_FOUND",
-        message: "未找到 claude 可执行文件（已尝试：npm 全局；where）",
-        cwd: DEMO_CWD,
-        projectId: null,
-      });
+      t.ctl().openDraft("claude", { cwd: DEMO_CWD });
+    });
+    await act(async () => {
+      send("首条消息");
     });
     const card = screen.getByTestId("create-error-card");
     expect(card.textContent).toContain("找不到 CLI 程序（Claude）");
     expect(card.textContent).toContain("确认已安装并在 PATH 中");
     expect(card.textContent).toContain("C:\\UserData\\config.json");
-    expect(screen.getByRole("button", { name: "重试创建" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "重试发送" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "复制配置路径" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "知道了" })).toBeTruthy();
-    // 「知道了」关闭（仅隐藏）
+    // 失败保留：草稿还在、输入未清、无会话行
+    expect(screen.getByTestId("draft-hint").textContent).toContain("新会话 · Claude");
+    expect((screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…") as HTMLTextAreaElement).value).toBe("首条消息");
+    expect(screen.queryAllByTestId("session-row")).toHaveLength(0);
+    // 「知道了」仅清除错误（草稿与输入仍保留）
     fireEvent.click(screen.getByRole("button", { name: "知道了" }));
     expect(screen.queryByTestId("create-error-card")).toBeNull();
+    expect(t.ctl().draft?.input).toBe("首条消息");
   });
 
-  it("「重试创建」：以原参数重发 session:create，成功后卡消失 + 会话登记", async () => {
-    const t = mount(undefined, { configPath: "C:\\UserData\\config.json" });
+  it("「重试发送」：重新执行创建+发送，成功后卡消失 + 会话登记 + 草稿丢弃", async () => {
+    const transport = makeFailingTransport({ code: "E_SPAWN_NOT_FOUND", message: "未找到 claude 可执行文件" });
+    const t = mount(transport, { configPath: "C:\\UserData\\config.json" });
     await t.flush();
     await act(async () => {
-      t.ctl().store.setCreateFailure({
-        cli: "claude",
-        code: "E_SPAWN_NOT_FOUND",
-        message: "未找到 claude 可执行文件（已尝试：npm 全局；where）",
-        cwd: DEMO_CWD,
-        projectId: null,
-        title: "重试的会话",
-      });
+      t.ctl().openDraft("claude", { cwd: DEMO_CWD });
+    });
+    await act(async () => {
+      send("要重试的首条");
     });
     expect(screen.getByTestId("create-error-card")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "重试创建" }));
+    fireEvent.click(screen.getByRole("button", { name: "重试发送" }));
     await t.flush();
-    // Fake 链路重试成功：卡消失（registerSession 清除）+ 新会话登记
+    // 重试走真实链路成功：卡消失 + 新会话登记 + 草稿消失
     expect(screen.queryByTestId("create-error-card")).toBeNull();
-    expect(screen.getByText("重试的会话")).toBeTruthy();
+    expect(screen.getByText("新会话 · Claude")).toBeTruthy();
+    expect(screen.queryByTestId("draft-hint")).toBeNull();
   });
 
-  it("非 spawn 创建失败：未知卡保留 code 与 message 原文 +「复制错误详情」", async () => {
-    const t = mount();
+  it("非 spawn 提交失败：未知卡保留 code 与 message 原文 +「复制错误详情」", async () => {
+    const transport = makeFailingTransport({ code: "E_INTERNAL", message: "thread/start 未返回 thread id（协议异常）" });
+    const t = mount(transport);
     await t.flush();
     await act(async () => {
-      t.ctl().store.setCreateFailure({
-        cli: "codex",
-        code: "E_INTERNAL",
-        message: "thread/start 未返回 thread id（协议异常）",
-        cwd: DEMO_CWD,
-        projectId: null,
-      });
+      t.ctl().openDraft("codex", { cwd: DEMO_CWD });
+    });
+    await act(async () => {
+      send("首条");
     });
     const card = screen.getByTestId("create-error-card");
     expect(card.textContent).toContain("E_INTERNAL");
     expect(card.textContent).toContain("thread/start 未返回 thread id（协议异常）");
-    expect(screen.getByRole("button", { name: "重试创建" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "重试发送" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "复制错误详情" })).toBeTruthy();
   });
 });
@@ -1167,12 +1227,9 @@ describe("会话内错误卡五类（#46：fake 脚本分支驱动 ChatPane → 
     const t = mount(undefined, { configPath: "C:\\UserData\\config.json" });
     await t.flush();
     // 建 claude（Fake 链路）会话：cli 记录为 claude → 指引命令按 claude 定制
+    // 首条消息即「认证演示」（建会话 + 触发认证剧本一步完成）
     await act(async () => {
-      await t.ctl().createSession("claude", { cwd: DEMO_CWD, title: "认证演示会话" });
-    });
-    await t.flush();
-    await act(async () => {
-      send("认证演示");
+      await createViaDraft(t.ctl(), "claude", { cwd: DEMO_CWD, title: "认证演示会话" }, "认证演示");
     });
     t.advance();
     const card = screen.getByTestId("error-card");
@@ -1222,5 +1279,206 @@ describe("会话内错误卡五类（#46：fake 脚本分支驱动 ChatPane → 
     expect(card.textContent).toContain("UNKNOWN");
     expect(card.textContent).toContain("某种未覆盖的错误形态（演示）");
     expect(screen.getByRole("button", { name: "复制错误详情" })).toBeTruthy();
+  });
+});
+
+describe("结构化会话草稿创建（#59：点「＋」只开草稿，首条消息原子创建+发送；单草稿；切走即丢）", () => {
+  let tmpRoot = "";
+
+  afterEach(() => {
+    cleanup();
+    for (const db of openDbs.splice(0)) db.close();
+    if (tmpRoot) {
+      rmSync(tmpRoot, { recursive: true, force: true });
+      tmpRoot = "";
+    }
+  });
+
+  /** 首次 sendTurn 抛错的自定义 FakeAdapter（驱动「创建成功但发送失败」全链：Main 回滚不留空会话） */
+  class FailFirstSendAdapter extends FakeAdapter {
+    private sendCalls = 0;
+    override async sendTurn(input: SendTurnInput): Promise<void> {
+      this.sendCalls += 1;
+      if (this.sendCalls === 1) throw new AdapterError("E_INTERNAL", "发送失败（注入：首条消息发送失败）");
+      return super.sendTurn(input);
+    }
+  }
+
+  it("点「＋」选 CLI：只开草稿——无 session:create 请求（不落库、不起 CLI）、侧栏无新行、可输入可改权限/模型", async () => {
+    const seen: IpcRequest[] = [];
+    const base = makeTransport(new FakeAdapter({ clock: new VirtualClock() }));
+    const spy: ChatTransport = { ...base, invoke: (req) => { seen.push(req); return base.invoke(req); } };
+    const t = mount(spy);
+    await t.flush();
+    seen.length = 0; // 排除 bootstrap 的 project/session 拉取
+    await act(async () => {
+      t.ctl().openDraft("claude", { cwd: DEMO_CWD });
+    });
+    // 无任何创建请求；侧栏无行；草稿可交互（输入 + 权限/模型控件）
+    expect(seen).toHaveLength(0);
+    expect(screen.queryAllByTestId("session-row")).toHaveLength(0);
+    expect((screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…") as HTMLTextAreaElement).value).toBe("");
+    expect(screen.getByText("⚡ 权限：自动 ▾")).toBeTruthy();
+    expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("默认模型");
+    // 权限/模型在草稿上可改
+    fireEvent.click(screen.getByText("⚡ 权限：自动 ▾"));
+    fireEvent.click(screen.getByText("🔒 请求"));
+    expect(screen.getByText("🔒 权限：请求 ▾")).toBeTruthy();
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "gpt-5.6-luna" } });
+    expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("gpt-5.6-luna");
+  });
+
+  it("首条消息原子创建+发送：权限/模型/首条文本随 create 携带，消息送达（用户回显 + 助手回复）", async () => {
+    const seen: IpcRequest[] = [];
+    const clock = new VirtualClock();
+    const base = makeTransport(new FakeAdapter({ clock }));
+    const spy: ChatTransport = { ...base, invoke: (req) => { seen.push(req); return base.invoke(req); } };
+    const t = mount(spy);
+    await t.flush();
+    seen.length = 0;
+    await act(async () => {
+      t.ctl().openDraft("claude", { cwd: DEMO_CWD });
+    });
+    // 权限改 ask、模型选具体值 → 随提交一并下发
+    fireEvent.click(screen.getByText("⚡ 权限：自动 ▾"));
+    fireEvent.click(screen.getByText("🔒 请求"));
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "gpt-5.6-luna" } });
+    await act(async () => {
+      send("带参数的首条");
+    });
+    const create = seen.find((r) => r.channel === "session:create") as
+      | (IpcRequest & { permMode?: string; model?: string; firstMessage?: string })
+      | undefined;
+    expect(create).toBeTruthy();
+    expect(create!.firstMessage).toBe("带参数的首条");
+    expect(create!.permMode).toBe("ask");
+    expect(create!.model).toBe("gpt-5.6-luna");
+    // 消息送达：用户回显 + 助手回复（Fake 默认剧本）
+    expect(screen.getByText("带参数的首条")).toBeTruthy();
+    act(() => {
+      clock.runToIdle();
+    });
+    expect(screen.getByText("好的，我先跑一遍现有测试确认基线，然后开始拆分。")).toBeTruthy();
+  });
+
+  it("创建成功但发送失败（全链注入）：不留空会话（DB 无记录）、失败卡明确报错、草稿与输入保留、重试成功后正常入库", async () => {
+    const adapter = new FailFirstSendAdapter({ clock: new VirtualClock() });
+    const transport = makeTransport(adapter);
+    const t = mount(transport);
+    await t.flush();
+    await act(async () => {
+      t.ctl().openDraft("claude", { cwd: DEMO_CWD });
+    });
+    await act(async () => {
+      send("注定失败的首条");
+    });
+    // 失败卡（草稿面板中央区）+ 明确错误；草稿与输入保留
+    const card = screen.getByTestId("create-error-card");
+    expect(card.textContent).toContain("发送失败（注入：首条消息发送失败）");
+    expect((screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…") as HTMLTextAreaElement).value).toBe("注定失败的首条");
+    // 不留空会话：侧栏无行 + session:list（DB）为空（Main 已回滚删除记录 → 重启也不被恢复）
+    expect(screen.queryAllByTestId("session-row")).toHaveLength(0);
+    const list = await transport.invoke({ channel: "session:list" });
+    expect(list.ok && list.sessions).toHaveLength(0);
+    // 重试：同参数重新执行创建+发送 → 成功入库（DB 一行、侧栏一行、草稿丢弃）
+    fireEvent.click(screen.getByRole("button", { name: "重试发送" }));
+    await t.flush();
+    expect(screen.queryByTestId("create-error-card")).toBeNull();
+    expect(screen.getByText("新会话 · Claude")).toBeTruthy();
+    expect(screen.queryByTestId("draft-hint")).toBeNull();
+    const list2 = await transport.invoke({ channel: "session:list" });
+    expect(list2.ok && list2.sessions).toHaveLength(1);
+  });
+
+  it("再点「＋」：替换现有草稿并显示明确提示；原输入不保留", async () => {
+    const t = mount();
+    await t.flush();
+    await act(async () => {
+      t.ctl().openDraft("claude", { cwd: DEMO_CWD });
+    });
+    // 在草稿输入框写入未发送的内容
+    fireEvent.change(screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…"), { target: { value: "旧草稿的输入" } });
+    await act(async () => {
+      t.ctl().openDraft("codex", { cwd: DEMO_CWD });
+    });
+    expect(screen.getByTestId("draft-hint").textContent).toContain("新会话 · Codex");
+    expect(screen.getByTestId("draft-hint").textContent).toContain("已替换上一个草稿");
+    expect((screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…") as HTMLTextAreaElement).value).toBe(""); // 旧输入不保留
+  });
+
+  it("切会话丢弃草稿且不弹确认、输入不保留；草稿丢弃后中央区回到原会话", async () => {
+    const t = mount();
+    await t.flush();
+    await act(async () => {
+      send("默认演示"); // boot 演示草稿提交 → fake 会话
+    });
+    const fakeId = t.ctl().activeId;
+    await act(async () => {
+      t.ctl().openDraft("claude", { cwd: DEMO_CWD });
+    });
+    fireEvent.change(screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…"), { target: { value: "将被丢弃的输入" } });
+    // 点侧栏会话行切换：草稿丢弃（无确认弹层）、输入消失、回到会话视图
+    fireEvent.click(screen.getByText("演示会话 · Fake"));
+    expect(t.ctl().draft).toBeNull();
+    expect(screen.queryByTestId("draft-hint")).toBeNull();
+    expect(t.ctl().activeId).toBe(fakeId);
+  });
+
+  it("切换项目丢弃草稿（不弹确认、输入不保留）", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "kb-ws-draft-proj-"));
+    const projA = join(tmpRoot, "proj-a");
+    const projB = join(tmpRoot, "proj-b");
+    mkdirSync(join(projA, ".git"), { recursive: true });
+    mkdirSync(join(projB, ".git"), { recursive: true });
+    const dirs = [projA, projB];
+    const clock = new VirtualClock();
+    const adapter = new FakeAdapter({ clock });
+    const transport = makeTransport(adapter, { dbPath: join(tmpRoot, "state.db"), pick: async () => dirs.shift() ?? null });
+    const t = mount(transport);
+    await t.flush();
+    // 注册项目 A（pick 首次返回 projA）→ 项目行出现
+    fireEvent.click(screen.getByRole("button", { name: "＋ 注册本地目录…" }));
+    await t.flush();
+    expect(await screen.findByText("proj-a")).toBeTruthy();
+    // 在 A 上开草稿并输入
+    await act(async () => {
+      t.ctl().openDraft("claude", { cwd: projA, projectId: "pa" });
+    });
+    fireEvent.change(screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…"), { target: { value: "A 项目的草稿" } });
+    expect(t.ctl().draft).toBeTruthy();
+    // 注册 B（自动切到 B 项目）→ 草稿被丢弃
+    fireEvent.click(screen.getByRole("button", { name: "＋ 注册" }));
+    await t.flush();
+    expect(await screen.findByText("proj-b")).toBeTruthy();
+    expect(t.ctl().draft).toBeNull();
+    expect(screen.queryByTestId("draft-hint")).toBeNull();
+  });
+
+  it("boot 演示草稿不落库：首启无 session:create、session:list 为空；发首条消息成会话；重启恢复为断开态", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "kb-ws-draft-boot-"));
+    const seen: IpcRequest[] = [];
+    const dbPath = join(tmpRoot, "state.db");
+    const base = makeTransport(new FakeAdapter({ clock: new VirtualClock() }), { dbPath });
+    const spy: ChatTransport = { ...base, invoke: (req) => { seen.push(req); return base.invoke(req); } };
+    const t = mount(spy);
+    await t.flush();
+    // 首启：boot 演示草稿打开但无任何 session:create（空会话永不进历史）
+    expect(t.ctl().draft?.title).toBe("演示会话 · Fake");
+    expect(seen.filter((r) => r.channel === "session:create")).toHaveLength(0);
+    const empty = await spy.invoke({ channel: "session:list" });
+    expect(empty.ok && empty.sessions).toHaveLength(0);
+    // 发首条消息：草稿成会话（落库一行）
+    await act(async () => {
+      send("默认演示");
+    });
+    expect(seen.filter((r) => r.channel === "session:create")).toHaveLength(1);
+    expect(screen.getByText("演示会话 · Fake")).toBeTruthy();
+    // 重启（同 db）：该会话恢复为断开态行（产生过实际对话的会话重启可见，#57 US12）
+    cleanup();
+    const t2 = mount(makeTransport(new FakeAdapter({ clock: new VirtualClock() }), { dbPath }));
+    await t2.flush();
+    expect(await screen.findByText("演示会话 · Fake")).toBeTruthy();
+    expect(screen.getByText("已断开")).toBeTruthy();
+    void t2;
   });
 });

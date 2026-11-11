@@ -128,11 +128,11 @@ test("真实最小集全链：Claude hook verified design-feature 自动建卡 �
     await win.locator("aside").getByText(PROJECT_NAME, { exact: true }).hover();
     await win.getByRole("button", { name: "＋", exact: true }).click();
     await win.getByRole("button", { name: "Claude", exact: true }).click();
-    const claudeRow = win.locator("aside").locator('[data-testid="session-row"]', { hasText: "新会话 · Claude" });
-    await expect(claudeRow).toBeVisible({ timeout: 30_000 });
-
+    // #59 草稿：点 CLI 只开草稿；首条消息（真实 Skill 指令）随「创建+落库+发送」原子发出 → 会话行出现
     // [A] verified design-feature 自动建卡：真实 Skill 真调用 → PreToolUse(Skill) hook 捕获 → transformHookEvents verified → 建卡
     await send(win, "请务必通过 Skill 工具（tool_use: Skill）调用 design-feature 这个 skill，不要直接照做，也不要只输出文本。");
+    const claudeRow = win.locator("aside").locator('[data-testid="session-row"]', { hasText: "新会话 · Claude" });
+    await expect(claudeRow).toBeVisible({ timeout: 30_000 });
     await waitIdle(win, "新会话 · Claude");
     await win.getByTestId("kanban-entry").click();
     const designCol = win.getByTestId("kanban-col-Design");

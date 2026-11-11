@@ -28,12 +28,13 @@ test("窗口打开显示三区布局（原型一致项 1）", async () => {
   await expect(win.getByText("Kanban Desktop")).toBeVisible();
   await expect(win.getByText("设置")).toBeVisible();
 
-  // 左侧栏：项目 / 结构化会话 / PTY 终端三分组 + 空项目 boot 演示会话行（#7：无项目时引导注册）
+  // 左侧栏：项目 / 结构化会话 / PTY 终端三分组 + 空项目 boot 演示草稿（#59：草稿不落库不发首条不进侧栏）
   await expect(win.getByText("项目", { exact: true })).toBeVisible();
   await expect(win.getByText("结构化会话")).toBeVisible();
   await expect(win.getByText("PTY 终端")).toBeVisible();
   await expect(win.getByText("尚无项目")).toBeVisible({ timeout: 15_000 });
-  await expect(win.getByText("演示会话 · Fake")).toBeVisible({ timeout: 15_000 });
+  await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 15_000 }); // 中央区草稿面板
+  await expect(win.getByText("演示会话 · Fake")).toBeVisible(); // 草稿标题（无侧栏会话行）
 });
 
 test("IPC 链路连通：运行信息经 preload 桥接到 renderer（侧栏底部）", async () => {

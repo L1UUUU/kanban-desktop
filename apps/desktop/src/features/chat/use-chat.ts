@@ -1,18 +1,17 @@
-// 用途：聊天控制器 hook —— transport → ChatStore 接线：启动恢复（session:list 断开会话登记）+ 无项目时 boot 演示会话 + 全部会话始终归并（切会话不中断，一致项 7），动作经 IPC 单通道发出
+// 用途：聊天控制器 hook —— transport → ChatStore 接线：启动恢复（session:list 断开会话登记）+ 无项目时 boot 演示草稿（#59：发出首条消息才创建会话，空会话永不进历史）+ 全部会话始终归并（切会话不中断，一致项 7），动作经 IPC 单通道发出
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { AdapterEvent, ApprovalDecision, ChatEvent, CliKind, IpcResult, PermMode, ProjectRow } from "@kanban/ipc-schema";
 import type { ChatTransport } from "../../lib/kanban-api";
-import { ChatStore, type SessionView } from "./chat-store";
+import { ChatStore, type DraftSession, type SessionView } from "./chat-store";
 
 export const DEFAULT_MODEL = "默认模型";
 
-/** createSession 可选项（cwd 必填：挂当前项目的会话传项目 canonicalPath） */
-export interface CreateSessionOptions {
+/** #59 草稿打开可选项（cwd 必填：挂当前项目的会话传项目 canonicalPath；权限/模型缺省继承当前 composer 选定值） */
+export interface OpenDraftOptions {
   cwd: string;
   projectId?: string | null;
   title?: string;
-  permMode?: PermMode;
-  /** #20：从需求卡片建会话——Main 创建成功后原子落 link 事件（会话须与需求同项目） */
+  /** #20：从需求卡片进草稿——提交后由 Main 原子落 link 事件（会话须与需求同项目） */
   requirementId?: string;
 }
 
@@ -20,7 +19,10 @@ export interface ChatControllerActions {
   send(text: string): void;
   interrupt(): void;
   resolveApproval(decision: ApprovalDecision): void;
-  createSession(cli: CliKind, opts?: CreateSessionOptions): Promise<void>;
+  /** #59：打开结构化会话草稿（不 invoke、不落库、不进侧栏；全局仅一个，再点「＋」替换） */
+  openDraft(cli: CliKind, opts?: OpenDraftOptions): void;
+  /** #59：提交草稿 —— 经 session:create+firstMessage 原子完成「创建原生会话→落库→发送首条消息」；失败返回 false（草稿与输入保留） */
+  submitDraft(): Promise<boolean>;
   switchTo(sessionId: string): void;
   setPerm(mode: PermMode): void;
   setModel(model: string): void;
@@ -32,8 +34,6 @@ export interface ChatControllerActions {
   deleteSession(sessionId: string): Promise<void>;
   /** #21：关闭同名 skill 冲突提示条（仅隐藏不影响会话） */
   dismissSkillConflict(sessionId: string): void;
-  /** #46：关闭会话创建失败卡（仅隐藏；下次创建成功自动清除） */
-  dismissCreateFailure(): void;
 }
 
 export interface ChatController extends ChatControllerActions {
@@ -42,8 +42,8 @@ export interface ChatController extends ChatControllerActions {
   activeId: string | null;
   /** store 版本号（驱动视图滚动等副作用） */
   version: number;
-  /** #46：最近一次会话创建失败（null=无；侧栏创建入口错误卡数据源） */
-  createFailure: import("./chat-store").CreateFailure | null;
+  /** #59：当前结构化会话草稿（null=无；中央区草稿面板数据源） */
+  draft: DraftSession | null;
   /** store 直面（终端控制器等并列模块登记 PTY 会话/更新状态用） */
   store: ChatStore;
 }
@@ -64,8 +64,8 @@ function isChatEvent(e: AdapterEvent): e is ChatEvent {
 }
 
 /**
- * 聊天控制器 hook。demoCwd 为 Fake 演示会话 cwd（App 层经 AppInfo 注入：Main 读 KANBAN_FAKE_DEMO_CWD、
- * 缺省用户主目录）；未注入（null/undefined）前不自举 boot 演示会话，真实会话 cwd 一律来自已注册项目。
+ * 聊天控制器 hook。demoCwd 为 Fake 演示草稿 cwd（App 层经 AppInfo 注入：Main 读 KANBAN_FAKE_DEMO_CWD、
+ * 缺省用户主目录）；未注入（null/undefined）前不自举 boot 演示草稿，真实会话 cwd 一律来自已注册项目。
  */
 export function useChatController(transport: ChatTransport | null, demoCwd: string | null = null): ChatController {
   // useState 初始化器保证每 hook 实例一个 store（渲染期可安全读取）
@@ -75,7 +75,7 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
   const bootRef = useRef(false);
 
   // 事件订阅 + 启动自举：事件对全部会话始终归并（与激活视图无关 —— 切换不停止）；
-  // 自举等 demoCwd 注入到位（AppInfo 异步拉取）再跑，避免演示会话缺失或以未知目录创建
+  // 自举等 demoCwd 注入到位（AppInfo 异步拉取）再跑，避免演示草稿缺失或以未知目录打开
   useEffect(() => {
     if (!transport) return;
     const off = transport.onEvent((e) => {
@@ -122,19 +122,84 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
           id,
         );
       },
-      createSession: async (cli, opts) => {
-        if (!transport) return;
-        // cwd 必须显式携带，或（仅 fake）回落注入的演示目录；真实 CLI 缺 cwd 直接拒绝，不以任何隐式路径创建
+      openDraft: (cli, opts) => {
+        // cwd 必须显式携带，或（仅 fake）回落注入的演示目录；真实 CLI 缺 cwd 直接拒绝，不以任何隐式路径建草稿
         const resolved = opts ?? (cli === "fake" && demoCwd ? { cwd: demoCwd } : null);
         if (!resolved) {
-          window.api?.log?.("error", "chat", "会话创建失败：缺少 cwd（真实会话须挂已注册项目，演示目录未注入）");
+          window.api?.log?.("error", "chat", "草稿打开失败：缺少 cwd（真实会话须挂已注册项目，演示目录未注入）");
           return;
         }
-        await createCliSession(transport, store, cli, resolved);
+        // 模型继承当前 composer 选定值：优先当前草稿，其次当前激活会话（权限档位不继承，草稿内自选）
+        const s = store.getSnapshot();
+        const inheritFrom = s.draft ?? (s.activeId ? store.getSession(s.activeId) : undefined);
+        store.openDraft({
+          cli,
+          cwd: resolved.cwd,
+          projectId: resolved.projectId,
+          title: resolved.title,
+          requirementId: resolved.requirementId,
+          model: inheritFrom?.model,
+        });
+      },
+      submitDraft: async () => {
+        const d = store.getSnapshot().draft;
+        if (!d || d.input.trim().length === 0 || !transport) return false;
+        // 「默认模型」是 UI 占位串不下发（后端按各 CLI 探测链自选）
+        const model = d.model === DEFAULT_MODEL ? undefined : d.model;
+        const r = await transport.invoke({
+          channel: "session:create",
+          cli: d.cli,
+          cwd: d.cwd,
+          projectId: d.projectId ?? undefined,
+          title: d.title,
+          ...(model ? { model } : {}),
+          permMode: d.permMode,
+          requirementId: d.requirementId,
+          firstMessage: d.input,
+        });
+        if (r.ok && r.sessionId) {
+          // #20：卡片进草稿的自动关联由 Main 原子完成（session_linked 推送回流看板 store）；拒绝仅报告不阻断会话
+          if (r.linked === false)
+            window.api?.log?.("error", "chat", "会话创建后自动关联被拒绝", {
+              sessionId: r.sessionId,
+              ...(r.reason ? { reason: r.reason } : {}),
+            });
+          store.registerSession({
+            sessionId: r.sessionId,
+            cli: r.cli ?? d.cli,
+            title: r.title ?? d.title,
+            permMode: d.permMode,
+            model: d.model,
+            projectId: d.projectId,
+            cwd: d.cwd,
+            dirIdentity: r.dirIdentity ?? "none",
+            worktreeName: r.worktreeName ?? null,
+            // #21：Main 仅对 claude 会话附同名 skill 冲突名（其余 CLI 缺省无冲突）
+            skillConflicts: r.skillConflicts ?? [],
+          });
+          store.appendUserMessage(r.sessionId, d.input); // 首条消息本地回显（内容不经事件流回传）
+          store.discardDraft();
+          return true;
+        }
+        // 失败：草稿与输入保留（可重试），错误直达失败卡；不留空会话（Main 已回滚记录）
+        const code = r.ok ? "E_INTERNAL" : r.error.code;
+        const message = r.ok ? "未知错误" : r.error.message;
+        // Main 回滚时事件（session_status 等）可能已先至渲染端建占位行——按回滚 id 撤销，不留空会话
+        if (!r.ok && r.error.rolledBackSessionId) store.removeSession(r.error.rolledBackSessionId);
+        // #55（spec #52 G 节）：提交失败留痕（带关键参数；requirementId 可选键条件携带，防 ctx 出现 undefined）
+        window.api?.log?.("error", "chat", "草稿提交失败（创建+发送首条消息）", {
+          cli: d.cli,
+          code,
+          message,
+          cwd: d.cwd,
+          ...(d.projectId ? { projectId: d.projectId } : {}),
+          ...(d.requirementId ? { requirementId: d.requirementId } : {}),
+        });
+        store.setDraftSubmitError(code, message);
+        return false;
       },
       switchTo: (sessionId) => store.setActive(sessionId),
       dismissSkillConflict: (sessionId) => store.dismissSkillConflict(sessionId),
-      dismissCreateFailure: () => store.clearCreateFailure(),
       setPerm: (mode) => {
         const id = activeId();
         if (id) store.updateSession(id, { permMode: mode });
@@ -192,12 +257,12 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
     activeSession,
     activeId: snap.activeId,
     version: snap.version,
-    createFailure: snap.createFailure,
+    draft: snap.draft,
     store,
   };
 }
 
-/** 启动自举：恢复 DB 历史会话（统一断开态）；无项目且无历史时用注入的 demoCwd 建 Fake 演示会话（#6 链路保持） */
+/** 启动自举：恢复 DB 历史会话（统一断开态）；无项目且无会话时打开 Fake 演示草稿（#59：不落库，发第一条消息才成会话） */
 async function bootstrap(transport: ChatTransport, store: ChatStore, demoCwd: string): Promise<void> {
   const [projRes, sessRes] = await Promise.all([
     transport.invoke({ channel: "project:list" }),
@@ -208,70 +273,6 @@ async function bootstrap(transport: ChatTransport, store: ChatStore, demoCwd: st
   }
   const hasProjects = projRes.ok && (projRes.projects?.length ?? 0) > 0;
   if (!hasProjects && store.getSnapshot().sessions.length === 0) {
-    await createCliSession(transport, store, "fake", { cwd: demoCwd, title: "演示会话 · Fake" });
-  }
-}
-
-/** 创建会话并登记激活（目录身份来自 Main 判定回传；#46 起创建失败记录进 store 由侧栏创建入口错误卡呈现） */
-export async function createCliSession(
-  transport: ChatTransport,
-  store: ChatStore,
-  cli: CliKind,
-  opts: CreateSessionOptions,
-): Promise<void> {
-  // 模型：继承当前激活会话在 composer 的选定值；「默认模型」是 UI 占位串，不下发（后端按各 CLI 探测链自选）
-  const activeId = store.getSnapshot().activeId;
-  const selected = (activeId ? store.getSession(activeId)?.model : undefined) ?? DEFAULT_MODEL;
-  const model = selected === DEFAULT_MODEL ? undefined : selected;
-  const r = await transport.invoke({
-    channel: "session:create",
-    cli,
-    cwd: opts.cwd,
-    projectId: opts.projectId ?? undefined,
-    title: opts.title,
-    ...(model ? { model } : {}),
-    permMode: opts.permMode ?? "auto",
-    requirementId: opts.requirementId,
-  });
-  if (r.ok && r.sessionId) {
-    // #20：卡片建会话的自动关联由 Main 原子完成（session_linked 推送回流看板 store）；拒绝仅报告不阻断会话
-    if (r.linked === false)
-      window.api?.log?.("error", "chat", "会话创建后自动关联被拒绝", {
-        sessionId: r.sessionId,
-        ...(r.reason ? { reason: r.reason } : {}),
-      });
-    store.registerSession({
-      sessionId: r.sessionId,
-      cli: r.cli ?? cli,
-      title: r.title ?? opts.title ?? `新会话 · ${cli}`,
-      permMode: opts.permMode ?? "auto",
-      model: selected,
-      projectId: opts.projectId ?? null,
-      cwd: opts.cwd,
-      dirIdentity: r.dirIdentity ?? "none",
-      worktreeName: r.worktreeName ?? null,
-      // #21：Main 仅对 claude 会话附同名 skill 冲突名（其余 CLI 缺省无冲突）
-      skillConflicts: r.skillConflicts ?? [],
-    });
-  } else if (!r.ok) {
-    // #46：创建失败无会话视图可挂——记录到 store（侧栏创建入口错误卡呈现，携带原参数供「重试创建」；spec #40 F1）
-    // #55（spec #52 G 节）：创建失败留痕（带会话标识与关键参数；requirementId 可选键条件携带，防 ctx 出现 undefined）
-    window.api?.log?.("error", "chat", "会话创建失败", {
-      cli,
-      code: r.error.code,
-      message: r.error.message,
-      cwd: opts.cwd,
-      ...(opts.projectId ? { projectId: opts.projectId } : {}),
-      ...(opts.requirementId ? { requirementId: opts.requirementId } : {}),
-    });
-    store.setCreateFailure({
-      cli,
-      code: r.error.code,
-      message: r.error.message,
-      cwd: opts.cwd,
-      projectId: opts.projectId ?? null,
-      title: opts.title,
-      requirementId: opts.requirementId,
-    });
+    store.openDraft({ cli: "fake", cwd: demoCwd, title: "演示会话 · Fake" });
   }
 }

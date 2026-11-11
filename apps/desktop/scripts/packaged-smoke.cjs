@@ -144,8 +144,9 @@ async function smoke() {
     await page.locator("aside").getByText("smoke-repo", { exact: true }).hover();
     await page.getByRole("button", { name: "＋", exact: true }).click();
     await page.getByRole("button", { name: "Claude", exact: true }).click();
-    await page.getByText("新会话 · Claude").first().waitFor({ timeout: 10_000 });
+    // #59 草稿：点 CLI 只开草稿；首条消息（runFakeTurn 首轮）触发「创建+落库+发送」→ 会话行出现
     await runFakeTurn(page, "拆类型");
+    await page.getByText("新会话 · Claude").first().waitFor({ timeout: 10_000 });
     await page.getByText("完成 · 3.6s").waitFor({ timeout: 30_000 });
     console.log("[smoke] Fake 会话全链 OK（多轮流式 + 工具卡终态 + 回空闲）");
 
@@ -190,8 +191,9 @@ async function lifecycle() {
     await first.page.locator("aside").getByText("smoke-repo", { exact: true }).hover();
     await first.page.getByRole("button", { name: "＋", exact: true }).click();
     await first.page.getByRole("button", { name: "Claude", exact: true }).click();
-    await first.page.getByText("新会话 · Claude").first().waitFor({ timeout: 10_000 });
+    // #59 草稿：首条消息触发创建（runFakeTurn 首轮）→ 会话行出现
     await runFakeTurn(first.page, "拆类型");
+    await first.page.getByText("新会话 · Claude").first().waitFor({ timeout: 10_000 });
 
     const created = await first.page.evaluate(async ({ cwd, marker }) => {
       const api = window.api;
