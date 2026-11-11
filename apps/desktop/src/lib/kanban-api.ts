@@ -15,6 +15,10 @@ import {
   type TerminalEvent,
   type TrackerChangeWire,
 } from "@kanban/ipc-schema";
+import { createScopedLogger } from "./logger";
+
+// 本文件日志出口（scope 固定 transport，经 lib/logger 唯一出口发出）
+const log = createScopedLogger("transport");
 
 /** 传输 seam：组件测试注入 FakeAdapter 直连实现，生产为 window.api 桥接 */
 export interface ChatTransport {
@@ -34,7 +38,7 @@ function devCheck(parse: () => void, label: string): void {
   try {
     parse();
   } catch (e) {
-    window.api?.log?.("warn", "transport", `${label}不符合 schema`, { issues: e instanceof Error ? e.message : String(e) });
+    log.warn(`${label}不符合 schema`, { issues: e instanceof Error ? e.message : String(e) });
     throw e;
   }
 }
@@ -53,7 +57,7 @@ export function createWindowTransport(): ChatTransport | null {
         if (import.meta.env.DEV) {
           const parsed = adapterEventSchema.safeParse(event);
           if (!parsed.success) {
-            window.api?.log?.("warn", "transport", "入站事件不符合 schema", { issues: JSON.stringify(parsed.error.issues) });
+            log.warn("入站事件不符合 schema", { issues: JSON.stringify(parsed.error.issues) });
           }
         }
         handler(event);
@@ -63,7 +67,7 @@ export function createWindowTransport(): ChatTransport | null {
         if (import.meta.env.DEV) {
           const parsed = terminalEventSchema.safeParse(event);
           if (!parsed.success) {
-            window.api?.log?.("warn", "transport", "入站终端事件不符合 schema", { issues: JSON.stringify(parsed.error.issues) });
+            log.warn("入站终端事件不符合 schema", { issues: JSON.stringify(parsed.error.issues) });
           }
         }
         handler(event);
@@ -73,7 +77,7 @@ export function createWindowTransport(): ChatTransport | null {
         if (import.meta.env.DEV) {
           const parsed = trackerChangeSchema.safeParse(change);
           if (!parsed.success) {
-            window.api?.log?.("warn", "transport", "入站 tracker 变更不符合 schema", { issues: JSON.stringify(parsed.error.issues) });
+            log.warn("入站 tracker 变更不符合 schema", { issues: JSON.stringify(parsed.error.issues) });
           }
         }
         handler(change);
@@ -87,7 +91,7 @@ export function createWindowTransport(): ChatTransport | null {
         if (import.meta.env.DEV) {
           const parsed = memoryEventSchema.safeParse(event);
           if (!parsed.success) {
-            window.api?.log?.("warn", "transport", "入站 memory 事件不符合 schema", { issues: JSON.stringify(parsed.error.issues) });
+            log.warn("入站 memory 事件不符合 schema", { issues: JSON.stringify(parsed.error.issues) });
           }
         }
         handler(event);

@@ -2,8 +2,12 @@
 import { useEffect, useState } from "react";
 import { AUTO_ARCHIVE_DAYS_BOUNDS, type AutoArchiveConfig, type AutoArchiveScanSummary, type ProjectRow, type SessionRow } from "@kanban/ipc-schema";
 import { copyText } from "../lib/copy-text";
+import { createScopedLogger } from "../lib/logger";
 import { CLI_DOT_CLS, sessionCliLabel } from "../lib/cli-catalog";
 import { DeleteSessionDialog } from "./DeleteSessionDialog";
+
+// 本文件日志出口（scope 固定 settings，经 lib/logger 唯一出口发出；#74 双轨收敛前仅迁移出口）
+const log = createScopedLogger("settings");
 
 /** 「打开日志文件」：资源管理器中定位当前启动主日志文件（Main 侧 shell.showItemInFolder 主文件）；jsdom 无桥可选链降级 */
 const openLog = (): void => {
@@ -147,7 +151,7 @@ export function SettingsModal({
         onSessionRestored?.(row);
       } else {
         setArchivedError(r && !r.ok ? `取消归档失败：${r.error.message}` : "取消归档失败：IPC 服务不可用");
-        window.api?.log?.("error", "settings", "取消归档失败", { sessionId: row.id });
+        log.error("取消归档失败", { sessionId: row.id });
       }
     })();
   };
@@ -161,7 +165,7 @@ export function SettingsModal({
         setArchivedRows((prev) => (prev ? prev.filter((x) => x.id !== row.id) : prev));
       } else {
         setArchivedError(r && !r.ok ? `删除失败：${r.error.message}` : "删除失败：IPC 服务不可用");
-        window.api?.log?.("error", "settings", "删除已归档会话失败", { sessionId: row.id });
+        log.error("删除已归档会话失败", { sessionId: row.id });
       }
     })();
   };
