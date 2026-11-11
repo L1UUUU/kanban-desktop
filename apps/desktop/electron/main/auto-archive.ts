@@ -67,7 +67,7 @@ export async function runAutoArchiveScan(
     const candidates: AutoArchiveCandidate[] = deps.sessions.listAll().map((r) => ({
       id: r.id,
       kind: r.kind,
-      status: r.status,
+      status: r.status ?? null,
       lastActiveAt: r.lastActiveAt,
       createdAt: r.createdAt ?? null,
       archivedAt: r.archivedAt,

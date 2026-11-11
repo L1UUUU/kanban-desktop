@@ -1,8 +1,9 @@
-// 用途：sessions 表 store 测试 —— 落库/列表过滤/状态与活跃时间更新/重启恢复（工单 #7 验收第 4/5 条）；#58 起归档/取消归档/删除与未归档守卫（spec #57 D 节）
+// 用途：sessions 表 store 测试 —— 落库/列表过滤/状态与活跃时间更新/重启恢复（工单 #7 验收第 4/5 条）；#58 起归档/取消归档/删除与未归档守卫（spec #57 D 节）；#70 起 applyEvent 落库收口（守卫+写入一体）与 insert 缺省 idle 密封钉住
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { ChatEvent } from "@kanban/ipc-schema";
 import { openDatabase, type SqliteDb } from "./db";
 import { SessionStore, type SessionRecord } from "./session-store";
 
@@ -176,5 +177,61 @@ describe("SessionStore 归档/取消归档/删除（#58 spec #57 D 节）", () =
     expect(reopened.list()).toEqual([]);
     expect(reopened.listArchived()[0]).toMatchObject({ id: "s-1", archivedAt: "2026-11-10T08:00:00.000Z" });
     reopenedDb.close();
+  });
+});
+
+describe("SessionStore applyEvent 落库收口（#70 C2）", () => {
+  /** 三类代表事件工厂（applyEvent 只吃 sessionId/type/status 面；落库时间 at 由调用方传） */
+  const statusEvent = (sessionId: string): ChatEvent => ({ sessionId, seq: 1, at: "2026-11-10T09:00:00.000Z", type: "session_status", status: "running" });
+  const turnStarted = (sessionId: string): ChatEvent => ({ sessionId, seq: 1, at: "2026-11-10T09:00:00.000Z", type: "turn_started", turnId: "t-1" });
+  const errorEvent = (sessionId: string): ChatEvent => ({ sessionId, seq: 1, at: "2026-11-10T09:00:00.000Z", type: "session_error", code: "INTERNAL", message: "登录态失效" });
+
+  it("session_status → 状态写；turn_started → 活跃时间写（at 由调用方给）；均返回 applied", () => {
+    const store = makeStore();
+    store.insert(makeRecord());
+    expect(store.applyEvent(statusEvent("s-1"), "2026-11-11T10:00:00.000Z")).toBe("applied");
+    expect(store.applyEvent(turnStarted("s-1"), "2026-11-11T10:00:01.000Z")).toBe("applied");
+    expect(store.list()[0]).toMatchObject({ status: "running", lastActiveAt: "2026-11-11T10:00:01.000Z" });
+  });
+
+  it("守卫内建：已归档行 dropped（迟到 session_status/turn_started 均不写库）；已删除（墓碑）同样 dropped", () => {
+    const store = makeStore();
+    store.insert(makeRecord({ id: "s-arch" }));
+    store.archive("s-arch", "2026-11-10T08:00:00.000Z");
+    expect(store.applyEvent(statusEvent("s-arch"), "2026-11-11T10:00:00.000Z")).toBe("dropped");
+    expect(store.applyEvent(turnStarted("s-arch"), "2026-11-11T10:00:00.000Z")).toBe("dropped");
+    expect(store.listArchived()[0]).toMatchObject({ status: "idle", lastActiveAt: null }); // 迟到事件零写入
+
+    store.insert(makeRecord({ id: "s-gone" }));
+    store.delete("s-gone");
+    expect(store.applyEvent(statusEvent("s-gone"), "2026-11-11T10:00:00.000Z")).toBe("dropped");
+  });
+
+  it("未知 id 放行（新会话创建窗口期事件照常，FakeAdapter createSession 返回前同步事件）", () => {
+    const store = makeStore();
+    expect(store.applyEvent(statusEvent("ghost"), "2026-11-11T10:00:00.000Z")).toBe("applied");
+  });
+
+  it("session_error 等其余 ChatEvent：守卫放行（applied）但零写入（#41 状态/活跃时间不动）", () => {
+    const store = makeStore();
+    store.insert(makeRecord());
+    expect(store.applyEvent(errorEvent("s-1"), "2026-11-11T10:00:00.000Z")).toBe("applied");
+    expect(store.list()[0]).toMatchObject({ status: "idle", lastActiveAt: null });
+  });
+
+  it("墓碑复活（#62 × #60）经收口 API 钉住：删除后 dropped → 同 id 重插后 applied 且写入生效", () => {
+    const store = makeStore();
+    store.insert(makeRecord({ id: "tty-1", kind: "pty", cli: "pty" }));
+    store.delete("tty-1"); // PTY 草稿 spawn 失败回删占位行（进墓碑）
+    expect(store.applyEvent(statusEvent("tty-1"), "2026-11-11T10:00:00.000Z")).toBe("dropped");
+    store.insert(makeRecord({ id: "tty-1", kind: "pty", cli: "pty" })); // 同 id 重试重建
+    expect(store.applyEvent(statusEvent("tty-1"), "2026-11-11T10:00:01.000Z")).toBe("applied");
+    expect(store.list()[0]).toMatchObject({ id: "tty-1", status: "running" }); // 重建即活会话，事件照常写库
+  });
+
+  it("insert 缺省 idle（#70）：status 省略落 idle——「新建恒 idle」决策收进 store", () => {
+    const store = makeStore();
+    store.insert(makeRecord({ id: "s-no-status", status: undefined }));
+    expect(store.list()[0]).toMatchObject({ id: "s-no-status", status: "idle" });
   });
 });

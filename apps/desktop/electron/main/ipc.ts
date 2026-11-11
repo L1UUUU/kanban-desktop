@@ -160,7 +160,7 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
       });
       const title = req.title ?? `新会话 · ${CLI_LABELS[req.cli] ?? req.cli}`;
       const identity = detectDirIdentity(req.cwd);
-      // 会话落库（重启恢复依据；真实 Adapter 返回 native id 一并回填，Fake 无 native id 为 null）
+      // 会话落库（重启恢复依据；真实 Adapter 返回 native id 一并回填，Fake 无 native id 为 null；status 缺省 idle——新建恒 idle 决策在 store，#70）
       deps.sessions.insert({
         id: sessionId,
         kind: "structured",
@@ -170,7 +170,6 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
         title,
         cwd: req.cwd,
         permMode: req.permMode ?? "auto",
-        status: "idle",
         lastActiveAt: null,
         archivedAt: null,
       });
@@ -239,7 +238,7 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
       if (deps.sessions.get(terminalId)) {
         return { ok: false, error: { code: "E_SESSION_EXISTS", message: `终端 id 已存在：${terminalId}（会话 id 空间冲突）` } };
       }
-      // 先落库占位（占位标题在 spawn 成功后回写为「终端 · shell」；启动失败整行回删）
+      // 先落库占位（占位标题在 spawn 成功后回写为「终端 · shell」；启动失败整行回删；status 缺省 idle——store 决策，#70）
       deps.sessions.insert({
         id: terminalId,
         kind: "pty",
@@ -249,7 +248,6 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
         title: req.title ?? "终端",
         cwd: req.cwd,
         permMode: null,
-        status: "idle",
         lastActiveAt: null,
         archivedAt: null,
       });
@@ -398,7 +396,7 @@ function toSessionRow(rec: ReturnType<SessionStore["list"]>[number]): SessionRow
     title: rec.title,
     cwd: rec.cwd,
     permMode: rec.permMode,
-    status: rec.status,
+    status: rec.status ?? null,
     lastActiveAt: rec.lastActiveAt,
     archivedAt: rec.archivedAt,
     dirIdentity: identity.kind,

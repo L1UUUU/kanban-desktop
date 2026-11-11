@@ -27,8 +27,8 @@ export interface ShutdownOrchestrator {
   isShuttingDown(): boolean;
 }
 
-/** 活跃（须有序取消）判定：running=turn 进行中 / waiting=审批等待 */
-function isBusy(status: string | null): boolean {
+/** 活跃（须有序取消）判定：running=turn 进行中 / waiting=审批等待（参数放宽容纳 SessionRecord 可选 status，SELECT 读回恒非 undefined） */
+function isBusy(status: string | null | undefined): boolean {
   return status === "running" || status === "waiting";
 }
 

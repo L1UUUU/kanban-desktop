@@ -1,5 +1,5 @@
-// 用途：sessions 表 store —— 会话落库/列表/状态与活跃时间更新（C3 表已在 db.ts 建好；重启恢复 = 新实例读同一库文件）；#58 起归档/取消归档/删除与未归档守卫（spec #57 D 节：迟到事件不得复活归档行）
-import type { PermMode, SessionStatus } from "@kanban/ipc-schema";
+// 用途：sessions 表 store（纯数据面，#70 C2 微加深）—— 会话落库/列表/状态与活跃时间更新（C3 表已在 db.ts 建好；重启恢复 = 新实例读同一库文件）；#58 起归档/取消归档/删除与未归档守卫（spec #57 D 节：迟到事件不得复活归档行）；#70 起 ChatEvent 落库收口 applyEvent + insert 缺省 idle（「新建恒 idle」决策收进 store），状态流转编排决策在 session-lifecycle
+import type { ChatEvent, PermMode, SessionStatus } from "@kanban/ipc-schema";
 import type { SqliteDb } from "./db";
 
 /** sessions 行（wire 形状见 sessionRowSchema；此处为 DB 记录面，目录身份由 Main 按需判定不入库） */
@@ -12,7 +12,8 @@ export interface SessionRecord {
   title: string | null;
   cwd: string | null;
   permMode: PermMode | null;
-  status: SessionStatus | null;
+  /** 会话状态（INSERT 可省略——缺省落 idle，新建恒 idle；SELECT 读回恒非 undefined） */
+  status?: SessionStatus | null;
   lastActiveAt: string | null;
   /** #58 归档时间（NULL=未归档；spec #57 D 节） */
   archivedAt: string | null;
@@ -32,7 +33,7 @@ export class SessionStore {
 
   constructor(private readonly db: SqliteDb) {}
 
-  /** 新会话入库（id 为应用侧 uuid，由 Main 从 adapter.createSession 拿到后传入；新建恒未归档；createdAt 可省略走 DB 默认当前时刻；
+  /** 新会话入库（id 为应用侧 uuid，由 Main 从 adapter.createSession 拿到后传入；新建恒未归档恒 idle（status 缺省值）；createdAt 可省略走 DB 默认当前时刻；
    *  #62×#60：同 id 重插入（PTY 草稿 spawn 失败回删占位行后重试复用同 id）清除删除墓碑——重建即活会话 */
   insert(rec: SessionRecord): void {
     this.deletedIds.delete(rec.id);
@@ -50,7 +51,7 @@ export class SessionStore {
         rec.title,
         rec.cwd,
         rec.permMode,
-        rec.status,
+        rec.status ?? "idle", // #70：缺省 idle——「新建恒 idle」决策收进 store（调用方不再传）
         rec.lastActiveAt,
         rec.archivedAt ?? null,
         rec.createdAt ?? null,
@@ -118,6 +119,15 @@ export class SessionStore {
    *  未知 id 放行（新建会话在 insert 前的窗口期事件照常，如 FakeAdapter createSession 返回前同步发出的 session_status） */
   shouldDropEvents(id: string): boolean {
     return this.deletedIds.has(id) || this.get(id)?.archivedAt != null;
+  }
+
+  /** ChatEvent 落库收口（#70 C2，事件泵唯一写入口）：迟到守卫（墓碑/归档行 → "dropped"，调用方不得转发/进 tracker）+
+   *  session_status 写状态 / turn_started 写活跃时间（at 由调用方给，与原接线同取当前时刻）；其余 ChatEvent（session_error 等，#41）只吃守卫判定零写入 */
+  applyEvent(ev: ChatEvent, at: string): "dropped" | "applied" {
+    if (this.shouldDropEvents(ev.sessionId)) return "dropped";
+    if (ev.type === "session_status") this.updateStatus(ev.sessionId, ev.status);
+    else if (ev.type === "turn_started") this.touch(ev.sessionId, at);
+    return "applied";
   }
 
   /** 标题更新（#60：PTY 草稿先落库占位、spawn 成功后回写「终端 · shell」标题；spawn 失败回删占位行复用上方 #58 delete） */
