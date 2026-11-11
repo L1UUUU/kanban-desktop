@@ -1,9 +1,9 @@
 // 用途：聊天控制器 hook —— transport → ChatStore 接线：启动恢复（session:list 断开会话登记）+ 无项目时 boot 演示草稿（#59：发出首条消息才创建会话，空会话永不进历史）+ 全部会话始终归并（切会话不中断，一致项 7），动作经 IPC 单通道发出
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { AdapterEvent, ApprovalDecision, ChatEvent, CliKind, IpcResult, PermMode, ProjectRow } from "@kanban/ipc-schema";
+import type { AdapterEvent, ApprovalDecision, ChatEvent, CliKind, IpcResult, PermMode, ProjectRow, SessionRow, SessionStatus } from "@kanban/ipc-schema";
 import type { ChatTransport } from "../../lib/kanban-api";
 import { createScopedLogger } from "../../lib/logger";
-import { ChatStore, DEFAULT_MODEL, type DraftSession, type SessionView } from "./chat-store";
+import { ChatStore, DEFAULT_MODEL, type DraftSession, type SessionMeta, type SessionView } from "./chat-store";
 
 // 本文件日志出口（scope 固定 chat，经 lib/logger 唯一出口发出）
 const log = createScopedLogger("chat");
@@ -38,7 +38,17 @@ export interface ChatControllerActions {
   dismissSkillConflict(sessionId: string): void;
 }
 
-export interface ChatController extends ChatControllerActions {
+/** 外部并列模块登记/同步会话的窄面（issue #71 S2：PTY 迟到成功登记 / started-exit 徽标 / 取消归档回列表） */
+export interface SessionRegistry {
+  /** PTY 终端创建成功（含草稿丢弃后的迟到成功——Main 已落库，仍须登记行） */
+  registerExternalSession(meta: SessionMeta): void;
+  /** 外部状态直写（PTY started/exit 事件驱动，与 ChatEvent 路径并列） */
+  updateExternalStatus(id: string, status: SessionStatus): void;
+  /** 取消归档回默认列表（设置面板 #63）与启动恢复（DB 行登记） */
+  registerRestored(row: SessionRow): void;
+}
+
+export interface ChatController extends ChatControllerActions, SessionRegistry {
   sessions: SessionView[];
   activeSession: SessionView | null;
   activeId: string | null;
@@ -270,8 +280,16 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
 
   const activeSession = snap.activeId ? (store.getSession(snap.activeId) ?? null) : null;
 
+  // SessionRegistry 窄面（issue #71 S2）：外部写者经此登记/同步会话，不再直面 store
+  const registry: SessionRegistry = {
+    registerExternalSession: (meta) => store.registerSession(meta),
+    updateExternalStatus: (id, status) => store.updateStatus(id, status),
+    registerRestored: (row) => store.registerRestored(row),
+  };
+
   return {
     ...actions,
+    ...registry,
     sessions: snap.sessions,
     activeSession,
     activeId: snap.activeId,

@@ -11,7 +11,7 @@ export function TopBar({
   currentProject: ProjectRow | null;
   /** #63：项目列表（设置面板已归档分组头名称数据源） */
   projects?: ProjectRow[];
-  /** #63：取消归档成功回调（行回默认列表；AppShell 接 controller.store.registerRestored） */
+  /** #63：取消归档成功回调（行回默认列表；AppShell 接 controller.registerRestored） */
   onSessionRestored?: (row: SessionRow) => void;
 }) {
   // #61：设置面板 modal 展开态（spec #57：设置从两项日志动作升级为面板，两项动作保留可用）

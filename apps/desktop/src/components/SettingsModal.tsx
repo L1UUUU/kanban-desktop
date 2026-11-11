@@ -68,7 +68,7 @@ export function SettingsModal({
   projects?: ProjectRow[];
   /** #63：当前项目 id（默认展开其分组；null=无项目，默认展开「未关联项目」组） */
   currentProjectId?: string | null;
-  /** #63：取消归档成功回调（行回默认列表；AppShell 接 controller.store.registerRestored） */
+  /** #63：取消归档成功回调（行回默认列表；AppShell 接 controller.registerRestored） */
   onSessionRestored?: (row: SessionRow) => void;
 }) {
   // autoArchive=null = 初始值未加载（或桥不可用降级）；daysDraft 为天数输入框本地草稿（blur 时校验提交）；

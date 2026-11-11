@@ -123,7 +123,7 @@ export function AppShell({
       <TopBar
         currentProject={projects.currentProject}
         projects={projects.projects}
-        onSessionRestored={(row) => chatRef.current?.store.registerRestored(row)}
+        onSessionRestored={(row) => chatRef.current?.registerRestored(row)}
       />
       {shutdownNotice ? (
         <div data-testid="shutdown-banner" className="flex-none border-b border-warn/40 bg-warn/10 px-4 py-1.5 text-xs text-warn">

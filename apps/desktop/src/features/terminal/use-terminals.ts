@@ -39,7 +39,8 @@ export function useTerminals(transport: ChatTransport | null, chat: ChatControll
               sessionId: ev.terminalId,
               ...(ev.ok.reason ? { reason: ev.ok.reason } : {}),
             });
-          chat.store.registerSession({
+          // #71 S2：PTY 创建成功经 SessionRegistry 窄面登记（迟到成功同样落行），不再直面 store
+          chat.registerExternalSession({
             sessionId: ev.terminalId,
             cli: "pty",
             title: ev.ok.title ?? "终端",
@@ -75,13 +76,13 @@ export function useTerminals(transport: ChatTransport | null, chat: ChatControll
       }),
   );
 
-  // terminal:event 订阅：data/横幅进 manager；started/exit 同步会话状态徽标
+  // terminal:event 订阅：data/横幅进 manager；started/exit 同步会话状态徽标（#71 S2 经 registry 窄面）
   useEffect(() => {
     if (!transport) return;
     return transport.onTerminalEvent((event) => {
       manager.handleEvent(event);
-      if (event.type === "started") chat.store.updateStatus(event.terminalId, "idle");
-      else if (event.type === "exit") chat.store.updateStatus(event.terminalId, "disconnected");
+      if (event.type === "started") chat.updateExternalStatus(event.terminalId, "idle");
+      else if (event.type === "exit") chat.updateExternalStatus(event.terminalId, "disconnected");
     });
   }, [transport, manager, chat]);
 
