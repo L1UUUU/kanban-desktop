@@ -1,9 +1,11 @@
-// 用途：contextBridge 薄层 —— 向 renderer 暴露最小 IPC 面（app:getInfo + kanban:ipc/memory:ipc/residue:ipc/diff:ipc 单通道 invoke + chat:event/terminal:event/tracker:event/memory:event/app:event/app:shutdown 订阅 + log:write 单向日志/log:getPath/log:openDir）；全部通道形状由 @kanban/ipc-schema 契约化，preload 不做校验（两端校验，spec E）
+// 用途：contextBridge 薄层 —— 向 renderer 暴露最小 IPC 面（app:getInfo + kanban:ipc/memory:ipc/residue:ipc/diff:ipc/config:ipc 单通道 invoke + chat:event/terminal:event/tracker:event/memory:event/app:event/app:shutdown 订阅 + log:write 单向日志/log:getPath/log:openDir）；全部通道形状由 @kanban/ipc-schema 契约化，preload 不做校验（两端校验，spec E）
 import { contextBridge, ipcRenderer } from "electron";
 import type {
   AdapterEvent,
   AppEventWire,
   AppInfo,
+  ConfigRequest,
+  ConfigResult,
   DiffRequest,
   DiffResult,
   IpcRequest,
@@ -31,6 +33,8 @@ const api = {
   invokeResidue: (req: ResidueRequest) => ipcRenderer.invoke("residue:ipc", req) as Promise<ResidueResult>,
   /** #43：发送一条 diff:ipc 请求（工作区未提交变更一次读，schema 见 diffRequestSchema） */
   invokeDiff: (req: DiffRequest) => ipcRenderer.invoke("diff:ipc", req) as Promise<DiffResult>,
+  /** #61：发送一条 config:ipc 请求（config:get 读 / config:set 存 autoArchive 子集，schema 见 configRequestSchema） */
+  invokeConfig: (req: ConfigRequest) => ipcRenderer.invoke("config:ipc", req) as Promise<ConfigResult>,
   /**
    * #55：发送一条 renderer 日志（fire-and-forget：send 不等待回执，不用 invoke；Main 侧强制 source=renderer、
    * 落盘 ts 由 Main 生成，两者不信自报；jsdom 无桥时调用方以 window.api?.log?.() 可选链降级）

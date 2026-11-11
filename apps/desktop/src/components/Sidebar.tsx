@@ -59,6 +59,8 @@ export interface SidebarProps {
   onCreatePtySession(projectId: string): void;
   /** PTY 行停止按钮：显式终止终端进程（唯一停止入口） */
   onKillTerminal(terminalId: string): void;
+  /** #58 会话行 hover「归档」（结构化与 PTY 同款）：Main 编排中断/终止+写归档标记，行移出默认列表 */
+  onArchiveSession(sessionId: string): void;
   /** #20：会话→需求反查映射（kanban:list；会话行需求徽标数据源） */
   sessionToReq?: Record<string, string>;
   /** #20：会话行 REQ 徽标点击 → 进入看板并选中该需求（原型一致项 6） */
@@ -77,6 +79,7 @@ export function Sidebar({
   onCreateSession,
   onCreatePtySession,
   onKillTerminal,
+  onArchiveSession,
   sessionToReq = {},
   onOpenRequirement,
   info,
@@ -180,22 +183,34 @@ export function Sidebar({
         <p className="px-3.5 py-1 text-xs text-fg-faint">暂无会话</p>
       ) : (
         structured.map((s) => (
-          <button
+          <div
             key={s.sessionId}
-            type="button"
-            data-testid="session-row"
-            data-active={s.sessionId === activeId ? "true" : "false"}
-            className={`flex w-full items-center gap-1 border-l-2 px-3.5 py-1.5 text-left hover:bg-muted ${
+            className={`group relative flex w-full items-center gap-1 border-l-2 px-3.5 py-1.5 hover:bg-muted ${
               s.sessionId === activeId ? "border-l-primary bg-muted" : "border-l-transparent"
             }`}
-            onClick={() => onSelect(s.sessionId)}
           >
-            <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${CLI_DOT_CLS[s.cli] ?? "bg-accent2"}`} />
-            <span className="min-w-0 flex-1 truncate text-[13px]">{s.title}</span>
-            <DirBadge identity={s.dirIdentity} worktreeName={s.worktreeName} cwd={s.cwd} />
-            <StatusBadge status={s.status} />
-            {s.sessionId in sessionToReq ? <ReqBadge requirementId={sessionToReq[s.sessionId]} onOpen={onOpenRequirement} /> : null}
-          </button>
+            <button
+              type="button"
+              data-testid="session-row"
+              data-active={s.sessionId === activeId ? "true" : "false"}
+              className="flex min-w-0 flex-1 items-center gap-1 pr-14 text-left"
+              onClick={() => onSelect(s.sessionId)}
+            >
+              <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${CLI_DOT_CLS[s.cli] ?? "bg-accent2"}`} />
+              <span className="min-w-0 flex-1 truncate text-[13px]">{s.title}</span>
+              <DirBadge identity={s.dirIdentity} worktreeName={s.worktreeName} cwd={s.cwd} />
+              <StatusBadge status={s.status} />
+              {s.sessionId in sessionToReq ? <ReqBadge requirementId={sessionToReq[s.sessionId]} onOpen={onOpenRequirement} /> : null}
+            </button>
+            <button
+              type="button"
+              title="归档（移出默认列表，可在设置找回）"
+              className="absolute right-3.5 top-1/2 h-5 -translate-y-1/2 rounded-md px-1 text-[11px] text-fg-faint opacity-0 pointer-events-none hover:text-primary group-hover:pointer-events-auto group-hover:opacity-100"
+              onClick={() => onArchiveSession(s.sessionId)}
+            >
+              归档
+            </button>
+          </div>
         ))
       )}
 
@@ -212,23 +227,33 @@ export function Sidebar({
               s.sessionId === activeId ? "border-l-primary bg-muted" : "border-l-transparent"
             }`}
           >
-            <button type="button" className="flex min-w-0 flex-1 items-center gap-1 pr-6 text-left" onClick={() => onSelect(s.sessionId)}>
+            <button type="button" className="flex min-w-0 flex-1 items-center gap-1 pr-14 text-left" onClick={() => onSelect(s.sessionId)}>
               <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-pty" />
               <span className="min-w-0 flex-1 truncate text-[13px]">{s.title}</span>
               <DirBadge identity={s.dirIdentity} worktreeName={s.worktreeName} cwd={s.cwd} />
               <StatusBadge status={s.status} />
               {s.sessionId in sessionToReq ? <ReqBadge requirementId={sessionToReq[s.sessionId]} onOpen={onOpenRequirement} /> : null}
             </button>
-            {s.status !== "disconnected" ? (
+            <div className="absolute right-3.5 top-1/2 flex -translate-y-1/2 gap-1 opacity-0 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100">
+              {s.status !== "disconnected" ? (
+                <button
+                  type="button"
+                  title="停止终端（终止进程，保留会话记录）"
+                  className="h-5 w-5 rounded-md text-[11px] text-fg-faint hover:text-destructive"
+                  onClick={() => onKillTerminal(s.sessionId)}
+                >
+                  ⏹
+                </button>
+              ) : null}
               <button
                 type="button"
-                title="停止终端（终止进程，保留会话记录）"
-                className="absolute right-3.5 top-1/2 h-5 w-5 -translate-y-1/2 rounded-md text-[11px] text-fg-faint opacity-0 pointer-events-none hover:text-destructive group-hover:pointer-events-auto group-hover:opacity-100"
-                onClick={() => onKillTerminal(s.sessionId)}
+                title="归档（移出默认列表，可在设置找回）"
+                className="h-5 rounded-md px-1 text-[11px] text-fg-faint hover:text-primary"
+                onClick={() => onArchiveSession(s.sessionId)}
               >
-                ⏹
+                归档
               </button>
-            ) : null}
+            </div>
           </div>
         ))
       )}

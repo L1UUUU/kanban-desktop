@@ -1,8 +1,9 @@
-// 用途：SQLite 迁移单测 —— v2（#16，spec #15 F 节）：v1 库加 project_id 列 + 按最早关联会话回填 + 补写旧事件 payload projectId + 单事务（中断重入幂等、无关联会话失败回滚）+ 迁移后重放态=迁移前在线态 + TD6 跨项目旧 link 重放兼容性钉子；v3（#30，spec #27 D 节）：memory 三表单事务迁移/幂等重入/新库直建
+// 用途：SQLite 迁移单测 —— v2（#16，spec #15 F 节）：v1 库加 project_id 列 + 按最早关联会话回填 + 补写旧事件 payload projectId + 单事务（中断重入幂等、无关联会话失败回滚）+ 迁移后重放态=迁移前在线态 + TD6 跨项目旧 link 重放兼容性钉子；v3（#30，spec #27 D 节）：memory 三表单事务迁移/幂等重入/新库直建；v4（#58，spec #57）：sessions 加 archived_at 可空列（现存行全部未归档）/单事务/中断回滚/新库直建
 import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as nodeSqlite from "node:sqlite";
+import { ensureMemoryTables } from "@kanban/memory";
 import { TrackerEngine } from "@kanban/tracker";
 import { afterAll, describe, expect, it } from "vitest";
 import { listTables, openDatabase, type SqliteDb } from "./db";
@@ -125,6 +126,7 @@ describe("迁移 v2：v1 库 → project_id 回填 + payload 补写", () => {
       { version: 1, name: "v1-c3-base" },
       { version: 2, name: "v2-requirements-project" },
       { version: 3, name: "v3-memory-tables" },
+      { version: 4, name: "v4-sessions-archived" },
     ]);
   });
 
@@ -317,7 +319,7 @@ describe("迁移 v2：单事务（失败回滚 + 中断重入幂等）", () => {
     const again = openDatabase(path);
     openDbs.push(again);
     const migrations = again.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as unknown as Array<{ version: number }>;
-    expect(migrations.map((m) => m.version)).toEqual([1, 2, 3]);
+    expect(migrations.map((m) => m.version)).toEqual([1, 2, 3, 4]);
   });
 });
 
@@ -351,7 +353,7 @@ describe("迁移 v3：v2 老库 → memory 三表", () => {
     );
     expect(db.prepare("SELECT title, project_id FROM requirements WHERE id = 'REQ-001'").get()).toEqual({ title: "老需求", project_id: "p-1" });
     const versions = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as unknown as Array<{ version: number }>;
-    expect(versions.map((r) => r.version)).toEqual([1, 2, 3]);
+    expect(versions.map((r) => r.version)).toEqual([1, 2, 3, 4]);
   });
 
   it("v3 幂等重入：同库二次 openDatabase 不重复迁移、记录唯一", () => {
@@ -363,7 +365,7 @@ describe("迁移 v3：v2 老库 → memory 三表", () => {
     expect(n).toBe(1);
   });
 
-  it("新库直建：openDatabase 内存库即 v3 形态（八表 + 完整版本链），openDatabase 幂等", () => {
+  it("新库直建：openDatabase 内存库即 v4 形态（八表 + sessions 归档列 + 完整版本链），openDatabase 幂等", () => {
     const db = openDatabase(":memory:");
     openDbs.push(db);
     expect(listTables(db)).toEqual([
@@ -371,10 +373,10 @@ describe("迁移 v3：v2 老库 → memory 三表", () => {
       "projects", "requirements", "schema_migrations", "sessions", "stage_events",
     ]);
     const versions = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as unknown as Array<{ version: number }>;
-    expect(versions.map((r) => r.version)).toEqual([1, 2, 3]);
+    expect(versions.map((r) => r.version)).toEqual([1, 2, 3, 4]);
     const again = openDatabase(":memory:");
     openDbs.push(again);
-    expect(again.prepare("SELECT count(*) AS n FROM schema_migrations").get()).toEqual({ n: 3 });
+    expect(again.prepare("SELECT count(*) AS n FROM schema_migrations").get()).toEqual({ n: 4 });
   });
 
   it("迁移后 memory 三表可用（批次行写入往返）", () => {
@@ -399,6 +401,81 @@ describe("迁移 v2：新库", () => {
     expect(columnsOf(db, "requirements")).toContain("project_id");
     const again = openDatabase(":memory:");
     openDbs.push(again);
-    expect(again.prepare("SELECT count(*) AS n FROM schema_migrations").get()).toEqual({ n: 3 });
+    expect(again.prepare("SELECT count(*) AS n FROM schema_migrations").get()).toEqual({ n: 4 });
+  });
+});
+
+// ========== 迁移 v4（sessions 归档列，#58 spec #57 D 节） ==========
+describe("迁移 v4：v3 老库 → sessions.archived_at", () => {
+  /** v3 形态库：C3 五表（sessions 无 archived_at）+ memory 三表 + 版本行 [1,2,3]（真实 v3 库形状） */
+  function buildV3Db(path: string, seed: (db: nodeSqlite.DatabaseSync) => void = () => {}): void {
+    const raw = new RawDb(path);
+    raw.exec(`
+      CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, canonical_path TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'ok', created_at TEXT NOT NULL);
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, kind TEXT NOT NULL, cli TEXT NOT NULL, native_session_id TEXT, project_id TEXT REFERENCES projects(id), title TEXT, cwd TEXT, perm_mode TEXT, status TEXT, last_active_at TEXT, created_at TEXT NOT NULL);
+      CREATE TABLE requirements (id TEXT PRIMARY KEY, title TEXT NOT NULL, stage TEXT, stage_basis_at INTEGER, stage_basis_json TEXT, uncertain INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, project_id TEXT);
+      CREATE TABLE stage_events (event_id TEXT PRIMARY KEY, kind TEXT NOT NULL, session_id TEXT, cli TEXT, skill TEXT, stage TEXT, requirement_id TEXT, occurred_at TEXT, received_at TEXT, seq TEXT, evidence_level TEXT NOT NULL, source TEXT, payload_json TEXT NOT NULL, processed_at TEXT NOT NULL);
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+      INSERT INTO schema_migrations (version, name, applied_at) VALUES (1, 'v1-c3-base', '2026-11-05T00:00:00.000Z');
+      INSERT INTO schema_migrations (version, name, applied_at) VALUES (2, 'v2-requirements-project', '2026-11-06T00:00:00.000Z');
+      INSERT INTO schema_migrations (version, name, applied_at) VALUES (3, 'v3-memory-tables', '2026-11-07T00:00:00.000Z');
+    `);
+    ensureMemoryTables(raw);
+    seed(raw);
+    raw.close();
+  }
+
+  it("v3 老库迁移：sessions 加 archived_at 可空列、现存行全部未归档、既有数据不动、记录 v4", () => {
+    const path = tmpDbPath("v4-from-v3");
+    buildV3Db(path, (db) => {
+      seedProject(db, "p-1");
+      seedSession(db, "s-1", "p-1");
+      seedSession(db, "s-pty", null);
+    });
+    const db = openDatabase(path);
+    openDbs.push(db);
+    expect(columnsOf(db, "sessions")).toContain("archived_at");
+    // 升级不搬动数据：现存行全部未归档（spec #57「老用户已有历史会话原样保留」）
+    expect(db.prepare("SELECT count(*) AS n FROM sessions WHERE archived_at IS NOT NULL").get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT count(*) AS n FROM sessions").get()).toEqual({ n: 2 });
+    const versions = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as unknown as Array<{ version: number }>;
+    expect(versions.map((r) => r.version)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("v4 幂等重入：同库二次 openDatabase 不重复迁移、版本记录唯一", () => {
+    const path = tmpDbPath("v4-idempotent");
+    buildV3Db(path);
+    openDbs.push(openDatabase(path));
+    openDbs.push(openDatabase(path)); // 二次打开：v4 已记录 → 快路径跳过
+    const n = (openDbs[openDbs.length - 1].prepare("SELECT count(*) AS n FROM schema_migrations WHERE version = 4").get() as { n: number }).n;
+    expect(n).toBe(1);
+  });
+
+  it("事务中断（ALTER 已执行未提交）重入：SQLite 自动回滚 DDL，重入完整迁移（中途被杀安全）", () => {
+    const path = tmpDbPath("v4-interrupted");
+    buildV3Db(path, (db) => {
+      seedProject(db, "p-1");
+      seedSession(db, "s-1", "p-1");
+    });
+    {
+      // 模拟迁移中途进程被杀：BEGIN 后 ALTER 未提交即断连（SQLite 自动回滚 DDL）
+      const raw = new RawDb(path);
+      raw.exec("BEGIN");
+      raw.exec("ALTER TABLE sessions ADD COLUMN archived_at TEXT");
+      raw.close();
+    }
+    const db = openDatabase(path); // 重入：完整迁移
+    openDbs.push(db);
+    expect(columnsOf(db, "sessions")).toContain("archived_at");
+    expect(db.prepare("SELECT count(*) AS n FROM schema_migrations WHERE version = 4").get()).toEqual({ n: 1 });
+    expect(db.prepare("SELECT count(*) AS n FROM sessions WHERE archived_at IS NOT NULL").get()).toEqual({ n: 0 });
+  });
+
+  it("新库直建 v4：sessions 含 archived_at 列，版本链 [1,2,3,4]", () => {
+    const db = openDatabase(":memory:");
+    openDbs.push(db);
+    expect(columnsOf(db, "sessions")).toContain("archived_at");
+    const versions = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as unknown as Array<{ version: number }>;
+    expect(versions.map((r) => r.version)).toEqual([1, 2, 3, 4]);
   });
 });

@@ -1,6 +1,7 @@
 // 用途：应用配置加载/保存 —— 三 CLI exe 路径等用户配置统一落 JSON 文件，不硬编码（spec J/G）；探测逻辑为占位，由后续 Adapter 工单接入
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { AUTO_ARCHIVE_DAYS_BOUNDS, type AutoArchiveConfig } from "@kanban/ipc-schema";
 import { LOG_LEVELS, type LogLevel, type LoggingConfig } from "./logger";
 
 /** 三 CLI exe 配置：null = 未探测/未手动覆盖 */
@@ -52,6 +53,8 @@ export interface AppConfig {
   shutdown: ShutdownConfig;
   /** #53（spec #52 D 节）：日志系统四参数（level 默认 info；env 覆盖另存 effectiveLevel 不落此处，M11） */
   logging: LoggingConfig;
+  /** #61（spec #57）：会话自动归档（默认关 + 30 天；经 config:ipc 读写，写仅开放本子集） */
+  autoArchive: AutoArchiveConfig;
 }
 
 /** 默认配置：三 CLI exe 均为占位 null；diff 上限 2MB/200 文件/2000 行（覆盖日常大改动的审阅量级）；日志 info/5MB/10 次启动/单条 2000 字符 */
@@ -64,6 +67,7 @@ export function defaultConfig(): AppConfig {
     terminal: { shell: null },
     shutdown: { graceMs: 3000 },
     logging: { level: "info", maxFileBytes: 5_000_000, retainRuns: 10, maxMessageChars: 2000 },
+    autoArchive: { enabled: false, days: 30 },
   };
 }
 
@@ -120,6 +124,20 @@ export function loadConfig(path: string): AppConfig {
       if (typeof v === "number" && Number.isInteger(v) && v >= bound.min && v <= bound.max) {
         fallback.logging[key] = v;
       }
+    }
+  }
+  // #61：autoArchive 节 —— enabled 须为布尔、days 须为 1–365 整数（边界常量与 wire 契约同一单源），非法逐字段回落默认
+  const fileAutoArchive = (raw as { autoArchive?: Record<string, unknown> }).autoArchive;
+  if (typeof fileAutoArchive === "object" && fileAutoArchive !== null) {
+    if (typeof fileAutoArchive.enabled === "boolean") fallback.autoArchive.enabled = fileAutoArchive.enabled;
+    const days = fileAutoArchive.days;
+    if (
+      typeof days === "number" &&
+      Number.isInteger(days) &&
+      days >= AUTO_ARCHIVE_DAYS_BOUNDS.min &&
+      days <= AUTO_ARCHIVE_DAYS_BOUNDS.max
+    ) {
+      fallback.autoArchive.days = days;
     }
   }
   return fallback;

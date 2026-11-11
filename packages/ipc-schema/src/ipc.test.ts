@@ -21,6 +21,7 @@ const demoSession = {
   permMode: "auto",
   status: "disconnected",
   lastActiveAt: null,
+  archivedAt: null,
   dirIdentity: "main",
   worktreeName: null,
 };
@@ -32,11 +33,14 @@ describe("project/session 行 schema（wire 形状）", () => {
     expect(() => projectRowSchema.parse({ ...demoProject, canonicalPath: "" })).toThrow();
   });
 
-  it("sessionRow：合法往返（可空列 + 目录身份）；kind/dirIdentity 枚举外被拒", () => {
+  it("sessionRow：合法往返（可空列 + 目录身份）；kind/dirIdentity 枚举外被拒；#58 archivedAt 可空时间戳", () => {
     expect(sessionRowSchema.parse(demoSession)).toEqual(demoSession);
     expect(sessionRowSchema.parse({ ...demoSession, dirIdentity: "worktree", worktreeName: "poc7" })).toMatchObject({
       dirIdentity: "worktree",
       worktreeName: "poc7",
+    });
+    expect(sessionRowSchema.parse({ ...demoSession, archivedAt: "2026-11-10T08:00:00.000Z" })).toMatchObject({
+      archivedAt: "2026-11-10T08:00:00.000Z",
     });
     expect(() => sessionRowSchema.parse({ ...demoSession, kind: "tty" })).toThrow();
     expect(() => sessionRowSchema.parse({ ...demoSession, dirIdentity: "submodule" })).toThrow();
@@ -113,6 +117,16 @@ describe("ipcRequestSchema 最小消息集", () => {
     expect(ipcRequestSchema.parse(resume)).toEqual(resume);
     expect(() => ipcRequestSchema.parse({ channel: "session:readHistory", sessionId: "" })).toThrow();
     expect(() => ipcRequestSchema.parse({ channel: "session:resume" })).toThrow();
+  });
+
+  it("session:archive / session:unarchive：仅需 sessionId；session:archivedList 无参数（#58 归档地基）", () => {
+    const archive = { channel: "session:archive", sessionId: "s-1" };
+    expect(ipcRequestSchema.parse(archive)).toEqual(archive);
+    const unarchive = { channel: "session:unarchive", sessionId: "s-1" };
+    expect(ipcRequestSchema.parse(unarchive)).toEqual(unarchive);
+    expect(ipcRequestSchema.parse({ channel: "session:archivedList" })).toEqual({ channel: "session:archivedList" });
+    expect(() => ipcRequestSchema.parse({ channel: "session:archive", sessionId: "" })).toThrow();
+    expect(() => ipcRequestSchema.parse({ channel: "session:unarchive" })).toThrow();
   });
 
   it("未知 channel / 非 discriminated 对象被拒", () => {

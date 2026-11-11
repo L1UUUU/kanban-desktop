@@ -101,7 +101,9 @@ export interface RestoreDeps {
  * 收养失败与无 adoptSession 能力的 CLI、以及全部 PTY 会话（进程随上次退出终止）落库为 disconnected。
  */
 export async function adoptRestoredSessions(deps: RestoreDeps): Promise<void> {
-  const rows = deps.sessions.list().filter((r) => r.kind === "structured");
+  // #58：退出收养走全量查询但跳过已归档行——各 adapter 对重复 adopt 报「会话已存在」，
+  // 已归档会话留待取消归档时按需 adopt（session:unarchive），避免登记冲突
+  const rows = deps.sessions.listAll().filter((r) => r.kind === "structured" && r.archivedAt == null);
   for (const r of rows) {
     const input: AdoptSessionInput = {
       sessionId: r.id,
@@ -121,7 +123,8 @@ export async function adoptRestoredSessions(deps: RestoreDeps): Promise<void> {
     }
   }
   // PTY 会话：进程已随上次退出终止（before-quit killAll），统一断开态
-  for (const r of deps.sessions.list()) {
+  // #58：全量遍历（含已归档行）——updateStatus 的未归档守卫使归档行为自然 no-op，不改动其落库状态
+  for (const r of deps.sessions.listAll()) {
     if (r.kind === "pty" && r.status !== "disconnected") deps.sessions.updateStatus(r.id, "disconnected");
   }
 }

@@ -1,4 +1,4 @@
-// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc/memory:ipc/diff:ipc/residue:ipc 路由）、CliHost 托管（utilityProcess 优先，进程内回退）与事件转发/状态落库、TrackerEngine（SkillObservation 落库 + 重启恢复）、PTY 终端宿主（node-pty，main 进程直接使用，t0-03 实证）、有序退出与残留进程检测一次性通知（#49 app:event）、#51 单实例锁（二次启动转发聚焦 + 持锁失败立即退出）、#53 日志地基（Logger 二实例守卫后创建 + 启动横幅 + 崩溃兜底 + 9 处 console 迁移 + log:getPath/log:openDir）、#54 worker {log} 消息与 CLI stderr 汇聚（onWorkerLog→worker source；进程内回退同目标）；初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
+// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc/memory:ipc/diff:ipc/residue:ipc/config:ipc 路由）、CliHost 托管（utilityProcess 优先，进程内回退）与事件转发/状态落库、TrackerEngine（SkillObservation 落库 + 重启恢复）、PTY 终端宿主（node-pty，main 进程直接使用，t0-03 实证）、有序退出与残留进程检测一次性通知（#49 app:event）、#51 单实例锁（二次启动转发聚焦 + 持锁失败立即退出）、#53 日志地基（Logger 二实例守卫后创建 + 启动横幅 + 崩溃兜底 + 9 处 console 迁移 + log:getPath/log:openDir）、#54 worker {log} 消息与 CLI stderr 汇聚（onWorkerLog→worker source；进程内回退同目标）；初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -30,7 +30,7 @@ import { defaultConfig, loadConfig, resolveEffectiveLevel, saveConfig, type AppC
 import { createAdapterEventHandler } from "./adapter-events";
 import { CliHostClient } from "./cli-host-client";
 import { SQLITE_ENTRY, openDatabase } from "./db";
-import { handleIpc, handleDiffIpc, handleMemoryIpc, handleResidueIpc, TRACKER_CLI_BY_APP, type IpcDeps } from "./ipc";
+import { handleIpc, handleConfigIpc, handleDiffIpc, handleMemoryIpc, handleResidueIpc, TRACKER_CLI_BY_APP, type IpcDeps } from "./ipc";
 import { defaultGitDiffDeps, readWorkspaceDiff } from "./git-diff-service";
 import { handleLogWrite } from "./log-write";
 import { createLogger, registerCrashHandlers, resolveKindLog, type Logger } from "./logger";
@@ -255,12 +255,14 @@ app.whenReady().then(async () => {
 
   // PTY 宿主装配：平台能力注入（shell/CLI exe 覆盖来自 config，不硬编码）；事件出站过 schema 校验并转发 renderer，
   // started/exit 顺带落 sessions 状态（PTY 活=空闲徽标，退出=已断开徽标）
+  // #58：已归档终端的迟到事件不落库不转发（spec #57 D 节；store 未归档守卫挡写库，此处挡转发渲染端）
   const sendTerminalEvent = (event: unknown): void => {
     terminalEventSchema.parse(event);
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("terminal:event", event);
     }
   };
+  const skipArchivedTerminal = (terminalId: string): boolean => sessions.get(terminalId)?.archivedAt != null;
   const ptyHost = createPtyHost(
     {
       pty: nodePty,
@@ -277,16 +279,24 @@ app.whenReady().then(async () => {
     },
     {
       started: (terminalId, payload) => {
+        if (skipArchivedTerminal(terminalId)) return;
         sessions.updateStatus(terminalId, "idle");
         sendTerminalEvent({ terminalId, type: "started", ...payload });
       },
-      data: (terminalId, data) => sendTerminalEvent({ terminalId, type: "data", data }),
+      data: (terminalId, data) => {
+        if (skipArchivedTerminal(terminalId)) return;
+        sendTerminalEvent({ terminalId, type: "data", data });
+      },
       exit: (terminalId, payload) => {
+        if (skipArchivedTerminal(terminalId)) return;
         sessions.updateStatus(terminalId, "disconnected");
         sessions.touch(terminalId, new Date().toISOString());
         sendTerminalEvent({ terminalId, type: "exit", ...payload });
       },
-      error: (terminalId, payload) => sendTerminalEvent({ terminalId, type: "error", message: payload.message }),
+      error: (terminalId, payload) => {
+        if (skipArchivedTerminal(terminalId)) return;
+        sendTerminalEvent({ terminalId, type: "error", message: payload.message });
+      },
     },
   );
 
@@ -372,6 +382,20 @@ app.whenReady().then(async () => {
     ),
   );
 
+  // #61（spec #57 配置链路）：config:ipc 单通道 —— 读 autoArchive 子集 / 写仅接受该子集并字段级合并进 appConfig 闭包对象
+  //（先持久化成功再改内存；与 setCurrentProjectId 的全量写回共享同一对象，项目切换与设置保存互不覆盖）
+  ipcMain.handle("config:ipc", (_event, raw: unknown) =>
+    handleConfigIpc(
+      {
+        getConfig: () => appConfig,
+        persist: (config) => saveConfig(configPath, config),
+        isShuttingDown: () => shutdown.isShuttingDown(),
+        log: logger.log,
+      },
+      raw,
+    ),
+  );
+
   // #49 残留治理装配（spec #40 A/D/F 节）：检测 = exe 匹配三 CLI 解析链候选并集 + 排除 #44 活跃集合 +
   // 排除注册表核对通过可接管的 OpenCode 孤儿；终止 = 逐 pid 确认式 killed/failed（无自动清理路径）
   // E2E 预置 fake 检测结果（KANBAN_TEST_RESIDUE_JSON 指向残留清单 JSON，参照 memory-seed.ts 预置思路）：
@@ -396,7 +420,8 @@ app.whenReady().then(async () => {
         }),
         listActivePids: () => (hostedAdapter ? hostedAdapter.listChildPids() : Promise.resolve([])),
         registryPath: join(app.getPath("userData"), "opencode-servers.json"),
-        listSessions: () => sessions.list(),
+        // #58 全量会话记录（含已归档）：残留归属的「最近会话」回落对归档会话仍可归属（spec #57 决策附注）
+        listSessions: () => sessions.listAll(),
       };
   // 每次启动只检测一次（spec：就绪后一次、不轮询）；residue:detect 返回同一缓存，renderer 挂载拉取与 app:event 推送同源
   const detectResidueOnce = (() => {

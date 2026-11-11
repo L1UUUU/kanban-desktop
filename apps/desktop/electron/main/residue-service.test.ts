@@ -32,6 +32,7 @@ function session(partial: Partial<SessionRecord>): SessionRecord {
     permMode: "auto",
     status: "disconnected",
     lastActiveAt: null,
+    archivedAt: null,
     ...partial,
   };
 }
