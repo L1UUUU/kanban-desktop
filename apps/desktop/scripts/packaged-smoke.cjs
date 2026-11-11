@@ -155,7 +155,8 @@ async function smoke() {
     const created = await page.evaluate(async ({ cwd }) => {
       const api = window.api;
       if (!api) throw new Error("window.api 不可用");
-      return api.invoke({ channel: "terminal:create", cwd, command: { exe: "powershell.exe", args: ["-NoProfile", "-Command", "Write-Output pty-ok"] } });
+      // #60：terminalId 由调用方预生成（uuid 同格式）
+      return api.invoke({ channel: "terminal:create", terminalId: crypto.randomUUID(), cwd, command: { exe: "powershell.exe", args: ["-NoProfile", "-Command", "Write-Output pty-ok"] } });
     }, { cwd: repoDir });
     if (!created || created.ok !== true) fail(`terminal:create 失败: ${JSON.stringify(created)}`);
     console.log("[smoke] PTY 创建 OK（node-pty 自 asar.unpacked 加载）");
@@ -195,7 +196,8 @@ async function lifecycle() {
     const created = await first.page.evaluate(async ({ cwd, marker }) => {
       const api = window.api;
       if (!api) throw new Error("window.api 不可用");
-      return api.invoke({ channel: "terminal:create", cwd, command: { exe: "powershell.exe", args: ["-NoProfile", "-Command", `Write-Output ${marker}; Start-Sleep -Seconds 120`] } });
+      // #60：terminalId 由调用方预生成（uuid 同格式）
+      return api.invoke({ channel: "terminal:create", terminalId: crypto.randomUUID(), cwd, command: { exe: "powershell.exe", args: ["-NoProfile", "-Command", `Write-Output ${marker}; Start-Sleep -Seconds 120`] } });
     }, { cwd: repoDir, marker: LIFECYCLE_MARKER });
     if (!created || created.ok !== true) fail(`terminal:create 失败: ${JSON.stringify(created)}`);
     for (let i = 0; i < 15; i++) {

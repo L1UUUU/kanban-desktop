@@ -257,14 +257,21 @@ describe("详情面板关联区（#20；原型一致项 4 关联区）", () => {
     return s.sessionId;
   }
 
-  /** 经侧栏项目行「＋」菜单建一个同项目 PTY 终端会话（未关联） */
+  /** 经侧栏项目行「＋」菜单建一个同项目 PTY 终端会话（未关联；#60 草稿：点菜单只开草稿，键入首字符才创建） */
   async function createPtyViaSidebarMenu(): Promise<string> {
     fireEvent.click(screen.getByTitle("新建会话（选择 CLI）"));
     fireEvent.click(screen.getByRole("button", { name: /PTY 终端/ }));
-    await screen.findAllByText(/终端 · pwsh/);
+    await typeDraftFirstInput();
     const s = t.ctl().sessions.find((x) => x.cli === "pty");
     if (!s) throw new Error("PTY 会话未登记");
     return s.sessionId;
+  }
+
+  /** 草稿终端键入首字符触发创建（xterm 隐藏 textarea keyDown → onData → terminal:create） */
+  async function typeDraftFirstInput(): Promise<void> {
+    await waitFor(() => expect(document.querySelector(".xterm-helper-textarea")).toBeTruthy());
+    fireEvent.keyDown(document.querySelector(".xterm-helper-textarea") as Element, { key: "a", code: "KeyA", keyCode: 97 });
+    await screen.findAllByText(/终端 · pwsh/);
   }
 
   beforeEach(async () => {
@@ -374,10 +381,12 @@ describe("详情面板关联区（#20；原型一致项 4 关联区）", () => {
     await waitFor(() => expect(screen.getAllByTestId("related-session").length).toBe(2));
     await waitFor(() => expect(within(sidebarRow("新会话 · OpenCode")).getByTestId("req-badge").textContent).toBe("REQ-001"));
 
-    // PTY 终端：创建即关联（terminal:create+requirementId）
+    // PTY 终端：草稿首输入触发创建即关联（terminal:create+requirementId 随首输入落）；
+    // #60：点菜单项自动切回聊天视图显示草稿 → 键入后回看板断言
     fireEvent.click(screen.getByTestId("new-session-menu"));
     fireEvent.click(screen.getByTestId("new-session-item-pty"));
-    await screen.findAllByText(/终端 · pwsh/);
+    await typeDraftFirstInput();
+    enterKanban();
     await waitFor(() => expect(within(col("Design")).getByText("◍ 3 会话")).toBeTruthy());
     await waitFor(() => expect(within(sidebarRow("终端 · pwsh")).getByTestId("req-badge").textContent).toBe("REQ-001"));
   });

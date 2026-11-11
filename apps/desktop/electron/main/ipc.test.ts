@@ -1,5 +1,6 @@
 // 用途：Main 入站 IPC 路由单测 —— zod 强制校验（非法消息明确错误码 E_SCHEMA）+ 各通道路由到 Adapter/store + AdapterError 错误码透传（spec E/#6 验收第 4 条/#7 project/session 通道；#17 kanban 七通道 + 原子关联 + tracker 推送）
 import { existsSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -24,9 +25,10 @@ afterEach(() => {
   }
 });
 
-/** 路由级 fake PTY 宿主：记录 spawn/kill 调用（PTY 行为由 pty-host.test.ts 覆盖） */
+/** 路由级 fake PTY 宿主：记录 spawn/write/kill 调用（PTY 行为由 pty-host.test.ts 覆盖） */
 function makePtyHost() {
   const spawned: Array<{ terminalId: string; cwd: string }> = [];
+  const writes: Array<{ terminalId: string; data: string }> = [];
   const killed: string[] = [];
   const running = new Set<string>();
   const host: PtyHost = {
@@ -35,7 +37,11 @@ function makePtyHost() {
       running.add(terminalId);
       return { ok: true, label: "pwsh", shell: "pwsh.exe", cwd: req.cwd };
     },
-    write: (terminalId) => (running.has(terminalId) ? { ok: true } : { ok: false, message: "终端未运行" }),
+    write: (terminalId, data) => {
+      if (!running.has(terminalId)) return { ok: false, message: "终端未运行" };
+      writes.push({ terminalId, data });
+      return { ok: true };
+    },
     resize: () => undefined,
     kill: (terminalId) => {
       killed.push(terminalId);
@@ -44,7 +50,7 @@ function makePtyHost() {
     isRunning: (terminalId) => running.has(terminalId),
     killAll: () => running.clear(),
   };
-  return { host, spawned, killed, drop: (id: string) => running.delete(id) };
+  return { host, spawned, writes, killed, drop: (id: string) => running.delete(id) };
 }
 
 /** 构造 VirtualClock 驱动的 FakeAdapter + 路由器（无持久化通道，#6 既有行为回归用） */
@@ -455,12 +461,13 @@ describe("terminal 通道（#12：terminalApi × terminalId 参数化）", () =>
     return { deps, ptyState, projDir, handle: (raw: unknown) => handleIpc(deps, raw) };
   }
 
-  it("terminal:create：spawn + pty 会话落库（kind=pty/cli=pty）+ 目录身份 + 默认标题「终端 · label」", async () => {
+  it("terminal:create：渲染端预生成 id 落库（kind=pty/cli=pty）+ 目录身份 + 默认标题「终端 · label」启动后回写", async () => {
     const { handle, ptyState, projDir } = makeTerminalRouter();
-    const created = await handle({ channel: "terminal:create", cwd: projDir, cols: 120, rows: 40 });
+    const terminalId = randomUUID(); // #60：渲染端草稿预生成的终端 id
+    const created = await handle({ channel: "terminal:create", terminalId, cwd: projDir, cols: 120, rows: 40 });
     expect(created.ok).toBe(true);
     if (created.ok) {
-      expect(created.sessionId).toBeTruthy();
+      expect(created.sessionId).toBe(terminalId); // 应用渲染端 id（单一 id 空间）
       expect(created.cli).toBe("pty");
       expect(created.title).toBe("终端 · pwsh");
       expect(created.dirIdentity).toBe("main");
@@ -470,22 +477,56 @@ describe("terminal 通道（#12：terminalApi × terminalId 参数化）", () =>
     const list = await handle({ channel: "session:list" });
     if (!list.ok) throw new Error("session:list 失败");
     expect(list.sessions).toHaveLength(1);
-    expect(list.sessions![0]).toMatchObject({ kind: "pty", cli: "pty", nativeSessionId: null, status: "idle", title: "终端 · pwsh" });
+    expect(list.sessions![0]).toMatchObject({
+      id: terminalId,
+      kind: "pty",
+      cli: "pty",
+      nativeSessionId: null,
+      status: "idle",
+      title: "终端 · pwsh",
+    });
   });
 
-  it("terminal:create spawn 失败 → E_INTERNAL 且不落库", async () => {
-    const { handle } = makeTerminalRouter({ failSpawn: true });
-    const res = await handle({ channel: "terminal:create", cwd: "C:\\p" });
+  it("terminal:create 携带 firstInput（#60 草稿首输入）：spawn 成功后重放（含中文/多字符不丢失）", async () => {
+    const { handle, ptyState } = makeTerminalRouter();
+    const terminalId = randomUUID();
+    const res = await handle({ channel: "terminal:create", terminalId, cwd: "C:\\p", firstInput: "中文abc\r" });
+    expect(res.ok).toBe(true);
+    expect(ptyState.spawned).toHaveLength(1); // 先 spawn
+    expect(ptyState.writes).toEqual([{ terminalId, data: "中文abc\r" }]); // 后重放首输入
+  });
+
+  it("terminal:create spawn 失败 → E_INTERNAL 且回删占位行（无孤儿记录：默认列表与重启均无）", async () => {
+    const { handle, deps } = makeTerminalRouter({ failSpawn: true });
+    const terminalId = randomUUID();
+    const res = await handle({ channel: "terminal:create", terminalId, cwd: "C:\\p" });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error.code).toBe("E_INTERNAL");
+    // 先落库占位→失败回删：结束后无行（直接查 store 等价「重启读回」视角）
+    expect(deps.sessions.get(terminalId)).toBeNull();
     const list = await handle({ channel: "session:list" });
     if (!list.ok) throw new Error("session:list 失败");
     expect(list.sessions).toHaveLength(0);
   });
 
+  it("terminal:create 终端 id 与既有会话冲突 → E_SESSION_EXISTS 明确报错（单一 id 空间保护，不启动进程）", async () => {
+    const { handle, ptyState } = makeTerminalRouter();
+    const terminalId = randomUUID();
+    // 预置同 id 会话行（模拟历史行/并发创建）
+    const seed = await handle({ channel: "terminal:create", terminalId, cwd: "C:\\p" });
+    expect(seed.ok).toBe(true);
+    const again = await handle({ channel: "terminal:create", terminalId, cwd: "C:\\p" });
+    expect(again.ok).toBe(false);
+    if (!again.ok) {
+      expect(again.error.code).toBe("E_SESSION_EXISTS");
+      expect(again.error.message).toContain(terminalId);
+    }
+    expect(ptyState.spawned).toHaveLength(1); // 冲突请求不 spawn
+  });
+
   it("terminal:write/resize/kill 路由：成功 ok；未运行/未知终端 → E_SESSION_NOT_FOUND", async () => {
     const { handle, ptyState } = makeTerminalRouter();
-    const created = await handle({ channel: "terminal:create", cwd: "C:\\p" });
+    const created = await handle({ channel: "terminal:create", terminalId: randomUUID(), cwd: "C:\\p" });
     const terminalId = created.ok ? created.sessionId! : "";
 
     expect((await handle({ channel: "terminal:write", terminalId, data: "echo hi\r" })).ok).toBe(true);
@@ -502,11 +543,13 @@ describe("terminal 通道（#12：terminalApi × terminalId 参数化）", () =>
     expect(ptyState.killed).toContain(terminalId);
   });
 
-  it("非法 terminal 载荷 → E_SCHEMA（缺 terminalId / 空 cwd）", async () => {
+  it("非法 terminal 载荷 → E_SCHEMA（缺 terminalId / 非 uuid 终端 id / 空 cwd）", async () => {
     const { handle } = makeTerminalRouter();
     const cases: unknown[] = [
       { channel: "terminal:write", data: "x" },
       { channel: "terminal:resize", terminalId: "t", cols: 0, rows: 30 },
+      { channel: "terminal:create", cwd: "C:\\p" }, // #60：缺渲染端预生成 terminalId
+      { channel: "terminal:create", terminalId: "not-a-uuid", cwd: "C:\\p" }, // #60：id 须与 randomUUID 同 uuid 格式
       { channel: "terminal:create", cwd: "" },
       { channel: "terminal:nuke", terminalId: "t" },
     ];
@@ -870,7 +913,7 @@ describe("kanban 通道（#17 spec #15 C 节：全量经 TrackerEngine.process �
     await r.handle({ channel: "kanban:create", projectId: pa });
 
     // 同项目：PTY 终端创建成功即关联（S2-12：pty 可 link）
-    const ok = await r.handle({ channel: "terminal:create", cwd: r.projA, projectId: pa, requirementId: "REQ-001" });
+    const ok = await r.handle({ channel: "terminal:create", terminalId: randomUUID(), cwd: r.projA, projectId: pa, requirementId: "REQ-001" });
     expect(ok.ok).toBe(true);
     if (ok.ok) {
       expect(ok.linked).toBe(true);
@@ -884,7 +927,7 @@ describe("kanban 通道（#17 spec #15 C 节：全量经 TrackerEngine.process �
 
     // 跨项目：终端仍创建成功，但 link 被拒并返回原因
     const eventsBefore = r.engine.store.snapshotTables().stageEventCount;
-    const mismatch = await r.handle({ channel: "terminal:create", cwd: r.projB, projectId: pb, requirementId: "REQ-001" });
+    const mismatch = await r.handle({ channel: "terminal:create", terminalId: randomUUID(), cwd: r.projB, projectId: pb, requirementId: "REQ-001" });
     expect(mismatch).toMatchObject({ ok: true, linked: false });
     if (mismatch.ok) expect(mismatch.reason).toContain("跨项目");
     expect(r.engine.store.snapshotTables().stageEventCount).toBe(eventsBefore); // 不落 link 事件
@@ -1142,7 +1185,7 @@ describe("会话归档通道（#58 spec #57）", () => {
     const ptyRec = makePtyHost();
     const deps = makeDeps(spy.adapter, async () => null, ptyRec);
     const handle = (raw: unknown) => handleIpc(deps, raw);
-    const created = await handle({ channel: "terminal:create", cwd: "C:\\p" });
+    const created = await handle({ channel: "terminal:create", terminalId: randomUUID(), cwd: "C:\\p" }); // #60：id 由渲染端预生成
     const terminalId = created.ok ? created.sessionId! : "";
     const res = await handle({ channel: "session:archive", sessionId: terminalId });
     expect(res.ok).toBe(true);
@@ -1192,7 +1235,7 @@ describe("会话归档通道（#58 spec #57）", () => {
     const spy = spyAdapter(new FakeAdapter({ clock: new VirtualClock() }));
     const deps = makeDeps(spy.adapter);
     const handle = (raw: unknown) => handleIpc(deps, raw);
-    const created = await handle({ channel: "terminal:create", cwd: "C:\\p" });
+    const created = await handle({ channel: "terminal:create", terminalId: randomUUID(), cwd: "C:\\p" }); // #60：id 由渲染端预生成
     const terminalId = created.ok ? created.sessionId! : "";
     await handle({ channel: "session:archive", sessionId: terminalId });
     const res = await handle({ channel: "session:unarchive", sessionId: terminalId });
@@ -1225,7 +1268,7 @@ describe("会话归档通道（#58 spec #57）", () => {
     const deps = makeDeps(spy.adapter, async () => null, ptyRec);
     const handle = (raw: unknown) => handleIpc(deps, raw);
     const s1 = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p", title: "A" });
-    const tty = await handle({ channel: "terminal:create", cwd: "C:\\p" });
+    const tty = await handle({ channel: "terminal:create", terminalId: randomUUID(), cwd: "C:\\p" }); // #60：id 由渲染端预生成
     await handle({ channel: "session:archive", sessionId: s1.ok ? s1.sessionId! : "" });
     await handle({ channel: "session:archive", sessionId: tty.ok ? tty.sessionId! : "" });
     const archived = await handle({ channel: "session:archivedList" });
@@ -1354,8 +1397,8 @@ describe("会话删除通道（#62 spec #57）", () => {
   it("PTY 删除：用终端终止（pty.kill），不触碰 adapter；行删除", async () => {
     const ptyRec = makePtyHost();
     const { spy, handle } = makeDeleteRouter(undefined, { ptyHost: ptyRec });
-    const created = await handle({ channel: "terminal:create", cwd: "C:\\p" });
-    const terminalId = created.ok ? created.sessionId! : "";
+    const terminalId = randomUUID(); // #60：渲染端草稿预生成的终端 id
+    expect((await handle({ channel: "terminal:create", terminalId, cwd: "C:\\p" })).ok).toBe(true);
     const res = await handle({ channel: "session:delete", sessionId: terminalId });
     expect(res.ok).toBe(true);
     expect(ptyRec.killed).toEqual([terminalId]);

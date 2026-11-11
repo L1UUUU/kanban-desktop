@@ -27,8 +27,10 @@ export class SessionStore {
 
   constructor(private readonly db: SqliteDb) {}
 
-  /** 新会话入库（id 为应用侧 uuid，由 Main 从 adapter.createSession 拿到后传入；新建恒未归档） */
+  /** 新会话入库（id 为应用侧 uuid，由 Main 从 adapter.createSession 拿到后传入；新建恒未归档；
+   *  #62×#60：同 id 重插入（PTY 草稿 spawn 失败回删占位行后重试复用同 id）清除删除墓碑——重建即活会话 */
   insert(rec: SessionRecord): void {
+    this.deletedIds.delete(rec.id);
     this.db
       .prepare(
         `INSERT INTO sessions (${COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -108,6 +110,11 @@ export class SessionStore {
    *  未知 id 放行（新建会话在 insert 前的窗口期事件照常，如 FakeAdapter createSession 返回前同步发出的 session_status） */
   shouldDropEvents(id: string): boolean {
     return this.deletedIds.has(id) || this.get(id)?.archivedAt != null;
+  }
+
+  /** 标题更新（#60：PTY 草稿先落库占位、spawn 成功后回写「终端 · shell」标题；spawn 失败回删占位行复用上方 #58 delete） */
+  updateTitle(id: string, title: string): void {
+    this.db.prepare("UPDATE sessions SET title = ? WHERE id = ?").run(title, id);
   }
 }
 

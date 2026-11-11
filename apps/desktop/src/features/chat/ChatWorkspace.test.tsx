@@ -670,39 +670,138 @@ describe("PTY 终端链路（#12：mock PTY 驱动 TerminalPanel 与多路复用
   /** 等待标题出现（侧栏行与终端面板头同名，断言取全部命中，点击取首项=侧栏行） */
   const findTitle = (title: string) => screen.findAllByText(title);
 
-  it("「＋」→ PTY 终端：PTY 分组出现会话行 + 面板挂起（xterm）；切换到结构化会话再切回：面板保留（进程不停止）", async () => {
-    const { transport } = makePtyFixture();
+  /** 在终端面板键入文本（xterm 隐藏 textarea 的 keyDown → onData；#60 草稿首输入触发创建） */
+  function typeInXterm(text: string): void {
+    const textarea = document.querySelector(".xterm-helper-textarea");
+    if (!textarea) throw new Error("xterm textarea 未挂载");
+    for (const ch of text) fireEvent.keyDown(textarea, { key: ch, code: `Key${ch.toUpperCase()}`, keyCode: ch.charCodeAt(0) });
+  }
+
+  /** 包一层 invoke 记录（断言 terminal:create/write 请求序） */
+  function recordInvoke(transport: ChatTransport): { transport: ChatTransport; calls: IpcRequest[] } {
+    const calls: IpcRequest[] = [];
+    const base = transport.invoke;
+    const wrapped: ChatTransport = { ...transport, invoke: (req) => { calls.push(req); return base(req); } };
+    return { transport: wrapped, calls };
+  }
+
+  it("「＋」→ PTY 终端：先开草稿（无会话行、无创建请求、面板可交互）；首输入触发创建 → 会话行 + 标题回写；后续输入直写通道", async () => {
+    const fixture = makePtyFixture();
+    const { transport, calls } = recordInvoke(fixture.transport);
     const t = await boot(transport);
 
-    // 「＋」菜单建 PTY 会话（echo mock PTY：started + 提示符事件回流）
+    // 「＋」菜单点 PTY 项：中央出现终端草稿（提示 + xterm 挂起），侧栏 PTY 分组仍为空态
     fireEvent.click(screen.getByRole("button", { name: "＋" }));
     fireEvent.click(screen.getByRole("button", { name: /PTY 终端/ }));
     await t.flush();
-    expect((await findTitle("终端 · pwsh")).length).toBeGreaterThanOrEqual(1);
-
-    // 激活 PTY 会话 → 面板渲染 xterm（banner 内容由 terminal-manager 单测覆盖；jsdom 下 xterm 不落 DOM 行文本）
+    expect(screen.getByText(/终端草稿 · 尚未启动进程/)).toBeTruthy();
     await waitFor(() => expect(document.querySelector(".xterm")).toBeTruthy());
+    expect(screen.getByText("暂无终端会话")).toBeTruthy();
+    expect(calls.filter((c) => c.channel === "terminal:create")).toHaveLength(0); // 不落库不起进程
 
-    // 建一个结构化会话并切换：PTY 面板卸载但会话保留
+    // 首输入触发创建：请求携带渲染端预生成 uuid id + 首输入缓冲；成功后会话行出现、草稿提示消失
+    typeInXterm("a");
+    await t.flush();
+    const creates = calls.filter((c) => c.channel === "terminal:create");
+    expect(creates).toHaveLength(1);
+    if (creates[0].channel !== "terminal:create") throw new Error("非 create 请求");
+    expect(creates[0].terminalId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(creates[0].firstInput).toBe("a");
+    expect(creates[0].cwd).toBe(fixture.projDir);
+    expect((await findTitle("终端 · pwsh")).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText(/终端草稿 · 尚未启动进程/)).toBeNull();
+    expect(screen.queryByText("暂无终端会话")).toBeNull();
+    expect(screen.getByText("空闲")).toBeTruthy();
+
+    // 创建后的输入直写 terminal:write（不再进草稿缓冲、不再触发创建）
+    typeInXterm("b");
+    await t.flush();
+    expect(calls.filter((c) => c.channel === "terminal:create")).toHaveLength(1);
+    const writes = calls.filter((c) => c.channel === "terminal:write");
+    expect(writes).toHaveLength(1);
+    if (writes[0].channel !== "terminal:write") throw new Error("非 write 请求");
+    expect(writes[0].data).toBe("b");
+
+    // 切到结构化会话（建 Claude）再切回：面板保留（同一持久元素重新挂入，进程未停）
     fireEvent.click(screen.getByRole("button", { name: "＋" }));
     fireEvent.click(screen.getByText("Claude"));
     await t.flush();
     await screen.findByText("新会话 · Claude");
-    expect(screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…")).toBeTruthy();
     expect(document.querySelector(".xterm")).toBeNull();
-
-    // 切回 PTY：面板保留（同一持久元素重新挂入，进程未停 —— mock PTY 仍可回显）
     fireEvent.click(screen.getAllByText("终端 · pwsh")[0]);
     await waitFor(() => expect(document.querySelector(".xterm")).toBeTruthy());
+  });
+
+  it("草稿被切换动作丢弃（不弹确认无残留）：点「＋」建 Claude 会话即弃草稿，无创建请求", async () => {
+    const { transport, calls } = recordInvoke(makePtyFixture().transport);
+    const t = await boot(transport);
+
+    fireEvent.click(screen.getByRole("button", { name: "＋" }));
+    fireEvent.click(screen.getByRole("button", { name: /PTY 终端/ }));
+    await t.flush();
+    expect(screen.getByText(/终端草稿 · 尚未启动进程/)).toBeTruthy();
+
+    // 点「＋」建结构化会话 = 切换焦点：草稿静默丢弃（提示消失、xterm 卸载、无 terminal:create）
+    fireEvent.click(screen.getByRole("button", { name: "＋" }));
+    fireEvent.click(screen.getByText("Claude"));
+    await t.flush();
+    await screen.findByText("新会话 · Claude");
+    expect(screen.queryByText(/终端草稿 · 尚未启动进程/)).toBeNull();
+    expect(document.querySelector(".xterm")).toBeNull();
+    expect(calls.filter((c) => c.channel === "terminal:create")).toHaveLength(0);
+  });
+
+  it("创建失败：草稿保留 + 错误提示 + 缓冲保留；再输入合并缓冲重试成功入库", async () => {
+    const fixture = makePtyFixture();
+    const calls: IpcRequest[] = [];
+    const base = fixture.transport.invoke;
+    let failCreate = true;
+    const transport: ChatTransport = {
+      ...fixture.transport,
+      invoke: (req) => {
+        calls.push(req);
+        if (req.channel === "terminal:create" && failCreate) {
+          failCreate = false;
+          return Promise.resolve({ ok: false, error: { code: "E_INTERNAL", message: "启动失败：spawn boom" } });
+        }
+        return base(req);
+      },
+    };
+    const t = await boot(transport);
+
+    fireEvent.click(screen.getByRole("button", { name: "＋" }));
+    fireEvent.click(screen.getByRole("button", { name: /PTY 终端/ }));
+    await t.flush();
+    typeInXterm("ec");
+    await t.flush();
+
+    // 失败：草稿保留（提示仍在）、错误可见、侧栏仍无行；缓冲输入保留
+    expect(screen.getByText(/终端草稿 · 尚未启动进程/)).toBeTruthy();
+    expect(screen.getByText(/启动失败：spawn boom/)).toBeTruthy();
+    expect(screen.getByText("暂无终端会话")).toBeTruthy();
+
+    // 再输入触发重试：触发字符合并历史缓冲（ec+h=ech）随 create 重放；重试在途的「o」经 write 补写（顺序不丢）
+    typeInXterm("ho");
+    await t.flush();
+    const creates = calls.filter((c) => c.channel === "terminal:create");
+    expect(creates).toHaveLength(2);
+    if (creates[1].channel !== "terminal:create") throw new Error("非 create 请求");
+    expect(creates[1].firstInput).toBe("ech");
+    const writes = calls.filter((c) => c.channel === "terminal:write");
+    expect(writes.map((w) => (w.channel === "terminal:write" ? w.data : ""))).toEqual(["o"]);
+    expect((await findTitle("终端 · pwsh")).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText(/启动失败：spawn boom/)).toBeNull();
   });
 
   it("停止终端：exit 事件 → 状态已断开；重启恢复为断开态条目（进程不在）", async () => {
     const { dbPath, transport } = makePtyFixture();
     const t = await boot(transport);
 
+    // 经草稿首输入建真实终端（停止按钮的既有行为回归）
     fireEvent.click(screen.getByRole("button", { name: "＋" }));
     fireEvent.click(screen.getByRole("button", { name: /PTY 终端/ }));
     await t.flush();
+    typeInXterm("a");
     await findTitle("终端 · pwsh");
     await waitFor(() => expect(document.querySelector(".xterm")).toBeTruthy());
 
@@ -1084,8 +1183,13 @@ describe("会话内错误卡五类（#46：fake 脚本分支驱动 ChatPane → 
     await t.flush();
     t.advance();
     expect(screen.getAllByText("认证演示").length).toBeGreaterThanOrEqual(2);
-    // 「打开 PTY 终端」= 在会话 cwd 新建终端（登录指引命令在终端内运行）
+    // 「打开 PTY 终端」= 在会话 cwd 打开终端草稿（#60：首输入才创建）→ 键入后切到终端视图并出会话行
     fireEvent.click(screen.getByRole("button", { name: "打开 PTY 终端" }));
+    await t.flush();
+    expect(screen.getByText(/终端草稿 · 尚未启动进程/)).toBeTruthy();
+    const textarea = document.querySelector(".xterm-helper-textarea");
+    if (!textarea) throw new Error("xterm textarea 未挂载");
+    fireEvent.keyDown(textarea, { key: "a", code: "KeyA", keyCode: 97 });
     await t.flush();
     expect(screen.getAllByText(/终端 · /).length).toBeGreaterThanOrEqual(1);
   });

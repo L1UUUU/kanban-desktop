@@ -158,6 +158,15 @@ describe("SessionStore 归档/取消归档/删除（#58 spec #57 D 节）", () =
     expect(store.shouldDropEvents("ghost")).toBe(false); // 未知 id 放行（FakeAdapter 创建窗口期 session_status 照常转发）
   });
 
+  it("墓碑复活（#62 × #60 合并语义）：同 id 重新 insert 后墓碑清除——PTY 草稿 spawn 失败回删占位行、重试复用同 id 创建成功后事件不得被误杀", () => {
+    const store = makeStore();
+    store.insert(makeRecord({ id: "tty-1", kind: "pty", cli: "pty" }));
+    store.delete("tty-1"); // #60：spawn 失败回删占位行（进墓碑）
+    expect(store.shouldDropEvents("tty-1")).toBe(true);
+    store.insert(makeRecord({ id: "tty-1", kind: "pty", cli: "pty" })); // 重试复用同 id 重建
+    expect(store.shouldDropEvents("tty-1")).toBe(false); // 重建后为活会话，迟到守卫不再命中
+  });
+
   it("重启读回：archived_at 随库文件往返（默认列表排除、归档视图可见）", () => {
     const store = makeStore();
     store.insert(makeRecord({ id: "s-1" }));
