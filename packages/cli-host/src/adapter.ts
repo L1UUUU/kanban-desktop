@@ -1,4 +1,4 @@
-// 用途：C1 Adapter 统一契约（spec B 冻结）—— 方法面 + capabilities + 带错误码的异常；实现侧（Fake/三 CLI）与宿主（CliHost/Main 路由）共同依赖
+// 用途：C1 Adapter 统一契约（spec B 冻结）—— 方法面 + capabilities + 带错误码的异常；实现侧（Fake/三 CLI）与宿主（CliHost/Main 路由）共同依赖；可选面含 adoptSession/listChildPids 与 runOnce/cancelRunOnce（issue #73 托管附加能力并入）
 import type {
   ApprovalDecision,
   ApprovalSuggestion,
@@ -8,6 +8,7 @@ import type {
   PermMode,
   TranscriptEvent,
 } from "@kanban/ipc-schema";
+import type { RunOnceInput, RunOnceResult } from "./host/run-once";
 
 /** 能力声明：未实证能力 UI 不暴露控件（spec B capabilities） */
 export interface AdapterCapabilities {
@@ -112,6 +113,15 @@ export interface CliAdapter {
    * 残留治理（#49）以此 worker/进程内形态上报的并集为「本应用活跃集合」判定基准。
    */
   listChildPids?(): Promise<number[]>;
+  /**
+   * 一次性 CLI 执行（#29 C5 演进；issue #73 并入 CliAdapter 可选面，取代 instanceof 探测）。
+   * 托管形态（utilityProcess worker）具备；进程内回退 AdapterRouter 未实现（undefined）——
+   * memory 提取经此可选面探测，缺该能力时降级 cli-unavailable（边界如实声明）。
+   * shortcut: AdapterRouter（进程内回退）暂不实现 runOnce/cancelRunOnce；复查触发条件 = 回退形态需要提取能力时给 Router 挂 RunOnceRunner
+   */
+  runOnce?(input: RunOnceInput): Promise<RunOnceResult>;
+  /** 取消进行中的一次性执行（与 runOnce 同门能力；未实现即缺席，调用方按无此能力处理） */
+  cancelRunOnce?(runId: string): Promise<void>;
   /** 订阅归一化事件流（ChatEvent ∪ SkillObservation），返回退订函数 */
   subscribe(handler: (event: AdapterEvent) => void): () => void;
 }

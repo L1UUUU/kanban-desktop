@@ -193,13 +193,14 @@ app.whenReady().then(async () => {
   // —— #32 起先于 memory 装配：提取双桥（readTranscript/runOnce）经它接线
   adapter = createHostedAdapter(appConfig);
 
-  // #31 memory 面装配（spec #27 A/C 节）：打开库即对账（running 批次→failed 等四规则，崩溃窗口收敛不锁死需求）；
+  // #32 memory 面装配（spec #27 A/C 节）：打开库即对账（running 批次→failed 等四规则，崩溃窗口收敛不锁死需求）；
   // dataRoot=<userData>/memory（D 节布局根，亦是提取临时 cwd 根）；需求关联会话/标题/项目归属/存在性由 Main 查 tracker 后传入（memory 不依赖 tracker）
-  // #32 提取双桥：readTranscript 经 CliAdapter 契约（托管/进程内皆有）；runOnce/cancelRunOnce 仅 utilityProcess 托管形态具备
-  //（进程内回退无该能力——extract 落 cli-unavailable 业务拒绝，C5 降级路径如实声明边界）
+  // #32 提取双桥：readTranscript 经 CliAdapter 契约（托管/进程内皆有）；runOnce/cancelRunOnce 经 CliAdapter 可选面探测（issue #73 取代 instanceof CliHostClient）
+  //（进程内回退未实现该可选成员——extract 落 cli-unavailable 业务拒绝，C5 降级路径如实声明边界）
   // #72 C1 Step3：事件发送器经共享工厂（出站过 schema 校验失败 throw；窗口不在时静默丢弃转发）
   const sendMemoryEvent = createValidatedSender(memoryEventSchema, "memory:event", getMainWindow);
-  const hostedAdapter = adapter instanceof CliHostClient ? adapter : null;
+  const runOnceBridge = adapter.runOnce?.bind(adapter);
+  const cancelRunOnceBridge = adapter.cancelRunOnce?.bind(adapter);
   // 需求当前关联会话查询（两闭包同形遍历的共享形状）：按 kind 过滤收集，structured 附加 CLI 名（pty 侧仅取 sessionId）
   const listLinkedSessions = (
     requirementId: string,
@@ -226,8 +227,8 @@ app.whenReady().then(async () => {
     getRequirementTitle: (requirementId) => trackerEngine.tracker.req(requirementId)?.title ?? null,
     requirementExists: (requirementId) => trackerEngine.tracker.req(requirementId) != null,
     readTranscriptBridge: (sessionId) => adapter.readTranscript(sessionId),
-    runOnceBridge: hostedAdapter ? (input) => hostedAdapter.runOnce(input) : undefined,
-    cancelRunOnceBridge: hostedAdapter ? (runId) => hostedAdapter.cancelRunOnce(runId) : undefined,
+    runOnceBridge,
+    cancelRunOnceBridge,
     emitMemoryEvent: sendMemoryEvent,
   }).service;
 
@@ -426,7 +427,8 @@ app.whenReady().then(async () => {
           claude: listClaudeExeCandidates({ manualOverride: appConfig.cliExe.claude }),
           opencode: listOpenCodeExeCandidates({ manualOverride: appConfig.cliExe.opencode }),
         }),
-        listActivePids: () => (hostedAdapter ? hostedAdapter.listChildPids() : Promise.resolve([])),
+        // 可选面探测（issue #73）：回退形态 AdapterRouter 实现了 listChildPids——residue 活跃集合如实上报（修复旧 instanceof 探测丢弃回退形态 pid 的少报）
+        listActivePids: () => adapter.listChildPids?.() ?? Promise.resolve([]),
         registryPath: join(app.getPath("userData"), "opencode-servers.json"),
         // #58 全量会话记录（含已归档）：残留归属的「最近会话」回落对归档会话仍可归属（spec #57 决策附注）
         listSessions: () => sessions.listAll(),
