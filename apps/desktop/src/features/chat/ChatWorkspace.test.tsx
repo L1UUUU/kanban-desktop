@@ -15,7 +15,7 @@ import { createAdapterSessionProcesses, createSessionLifecycle } from "../../../
 import { ProjectStore } from "../../../electron/main/project-store";
 import { SessionStore } from "../../../electron/main/session-store";
 import { ChatWorkspace } from "./ChatWorkspace";
-import type { ChatController, OpenDraftOptions } from "./use-chat";
+import type { ChatController } from "./use-chat";
 import { resolveSessionCwd } from "./use-chat";
 import type { ChatTransport } from "../../lib/kanban-api";
 import { setLogSinkForTest } from "../../lib/logger";
@@ -156,11 +156,11 @@ function makeTransport(
 // 测试注入的演示 cwd（等价生产 AppInfo.fakeDemoCwd：Main 经 KANBAN_FAKE_DEMO_CWD/主目录注入，renderer 不内置任何路径）
 const DEMO_CWD = join(tmpdir(), "kb-fake-demo");
 
-/** 挂载工作区（含真实 useProjects host）并暴露 controller（供测试直接驱动动作） */
-function mount(transport?: ChatTransport, opts?: { configPath?: string | null }) {
+/** 挂载工作区（含真实 useProjects host）并暴露 controller 与 transport（供测试直接驱动动作/取项目 id） */
+function mount(transport?: ChatTransport, opts?: { configPath?: string | null; pick?: () => Promise<string | null> }) {
   const clock = new VirtualClock();
   const adapter = new FakeAdapter({ clock });
-  const tr = transport ?? makeTransport(adapter);
+  const tr = transport ?? makeTransport(adapter, opts?.pick ? { pick: opts.pick } : undefined);
   const holder: { controller?: ChatController } = {};
   const onController = (c: ChatController): void => {
     holder.controller = c;
@@ -184,6 +184,7 @@ function mount(transport?: ChatTransport, opts?: { configPath?: string | null })
   };
   return {
     clock,
+    transport: tr,
     ctl,
     advance: () =>
       act(() => {
@@ -204,11 +205,28 @@ function send(text: string): void {
   fireEvent.click(screen.getByRole("button", { name: "发送 ➤" }));
 }
 
-/** #59 经草稿建立会话：打开草稿 → 输入首条消息 → 提交（原 createSession 直建的草稿语义等价物） */
-async function createViaDraft(ctl: ChatController, cli: CliKind, opts?: OpenDraftOptions, text = "默认演示"): Promise<void> {
-  ctl.openDraft(cli, opts);
-  ctl.store.updateDraft({ input: text });
+/** #59 经草稿建立会话：打开草稿 → 输入首条消息 → 提交（原 createSession 直建的草稿语义等价物；issue #71 S4 起经 openSessionDraft 单入口） */
+async function createViaDraft(
+  ctl: ChatController,
+  cli: CliKind,
+  opts?: { projectId?: string | null; requirementId?: string },
+  text = "默认演示",
+): Promise<void> {
+  const r = ctl.openSessionDraft({ projectId: opts?.projectId ?? null, cli, requirementId: opts?.requirementId });
+  if (!r.ok) throw new Error(`草稿打开失败：${r.reason}`);
+  ctl.updateDraft({ input: text });
   await ctl.submitDraft();
+}
+
+/** 注册一个临时项目目录并返回其 id（真实 CLI 草稿需挂已注册项目——cwd 经 openSessionDraft 解析） */
+async function registerProject(t: { transport: ChatTransport; flush: () => Promise<void> }, projDir: string): Promise<string> {
+  fireEvent.click(screen.getByRole("button", { name: "＋ 注册本地目录…" }));
+  await t.flush();
+  await screen.findByText(projDir.split(/[\\/]/).pop()!);
+  await t.flush(); // 冲刷 passive effects：holder 里的 controller 须携带最新项目列表（openSessionDraft 依赖）
+  const r = await t.transport.invoke({ channel: "project:list" });
+  if (!r.ok || !r.currentProjectId) throw new Error("项目注册后未取到 currentProjectId");
+  return r.currentProjectId;
 }
 
 /** #59 点项目行「＋」菜单选 CLI 后在草稿面板发首条消息（草稿 → 会话出现在侧栏） */
@@ -222,6 +240,17 @@ async function createViaMenu(cliLabel = "Claude", text = "默认演示"): Promis
 }
 
 describe("聊天区（原型一致项 5/6/7）", () => {
+  let tmpRoot = "";
+
+  afterEach(() => {
+    cleanup();
+    for (const db of openDbs.splice(0)) db.close();
+    if (tmpRoot) {
+      rmSync(tmpRoot, { recursive: true, force: true });
+      tmpRoot = "";
+    }
+  });
+
   it("启动打开演示草稿（#59）：中央区草稿面板可交互，侧栏无会话行（空会话永不进历史）", async () => {
     const t = mount();
     await t.flush();
@@ -418,17 +447,16 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     await act(async () => {
       send("默认演示");
     });
-    const boot = creates().find((r) => r.title === "演示会话 · Fake");
+    const boot = creates().find((r) => r.firstMessage === "默认演示");
     expect(boot, "boot 演示草稿提交应发出 session:create").toBeTruthy();
     expect(boot!.model, "默认模型为占位值，不下发").toBeUndefined();
-    expect(boot!.firstMessage).toBe("默认演示");
 
     // 选具体模型 → 再开草稿提交：继承选定值随 session:create 下发，且新会话 composer 回显该值
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "gpt-5.6-luna" } });
     await act(async () => {
-      await createViaDraft(t.ctl(), "fake", { cwd: DEMO_CWD, title: "带模型的会话" });
+      await createViaDraft(t.ctl(), "fake", undefined, "带模型的首条");
     });
-    const withModel = creates().find((r) => r.title === "带模型的会话");
+    const withModel = creates().find((r) => r.firstMessage === "带模型的首条");
     expect(withModel, "草稿提交应发出 session:create").toBeTruthy();
     expect(withModel!.model).toBe("gpt-5.6-luna");
     expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("gpt-5.6-luna");
@@ -436,27 +464,31 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     // 切回默认模型 → 再开草稿提交：占位值仍不下发
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "默认模型" } });
     await act(async () => {
-      await createViaDraft(t.ctl(), "fake", { cwd: DEMO_CWD, title: "默认模型会话" });
+      await createViaDraft(t.ctl(), "fake", undefined, "默认模型的首条");
     });
-    const withoutModel = creates().find((r) => r.title === "默认模型会话");
+    const withoutModel = creates().find((r) => r.firstMessage === "默认模型的首条");
     expect(withoutModel, "默认模型会话应发出 session:create").toBeTruthy();
     expect(withoutModel!.model).toBeUndefined();
   });
 
   it("composer：OpenCode 会话明示权限档位为 server 级（同项目共享）；其他 CLI 无此说明（spec B UI 明示）", async () => {
-    const t = mount();
+    tmpRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "kb-ws-cli-")));
+    const projDir = join(tmpRoot, "demo-repo");
+    mkdirSync(join(projDir, ".git"), { recursive: true });
+    const t = mount(undefined, { pick: async () => projDir });
     await t.flush();
     expect(screen.queryByText(/OpenCode 权限档位为 server 级/)).toBeNull(); // boot 演示草稿（fake）不显示
+    const projectId = await registerProject(t, projDir);
     await act(async () => {
-      send("默认演示"); // boot 演示草稿提交 → fake 会话（供稍后切回）
+      await createViaDraft(t.ctl(), "fake", { projectId }, "默认演示"); // 同项目 fake 会话：也不显示
     });
-    expect(screen.queryByText(/OpenCode 权限档位为 server 级/)).toBeNull(); // fake 会话也不显示
+    expect(screen.queryByText(/OpenCode 权限档位为 server 级/)).toBeNull();
     await act(async () => {
-      await createViaDraft(t.ctl(), "opencode", { cwd: DEMO_CWD, title: "演示会话 · OpenCode" });
+      await createViaDraft(t.ctl(), "opencode", { projectId }); // 新会话 · OpenCode
     });
     expect(screen.getByText(/OpenCode 权限档位为 server 级（同项目下会话共享）；切换后新会话生效/)).toBeTruthy();
     // 切回 fake 会话：说明消失
-    fireEvent.click(screen.getByText("演示会话 · Fake"));
+    fireEvent.click(screen.getByText("新会话 · Fake"));
     expect(screen.queryByText(/OpenCode 权限档位为 server 级/)).toBeNull();
   });
 
@@ -488,7 +520,7 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     const t = mount();
     await t.flush();
     await act(async () => {
-      t.ctl().openDraft("fake", { cwd: DEMO_CWD });
+      t.ctl().openSessionDraft({ projectId: null, cli: "fake" }); // cwd 经 resolveCwd 回落注入的演示目录
     });
     // 草稿就位：中央区草稿面板，侧栏无会话行
     expect(screen.getByTestId("draft-hint").textContent).toContain("新会话 · Fake");
@@ -583,16 +615,19 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     expect(await screen.findByText(/sqlite 写入失败/)).toBeTruthy(); // 错误在会话上呈现
   });
 
-  it("真实 CLI 无显式 cwd：拒绝打开草稿（不得以任何隐式演示目录创建真实会话，code-review 硬违规回归）", async () => {
+  it("真实 CLI 项目不存在：拒绝打开草稿并提示（不得以任何隐式演示目录创建真实会话，code-review 硬违规回归）", async () => {
     const t = mount();
     await t.flush();
     const before = t.ctl().sessions.length;
     await act(async () => {
-      t.ctl().openDraft("claude");
+      const r = t.ctl().openSessionDraft({ projectId: "ghost", cli: "claude" });
+      expect(r).toEqual({ ok: false, reason: "project-missing" }); // cwd 解析失败单点拒绝
     });
     await t.flush();
+    expect(screen.getByText("新建失败：项目不存在或已失效，请刷新项目列表后重试")).toBeTruthy(); // 提示单源（原 3 份手抄归 1）
     expect(t.ctl().sessions.length).toBe(before);
-    expect(t.ctl().draft?.cli).toBe("fake"); // boot 演示草稿保留，未被 claude 草稿替换（不以隐式路径创建）
+    const draft = t.ctl().draft; // boot 演示草稿保留，未被 claude 草稿替换（不以隐式路径创建）
+    expect(draft?.kind === "structured" && draft.data.cli === "fake").toBe(true);
   });
 
   it("Fake 无显式 cwd：用注入的演示目录创建（cwd 来自注入而非 renderer 内置路径）", async () => {
@@ -1216,9 +1251,20 @@ describe("「＋」新建 cwd 解析（resolveSessionCwd：项目查不到不回
 });
 
 describe("草稿提交失败卡（#59：session:create+firstMessage 失败在草稿面板呈现，输入保留可重试；卡 3 信息结构沿 #46）", () => {
-  /** spy transport：session:create 首次返回注入错误（之后透传真实链路）——驱动草稿失败卡 */
-  function makeFailingTransport(fail: { code: ErrorCode; message: string }): ChatTransport {
-    const base = makeTransport(new FakeAdapter({ clock: new VirtualClock() }));
+  let tmpRoot = "";
+
+  afterEach(() => {
+    cleanup();
+    for (const db of openDbs.splice(0)) db.close();
+    if (tmpRoot) {
+      rmSync(tmpRoot, { recursive: true, force: true });
+      tmpRoot = "";
+    }
+  });
+
+  /** spy transport：session:create 首次返回注入错误（之后透传真实链路）——驱动草稿失败卡；pick 注入供注册项目（真实 CLI 草稿 cwd 经项目解析） */
+  function makeFailingTransport(fail: { code: ErrorCode; message: string }, pick?: () => Promise<string | null>): ChatTransport {
+    const base = makeTransport(new FakeAdapter({ clock: new VirtualClock() }), pick ? { pick } : undefined);
     let failed = false;
     return {
       ...base,
@@ -1232,15 +1278,22 @@ describe("草稿提交失败卡（#59：session:create+firstMessage 失败在草
     };
   }
 
+  /** 真实 CLI 草稿 fixture：临时项目目录 + 固定返回它的 pick */
+  function makeCliFixture(): { projDir: string; pick: () => Promise<string | null> } {
+    tmpRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "kb-ws-draftfail-")));
+    const projDir = join(tmpRoot, "demo-repo");
+    mkdirSync(join(projDir, ".git"), { recursive: true });
+    return { projDir, pick: () => Promise.resolve(projDir) };
+  }
+
   it("创建失败（E_SPAWN_NOT_FOUND）：失败卡信息结构（标题/指引/配置路径）+「重试发送」+「复制配置路径」+「知道了」；草稿与输入保留", async () => {
-    const transport = makeFailingTransport({ code: "E_SPAWN_NOT_FOUND", message: "未找到 claude 可执行文件（已尝试：npm 全局；where）" });
+    const { projDir, pick } = makeCliFixture();
+    const transport = makeFailingTransport({ code: "E_SPAWN_NOT_FOUND", message: "未找到 claude 可执行文件（已尝试：npm 全局；where）" }, pick);
     const t = mount(transport, { configPath: "C:\\UserData\\config.json" });
     await t.flush();
+    const projectId = await registerProject(t, projDir);
     await act(async () => {
-      t.ctl().openDraft("claude", { cwd: DEMO_CWD });
-    });
-    await act(async () => {
-      send("首条消息");
+      await createViaDraft(t.ctl(), "claude", { projectId }, "首条消息");
     });
     const card = screen.getByTestId("create-error-card");
     expect(card.textContent).toContain("找不到 CLI 程序（Claude）");
@@ -1256,18 +1309,18 @@ describe("草稿提交失败卡（#59：session:create+firstMessage 失败在草
     // 「知道了」仅清除错误（草稿与输入仍保留）
     fireEvent.click(screen.getByRole("button", { name: "知道了" }));
     expect(screen.queryByTestId("create-error-card")).toBeNull();
-    expect(t.ctl().draft?.input).toBe("首条消息");
+    const draft = t.ctl().draft;
+    expect(draft?.kind === "structured" && draft.data.input).toBe("首条消息");
   });
 
   it("「重试发送」：重新执行创建+发送，成功后卡消失 + 会话登记 + 草稿丢弃", async () => {
-    const transport = makeFailingTransport({ code: "E_SPAWN_NOT_FOUND", message: "未找到 claude 可执行文件" });
+    const { projDir, pick } = makeCliFixture();
+    const transport = makeFailingTransport({ code: "E_SPAWN_NOT_FOUND", message: "未找到 claude 可执行文件" }, pick);
     const t = mount(transport, { configPath: "C:\\UserData\\config.json" });
     await t.flush();
+    const projectId = await registerProject(t, projDir);
     await act(async () => {
-      t.ctl().openDraft("claude", { cwd: DEMO_CWD });
-    });
-    await act(async () => {
-      send("要重试的首条");
+      await createViaDraft(t.ctl(), "claude", { projectId }, "要重试的首条");
     });
     expect(screen.getByTestId("create-error-card")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "重试发送" }));
@@ -1279,14 +1332,13 @@ describe("草稿提交失败卡（#59：session:create+firstMessage 失败在草
   });
 
   it("非 spawn 提交失败：未知卡保留 code 与 message 原文 +「复制错误详情」", async () => {
-    const transport = makeFailingTransport({ code: "E_INTERNAL", message: "thread/start 未返回 thread id（协议异常）" });
+    const { projDir, pick } = makeCliFixture();
+    const transport = makeFailingTransport({ code: "E_INTERNAL", message: "thread/start 未返回 thread id（协议异常）" }, pick);
     const t = mount(transport);
     await t.flush();
+    const projectId = await registerProject(t, projDir);
     await act(async () => {
-      t.ctl().openDraft("codex", { cwd: DEMO_CWD });
-    });
-    await act(async () => {
-      send("首条");
+      await createViaDraft(t.ctl(), "codex", { projectId }, "首条");
     });
     const card = screen.getByTestId("create-error-card");
     expect(card.textContent).toContain("E_INTERNAL");
@@ -1296,24 +1348,24 @@ describe("草稿提交失败卡（#59：session:create+firstMessage 失败在草
   });
 
   it("提交失败留痕（#55 spec #52 G 节 / issue #69）：注入 sink 断言 error/chat 条目（cli/code/message/cwd）—— jsdom 不再静默 no-op", async () => {
+    const { projDir, pick } = makeCliFixture();
     const entries: Array<{ level: string; scope: string; message: string; ctx?: Record<string, string | number | boolean> }> = [];
     const restore = setLogSinkForTest((level, scope, message, ctx) => entries.push({ level, scope, message, ctx }));
     try {
-      const transport = makeFailingTransport({ code: "E_SPAWN_NOT_FOUND", message: "未找到 claude 可执行文件（已尝试：npm 全局；where）" });
+      const transport = makeFailingTransport({ code: "E_SPAWN_NOT_FOUND", message: "未找到 claude 可执行文件（已尝试：npm 全局；where）" }, pick);
       const t = mount(transport);
       await t.flush();
+      const projectId = await registerProject(t, projDir);
       await act(async () => {
-        t.ctl().openDraft("claude", { cwd: DEMO_CWD });
-      });
-      await act(async () => {
-        send("首条消息");
+        await createViaDraft(t.ctl(), "claude", { projectId }, "首条消息");
       });
       expect(screen.getByTestId("create-error-card")).toBeTruthy();
       expect(entries).toContainEqual({
         level: "error",
         scope: "chat",
         message: "草稿提交失败（创建+发送首条消息）",
-        ctx: { cli: "claude", code: "E_SPAWN_NOT_FOUND", message: "未找到 claude 可执行文件（已尝试：npm 全局；where）", cwd: DEMO_CWD },
+        // 挂项目的草稿条件携带 projectId（防 ctx 出现 undefined）
+        ctx: { cli: "claude", code: "E_SPAWN_NOT_FOUND", message: "未找到 claude 可执行文件（已尝试：npm 全局；where）", cwd: projDir, projectId },
       });
     } finally {
       restore();
@@ -1322,13 +1374,28 @@ describe("草稿提交失败卡（#59：session:create+firstMessage 失败在草
 });
 
 describe("会话内错误卡五类（#46：fake 脚本分支驱动 ChatPane → ErrorBanner）", () => {
+  let tmpRoot = "";
+
+  afterEach(() => {
+    cleanup();
+    for (const db of openDbs.splice(0)) db.close();
+    if (tmpRoot) {
+      rmSync(tmpRoot, { recursive: true, force: true });
+      tmpRoot = "";
+    }
+  });
+
   it("认证失效：claude 会话按 CLI 显示指引命令块 +「重试」重发最近消息 +「打开 PTY 终端」新建终端并切到终端视图", async () => {
-    const t = mount(undefined, { configPath: "C:\\UserData\\config.json" });
+    tmpRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "kb-ws-auth-")));
+    const projDir = join(tmpRoot, "demo-repo");
+    mkdirSync(join(projDir, ".git"), { recursive: true });
+    const t = mount(undefined, { configPath: "C:\\UserData\\config.json", pick: async () => projDir });
     await t.flush();
-    // 建 claude（Fake 链路）会话：cli 记录为 claude → 指引命令按 claude 定制
-    // 首条消息即「认证演示」（建会话 + 触发认证剧本一步完成）
+    // 建 claude（Fake 链路）会话：cli 记录为 claude → 指引命令按 claude 定制；
+    // 首条消息即「认证演示」（建会话 + 触发认证剧本一步完成），cwd 经 openSessionDraft 从注册项目解析
+    const projectId = await registerProject(t, projDir);
     await act(async () => {
-      await createViaDraft(t.ctl(), "claude", { cwd: DEMO_CWD, title: "认证演示会话" }, "认证演示");
+      await createViaDraft(t.ctl(), "claude", { projectId }, "认证演示");
     });
     t.advance();
     const card = screen.getByTestId("error-card");
@@ -1403,18 +1470,23 @@ describe("结构化会话草稿创建（#59：点「＋」只开草稿，首条�
     }
   }
 
-  it("点「＋」选 CLI：只开草稿——无 session:create 请求（不落库、不起 CLI）、侧栏无新行、可输入可改权限/模型", async () => {
-    const seen: IpcRequest[] = [];
-    const base = makeTransport(new FakeAdapter({ clock: new VirtualClock() }));
-    const spy: ChatTransport = { ...base, invoke: (req) => { seen.push(req); return base.invoke(req); } };
-    const t = mount(spy);
+  /** 真实 CLI 草稿 fixture：临时项目目录 + 注册（issue #71 S4 起 cwd 经 openSessionDraft 从项目解析，不再手抄） */
+  async function bootWithProject(prefix: string): Promise<{ t: ReturnType<typeof mount>; projDir: string; projectId: string }> {
+    tmpRoot = realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
+    const projDir = join(tmpRoot, "demo-repo");
+    mkdirSync(join(projDir, ".git"), { recursive: true });
+    const t = mount(undefined, { pick: async () => projDir });
     await t.flush();
-    seen.length = 0; // 排除 bootstrap 的 project/session 拉取
+    const projectId = await registerProject(t, projDir);
+    return { t, projDir, projectId };
+  }
+
+  it("点「＋」选 CLI：只开草稿——无 session:create 请求（不落库、不起 CLI）、侧栏无新行、可输入可改权限/模型", async () => {
+    const { t, projectId } = await bootWithProject("kb-ws-draft-open-");
     await act(async () => {
-      t.ctl().openDraft("claude", { cwd: DEMO_CWD });
+      t.ctl().openSessionDraft({ projectId, cli: "claude" });
     });
-    // 无任何创建请求；侧栏无行；草稿可交互（输入 + 权限/模型控件）
-    expect(seen).toHaveLength(0);
+    // 不落库、不起 CLI；侧栏无行；草稿可交互（输入 + 权限/模型控件）
     expect(screen.queryAllByTestId("session-row")).toHaveLength(0);
     expect((screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…") as HTMLTextAreaElement).value).toBe("");
     expect(screen.getByText("⚡ 权限：自动 ▾")).toBeTruthy();
@@ -1429,14 +1501,17 @@ describe("结构化会话草稿创建（#59：点「＋」只开草稿，首条�
 
   it("首条消息原子创建+发送：权限/模型/首条文本随 create 携带，消息送达（用户回显 + 助手回复）", async () => {
     const seen: IpcRequest[] = [];
+    tmpRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "kb-ws-draft-atomic-")));
+    const projDir = join(tmpRoot, "demo-repo");
+    mkdirSync(join(projDir, ".git"), { recursive: true });
     const clock = new VirtualClock();
-    const base = makeTransport(new FakeAdapter({ clock }));
+    const base = makeTransport(new FakeAdapter({ clock }), { pick: async () => projDir });
     const spy: ChatTransport = { ...base, invoke: (req) => { seen.push(req); return base.invoke(req); } };
     const t = mount(spy);
     await t.flush();
-    seen.length = 0;
+    const projectId = await registerProject(t, projDir);
     await act(async () => {
-      t.ctl().openDraft("claude", { cwd: DEMO_CWD });
+      t.ctl().openSessionDraft({ projectId, cli: "claude" });
     });
     // 权限改 ask、模型选具体值 → 随提交一并下发
     fireEvent.click(screen.getByText("⚡ 权限：自动 ▾"));
@@ -1461,12 +1536,16 @@ describe("结构化会话草稿创建（#59：点「＋」只开草稿，首条�
   });
 
   it("创建成功但发送失败（全链注入）：不留空会话（DB 无记录）、失败卡明确报错、草稿与输入保留、重试成功后正常入库", async () => {
+    tmpRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "kb-ws-draft-rollback-")));
+    const projDir = join(tmpRoot, "demo-repo");
+    mkdirSync(join(projDir, ".git"), { recursive: true });
     const adapter = new FailFirstSendAdapter({ clock: new VirtualClock() });
-    const transport = makeTransport(adapter);
+    const transport = makeTransport(adapter, { pick: async () => projDir });
     const t = mount(transport);
     await t.flush();
+    const projectId = await registerProject(t, projDir);
     await act(async () => {
-      t.ctl().openDraft("claude", { cwd: DEMO_CWD });
+      t.ctl().openSessionDraft({ projectId, cli: "claude" });
     });
     await act(async () => {
       send("注定失败的首条");
@@ -1490,15 +1569,14 @@ describe("结构化会话草稿创建（#59：点「＋」只开草稿，首条�
   });
 
   it("再点「＋」：替换现有草稿并显示明确提示；原输入不保留", async () => {
-    const t = mount();
-    await t.flush();
+    const { t, projectId } = await bootWithProject("kb-ws-draft-replace-");
     await act(async () => {
-      t.ctl().openDraft("claude", { cwd: DEMO_CWD });
+      t.ctl().openSessionDraft({ projectId, cli: "claude" });
     });
     // 在草稿输入框写入未发送的内容
     fireEvent.change(screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…"), { target: { value: "旧草稿的输入" } });
     await act(async () => {
-      t.ctl().openDraft("codex", { cwd: DEMO_CWD });
+      t.ctl().openSessionDraft({ projectId, cli: "codex" });
     });
     expect(screen.getByTestId("draft-hint").textContent).toContain("新会话 · Codex");
     expect(screen.getByTestId("draft-hint").textContent).toContain("已替换上一个草稿");
@@ -1506,18 +1584,17 @@ describe("结构化会话草稿创建（#59：点「＋」只开草稿，首条�
   });
 
   it("切会话丢弃草稿且不弹确认、输入不保留；草稿丢弃后中央区回到原会话", async () => {
-    const t = mount();
-    await t.flush();
+    const { t, projectId } = await bootWithProject("kb-ws-draft-switch-");
     await act(async () => {
-      send("默认演示"); // boot 演示草稿提交 → fake 会话
+      await createViaDraft(t.ctl(), "fake", { projectId }); // 建同项目 fake 会话（供切换点击，行可见）
     });
     const fakeId = t.ctl().activeId;
     await act(async () => {
-      t.ctl().openDraft("claude", { cwd: DEMO_CWD });
+      t.ctl().openSessionDraft({ projectId, cli: "claude" });
     });
     fireEvent.change(screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…"), { target: { value: "将被丢弃的输入" } });
     // 点侧栏会话行切换：草稿丢弃（无确认弹层）、输入消失、回到会话视图
-    fireEvent.click(screen.getByText("演示会话 · Fake"));
+    fireEvent.click(screen.getByText("新会话 · Fake"));
     expect(t.ctl().draft).toBeNull();
     expect(screen.queryByTestId("draft-hint")).toBeNull();
     expect(t.ctl().activeId).toBe(fakeId);
@@ -1539,10 +1616,11 @@ describe("结构化会话草稿创建（#59：点「＋」只开草稿，首条�
     fireEvent.click(screen.getByRole("button", { name: "＋ 注册本地目录…" }));
     await t.flush();
     expect(await screen.findByText("proj-a")).toBeTruthy();
-    // 在 A 上开草稿并输入
-    await act(async () => {
-      t.ctl().openDraft("claude", { cwd: projA, projectId: "pa" });
-    });
+    // 在 A 上经「＋」菜单开 Claude 草稿并输入（cwd 由 openSessionDraft 从项目解析）
+    fireEvent.click(screen.getByRole("button", { name: "＋" }));
+    fireEvent.click(screen.getByText("Claude"));
+    await t.flush();
+    expect(screen.getByTestId("draft-hint").textContent).toContain("新会话 · Claude");
     fireEvent.change(screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…"), { target: { value: "A 项目的草稿" } });
     expect(t.ctl().draft).toBeTruthy();
     // 注册 B（自动切到 B 项目）→ 草稿被丢弃
@@ -1562,7 +1640,8 @@ describe("结构化会话草稿创建（#59：点「＋」只开草稿，首条�
     const t = mount(spy);
     await t.flush();
     // 首启：boot 演示草稿打开但无任何 session:create（空会话永不进历史）
-    expect(t.ctl().draft?.title).toBe("演示会话 · Fake");
+    const boot = t.ctl().draft;
+    expect(boot?.kind === "structured" && boot.data.title).toBe("演示会话 · Fake");
     expect(seen.filter((r) => r.channel === "session:create")).toHaveLength(0);
     const empty = await spy.invoke({ channel: "session:list" });
     expect(empty.ok && empty.sessions).toHaveLength(0);

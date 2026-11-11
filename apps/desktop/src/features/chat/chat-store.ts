@@ -65,6 +65,8 @@ export interface DraftMeta {
   model?: string;
   /** 看板卡片进入草稿的需求关联（随首条消息落到新会话） */
   requirementId?: string;
+  /** 替换提示单源（issue #71 S4）：openSessionDraft 判定「两类任一草稿被替换」后显式传入；缺省自算（仅本类） */
+  replacedHint?: boolean;
 }
 
 /** #59 结构化会话草稿（点「＋」后的中央区草稿态：不落库、不进侧栏、不启 CLI；发出首条消息才创建会话） */
@@ -246,9 +248,9 @@ export class ChatStore {
     if (!wasActive) this.changed(); // 激活变化必通知；点已激活行时仅草稿丢弃自身按需通知
   }
 
-  /** #59：打开草稿（全局仅一个：已有草稿则替换并置 replacedHint；返回是否发生了替换） */
+  /** #59：打开草稿（全局仅一个：已有草稿则替换并置 replacedHint；replacedHint 可显式传入——跨类替换由 openSessionDraft 单源判定） */
   openDraft(meta: DraftMeta): boolean {
-    const replaced = this.draft !== null;
+    const replaced = meta.replacedHint ?? this.draft !== null;
     this.draft = {
       cli: meta.cli,
       title: meta.title ?? `新会话 · ${CLI_LABELS[meta.cli]}`,

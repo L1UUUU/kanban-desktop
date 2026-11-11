@@ -49,6 +49,8 @@ export interface OpenDraftOptions {
   cwd: string;
   command?: TerminalCommand;
   requirementId?: string;
+  /** 替换提示单源（issue #71 S4）：openSessionDraft 判定「两类任一草稿被替换」后显式传入；缺省自算（仅本类） */
+  replacedHint?: boolean;
 }
 
 const DEFAULT_COLS = 80;
@@ -72,7 +74,7 @@ export class TerminalDraftController {
 
   /** 打开（或替换为）新草稿：全局仅一个；在途创建不取消（迟到结果仍上报） */
   open(opts: OpenDraftOptions): void {
-    const replaced = this.state !== null;
+    const replaced = opts.replacedHint ?? this.state !== null;
     this.state = {
       terminalId: globalThis.crypto.randomUUID(),
       projectId: opts.projectId,

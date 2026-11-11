@@ -1,4 +1,4 @@
-// 用途：会话控制器 hook（issue #71 S3 起内聚 PTY 草稿机制）—— transport → ChatStore 接线：启动恢复（session:list 断开会话登记）+ 无项目时 boot 演示草稿（#59：发出首条消息才创建会话，空会话永不进历史）+ 全部会话始终归并（切会话不中断，一致项 7），动作经 IPC 单通道发出；TerminalDraftController/TerminalManager/terminal:event 订阅隐藏在 seam 之后（use-terminals.ts 已消亡）
+// 用途：会话控制器 hook（issue #71：内聚两类草稿与全部会话写路径）—— transport → ChatStore 接线：启动恢复（session:list 断开会话登记）+ 无项目时 boot 演示草稿（#59：发出首条消息才创建会话，空会话永不进历史）+ 全部会话始终归并（切会话不中断，一致项 7）；openSessionDraft 为互斥属主唯一安装点（全局至多一个草稿、两类互相替换、replacedHint 单源）；TerminalDraftController/TerminalManager/terminal:event 订阅隐藏在 seam 之后（use-terminals.ts 已消亡）
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { AdapterEvent, ApprovalDecision, ChatEvent, CliKind, IpcResult, PermMode, ProjectRow, SessionRow, SessionStatus, TerminalCommand } from "@kanban/ipc-schema";
 import type { ChatTransport } from "../../lib/kanban-api";
@@ -11,24 +11,41 @@ import { TerminalManager } from "../terminal/TerminalManager";
 const log = createScopedLogger("chat");
 const termLog = createScopedLogger("terminal");
 
-/** #59 草稿打开可选项（cwd 必填：挂当前项目的会话传项目 canonicalPath；权限/模型缺省继承当前 composer 选定值） */
-export interface OpenDraftOptions {
-  cwd: string;
-  projectId?: string | null;
-  title?: string;
-  /** #20：从需求卡片进草稿——提交后由 Main 原子落 link 事件（会话须与需求同项目） */
+/** 中央区草稿判别联合（issue #71 S4）：全局任一时刻至多一个，两类互相替换（openSessionDraft 单源） */
+export type SessionDraft = { kind: "structured"; data: DraftSession } | { kind: "pty"; data: TerminalDraftSnapshot };
+
+/** openSessionDraft 入参（cwd 解析内聚：fromSessionId 给定取该会话 cwd，否则经 deps.resolveCwd 按项目解析） */
+export interface OpenSessionDraftInput {
+  projectId: string | null;
+  /** 结构化 CLI 或 "pty"（PTY 终端草稿） */
+  cli: CliKind | "pty";
   requirementId?: string;
+  /** PTY 专属：启动命令（缺省交互 shell） */
+  command?: TerminalCommand;
+  /** 认证失效卡「打开 PTY 终端」：cwd 取该会话（替代调用方手查会话 cwd） */
+  fromSessionId?: string;
 }
+
+export type OpenDraftResult =
+  | { ok: true; replaced: "structured" | "pty" | null }
+  | { ok: false; reason: "project-missing" };
 
 export interface ChatControllerActions {
   send(text: string): void;
   interrupt(): void;
   resolveApproval(decision: ApprovalDecision): void;
-  /** #59：打开结构化会话草稿（不 invoke、不落库、不进侧栏；全局仅一个，再点「＋」替换） */
-  openDraft(cli: CliKind, opts?: OpenDraftOptions): void;
+  /** 互斥属主唯一安装点（issue #71 S4）：cwd 解析 / 项目不存在提示 / 跨类草稿互斥替换 / replacedHint 单源，一个动作完成 */
+  openSessionDraft(input: OpenSessionDraftInput): OpenDraftResult;
   /** #59：提交草稿 —— 经 session:create+firstMessage 原子完成「创建原生会话→落库→发送首条消息」；失败返回 false（草稿与输入保留） */
   submitDraft(): Promise<boolean>;
+  /** 草稿本地编辑（能力收窄：仅首条消息输入/权限档位/模型三字段，非任意 patch） */
+  updateDraft(patch: Partial<Pick<DraftSession, "input" | "permMode" | "model">>): void;
+  /** #59 失败卡「知道了」：仅清除提交错误（草稿与输入保留） */
+  clearDraftSubmitError(): void;
+  /** 切会话 = 离开草稿：结构化丢弃（store.setActive 内聚）+ PTY 丢弃（含 xterm 释放），一行属主 */
   switchTo(sessionId: string): void;
+  /** 两类草稿齐丢（切项目 effect 单调用；不弹确认、输入不保留） */
+  discardAllDrafts(): void;
   setPerm(mode: PermMode): void;
   setModel(model: string): void;
   /** 断开会话「读取原生历史并恢复」：readHistory 快照重建消息流 → resume 重连（状态经实时事件流回 idle） */
@@ -39,6 +56,8 @@ export interface ChatControllerActions {
   deleteSession(sessionId: string): Promise<void>;
   /** #21：关闭同名 skill 冲突提示条（仅隐藏不影响会话） */
   dismissSkillConflict(sessionId: string): void;
+  /** #46：错误卡「知道了」清除会话 lastError（仅隐藏） */
+  clearError(sessionId: string): void;
 }
 
 /** 外部并列模块登记/同步会话的窄面（issue #71 S2：PTY 迟到成功登记 / started-exit 徽标 / 取消归档回列表） */
@@ -51,38 +70,32 @@ export interface SessionRegistry {
   registerRestored(row: SessionRow): void;
 }
 
-/** PTY 终端控制面（issue #71 S3 由 use-terminals 吸收进会话控制器；S4 将随 openSessionDraft 收窄） */
-export interface TerminalController {
-  /** 打开 PTY 终端草稿（#60：全局仅一个，已有草稿被替换；无 command=交互 shell；requirementId 随首输入触发的创建落关联） */
-  openDraft(opts: { projectId: string | null; cwd: string; command?: TerminalCommand; requirementId?: string }): void;
-  /** 显式停止终端（PTY 进程终止唯一入口；切换/关标签不触发） */
-  kill(terminalId: string): void;
-  /** 丢弃当前草稿（切换会话/项目时静默丢弃；在途创建不取消，迟到成功仍登记会话） */
-  discardDraft(): void;
-  manager: TerminalManager;
-  /** 当前 PTY 草稿（null=无；中央区渲染终端草稿视图的依据） */
-  draft: TerminalDraftSnapshot | null;
-}
-
 export interface ChatController extends ChatControllerActions, SessionRegistry {
   sessions: SessionView[];
   activeSession: SessionView | null;
   activeId: string | null;
-  /** store 版本号（驱动视图滚动等副作用） */
+  /** 视图失效信号（有意暴露：ChatPane 滚动等副作用驱动，非 store 泄漏补救） */
   version: number;
-  /** #59：当前结构化会话草稿（null=无；中央区草稿面板数据源） */
-  draft: DraftSession | null;
-  /** PTY 终端控制面（TerminalWorkspace 数据源与终端动作） */
-  terminals: TerminalController;
-  /** store 直面（过渡帧：issue #71 S4 摘除；现仅测试直驱与 ChatWorkspace 丢弃接线使用） */
-  store: ChatStore;
+  /** 当前草稿（判别联合；null=无；中央区草稿路由两分支的数据源） */
+  draft: SessionDraft | null;
+  /** PTY 终端数据源与显式终止入口（TerminalWorkspace 渲染挂点） */
+  terminals: { manager: TerminalManager; kill(id: string): void };
+}
+
+/** useChatController 依赖注入（ChatWorkspace 用 projects+demoCwd 包 resolveSessionCwd 实现；onNotice 接 projects.setNotice） */
+export interface ChatControllerDeps {
+  demoCwd: string | null;
+  /** cwd 解析（项目 canonicalPath / Fake 演示回落；返回 null=项目不存在拒绝新建） */
+  resolveCwd(projectId: string | null, cli: CliKind | "pty"): string | null;
+  /** 项目不存在等新建拒绝提示（单源：3 份手抄归 1） */
+  onNotice(message: string): void;
 }
 
 /**
- * 「＋」新建的 cwd 解析：项目在列表 → canonicalPath；查不到（DB 重置后残留 id 等）不回退任何路径——
+ * 「＋」新建的 cwd 解析：项目在列表 → canonicalPath；查不到（DB 重置后残留 id、无项目 null 等）不回退任何路径——
  * 真实 CLI/PTY 返回 null 由调用方提示「项目不存在」并拒绝新建，仅 Fake 回落注入的演示 cwd
  */
-export function resolveSessionCwd(projects: ProjectRow[], projectId: string, cli: CliKind | "pty", demoCwd: string | null): string | null {
+export function resolveSessionCwd(projects: ProjectRow[], projectId: string | null, cli: CliKind | "pty", demoCwd: string | null): string | null {
   const canonical = projects.find((p) => p.id === projectId)?.canonicalPath;
   if (canonical) return canonical;
   return cli === "fake" ? demoCwd : null;
@@ -180,10 +193,13 @@ export async function resumeChain(store: ChatStore, transport: ChatTransport, se
 }
 
 /**
- * 聊天控制器 hook。demoCwd 为 Fake 演示草稿 cwd（App 层经 AppInfo 注入：Main 读 KANBAN_FAKE_DEMO_CWD、
- * 缺省用户主目录）；未注入（null/undefined）前不自举 boot 演示草稿，真实会话 cwd 一律来自已注册项目。
+ * 会话控制器 hook（issue #71：store 与 PTY 草稿机制均为 seam 之后的实现细节）。
+ * deps.demoCwd 为 Fake 演示草稿 cwd（App 层经 AppInfo 注入：Main 读 KANBAN_FAKE_DEMO_CWD、缺省用户主目录）；
+ * 未注入（null/undefined）前不自举 boot 演示草稿，真实会话 cwd 一律来自已注册项目（deps.resolveCwd）。
  */
-export function useChatController(transport: ChatTransport | null, demoCwd: string | null = null): ChatController {
+export function useChatController(transport: ChatTransport | null, deps: ChatControllerDeps): ChatController {
+  const { resolveCwd, onNotice } = deps;
+  const demoCwd = deps.demoCwd;
   // useState 初始化器保证每 hook 实例一个 store（渲染期可安全读取）
   const [store] = useState(() => new ChatStore());
   const snap = useSyncExternalStore(store.subscribe, store.getSnapshot);
@@ -265,17 +281,8 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
     });
   }, [transport, manager, store]);
 
-  // PTY 终端控制面（issue #71 S3）：openDraft/discardDraft/kill 引用稳定——ChatWorkspace 切项目 effect 依赖
-  // discardDraft，draft 快照变化不得重建它（terminals 聚合对象随快照重建，方法引用不变）
-  const openPtyDraftInternal = useCallback(
-    (opts: { projectId: string | null; cwd: string; command?: TerminalCommand; requirementId?: string }) => {
-      // 全局仅一个草稿：替换时释放旧草稿的 xterm 实例（在途创建不取消，迟到成功仍登记）
-      const prev = drafts.getSnapshot();
-      if (prev) manager.dispose(prev.terminalId);
-      drafts.open(opts);
-    },
-    [manager, drafts],
-  );
+  // PTY 丢弃（内部）：释放草稿 xterm 实例 + 清草稿（在途创建不取消，迟到成功仍登记）；
+  // switchTo/discardAllDrafts/openSessionDraft 的共用手腕，不再对外暴露
   const discardPtyDraft = useCallback(() => {
     const prev = drafts.getSnapshot();
     if (!prev) return;
@@ -288,18 +295,19 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
     },
     [transport],
   );
-  const terminals = useMemo<TerminalController>(
-    () => ({
-      manager,
-      draft: ptyDraft,
-      openDraft: openPtyDraftInternal,
-      discardDraft: discardPtyDraft,
-      kill: killTerminal,
-    }),
-    [manager, ptyDraft, openPtyDraftInternal, discardPtyDraft, killTerminal],
+  const terminals = useMemo(
+    () => ({ manager, kill: killTerminal }),
+    [manager, killTerminal],
   );
 
-  const actions = useMemo<ChatControllerActions>(() => {
+  // 稳定动作独立 useCallback：discardAllDrafts 不依赖 deps（resolveCwd/onNotice 随项目列表每帧可变），
+  // ChatWorkspace 切项目 effect 依赖它——项目列表刷新不得触发丢弃（actions 随 deps 重建不影响本引用）
+  const discardAllDrafts = useCallback(() => {
+    store.discardDraft();
+    discardPtyDraft();
+  }, [store, discardPtyDraft]);
+
+  const actions = useMemo<Omit<ChatControllerActions, "discardAllDrafts">>(() => {
     const activeId = (): string | null => store.getSnapshot().activeId;
     const report = (p: Promise<IpcResult>, sessionId: string): void => {
       void p.then((r) => {
@@ -333,30 +341,66 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
           id,
         );
       },
-      openDraft: (cli, opts) => {
-        // cwd 必须显式携带，或（仅 fake）回落注入的演示目录；真实 CLI 缺 cwd 直接拒绝，不以任何隐式路径建草稿
-        const resolved = opts ?? (cli === "fake" && demoCwd ? { cwd: demoCwd } : null);
-        if (!resolved) {
-          log.error("草稿打开失败：缺少 cwd（真实会话须挂已注册项目，演示目录未注入）");
-          return;
+      openSessionDraft: (input) => {
+        // cwd 解析单源：fromSession 会话 cwd（认证失效卡「打开 PTY 终端」）或经 resolveCwd 按项目解析；
+        // 解析失败（项目不存在）统一提示并拒绝——不以任何隐式路径建草稿（3 份手抄归 1）
+        let cwd: string | null;
+        let projectId = input.projectId;
+        if (input.fromSessionId) {
+          const s = store.getSession(input.fromSessionId);
+          cwd = s?.cwd ?? null;
+          projectId = s?.projectId ?? null;
+        } else {
+          cwd = resolveCwd(input.projectId, input.cli);
         }
-        // 模型继承当前 composer 选定值：优先当前草稿，其次当前激活会话（权限档位不继承，草稿内自选）
-        const s = store.getSnapshot();
-        const inheritFrom = s.draft ?? (s.activeId ? store.getSession(s.activeId) : undefined);
-        store.openDraft({
-          cli,
-          cwd: resolved.cwd,
-          projectId: resolved.projectId,
-          title: resolved.title,
-          requirementId: resolved.requirementId,
-          model: inheritFrom?.model,
-        });
+        if (!cwd) {
+          onNotice("新建失败：项目不存在或已失效，请刷新项目列表后重试");
+          return { ok: false, reason: "project-missing" };
+        }
+        // 互斥属主（唯一安装点）：全局任一时刻至多一个草稿，两类互相替换并给出提示（#65 反向替换缺失的根因修复）
+        const structured = store.getSnapshot().draft;
+        const pty = drafts.getSnapshot();
+        const replaced: "structured" | "pty" | null = structured ? "structured" : pty ? "pty" : null;
+        if (input.cli === "pty") {
+          if (structured) store.discardDraft();
+          // pty→pty：释放旧草稿的 xterm 实例（在途创建不取消，迟到成功仍登记）
+          if (pty) manager.dispose(pty.terminalId);
+          drafts.open({
+            projectId,
+            cwd,
+            ...(input.command ? { command: input.command } : {}),
+            ...(input.requirementId ? { requirementId: input.requirementId } : {}),
+            replacedHint: replaced !== null,
+          });
+        } else {
+          // 结构化替换 PTY：PTY 草稿静默丢弃（含 xterm 释放）
+          if (pty) discardPtyDraft();
+          // 模型继承当前 composer 选定值：优先当前草稿（被替换的同类），其次当前激活会话（权限档位不继承，草稿内自选）
+          const s = store.getSnapshot();
+          const inheritFrom = structured ?? (s.activeId ? store.getSession(s.activeId) : undefined);
+          store.openDraft({
+            cli: input.cli,
+            cwd,
+            projectId,
+            requirementId: input.requirementId,
+            model: inheritFrom?.model,
+            replacedHint: replaced !== null,
+          });
+        }
+        return { ok: true, replaced };
       },
       submitDraft: async () => {
         if (!transport) return false;
         return submitDraftChain(store, transport);
       },
-      switchTo: (sessionId) => store.setActive(sessionId),
+      updateDraft: (patch) => store.updateDraft(patch),
+      clearDraftSubmitError: () => store.clearDraftSubmitError(),
+      // 切会话 = 离开草稿：结构化丢弃（setActive 内聚）+ PTY 丢弃（含 xterm 释放），一行属主
+      switchTo: (sessionId) => {
+        store.setActive(sessionId);
+        discardPtyDraft();
+      },
+      clearError: (sessionId) => store.clearError(sessionId),
       dismissSkillConflict: (sessionId) => store.dismissSkillConflict(sessionId),
       setPerm: (mode) => {
         const id = activeId();
@@ -389,9 +433,11 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
         }
       },
     };
-  }, [transport, store, demoCwd]);
+  }, [transport, store, resolveCwd, onNotice, drafts, manager, discardPtyDraft]);
 
   const activeSession = snap.activeId ? (store.getSession(snap.activeId) ?? null) : null;
+  // 草稿判别联合聚合：结构化与 PTY 两分支并一支（中央区路由单源）
+  const draft: SessionDraft | null = snap.draft ? { kind: "structured", data: snap.draft } : ptyDraft ? { kind: "pty", data: ptyDraft } : null;
 
   // SessionRegistry 窄面（issue #71 S2）：外部写者经此登记/同步会话，不再直面 store
   const registry: SessionRegistry = {
@@ -402,14 +448,14 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
 
   return {
     ...actions,
+    discardAllDrafts,
     ...registry,
     sessions: snap.sessions,
     activeSession,
     activeId: snap.activeId,
     version: snap.version,
-    draft: snap.draft,
+    draft,
     terminals,
-    store,
   };
 }
 

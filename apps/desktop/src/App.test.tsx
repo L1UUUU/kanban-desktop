@@ -41,7 +41,7 @@ describe("App 三区布局骨架（原型一致项 1）", () => {
 
 describe("顶部 banner 叠加顺序（#42 / spec G·F18：全局条在上，会话级条在下）", () => {
   it("shutdown-banner（App 层）位于全部会话级条之上；会话级内部顺序：冲突条 → 同名 skill 条 → 恢复引导条", () => {
-    // 最小失败 transport：本测试经 controller.store 直驱会话数据，IPC 通道仅需不崩溃
+    // 最小失败 transport：本测试经 controller 面（registry/动作）直驱会话数据，IPC 通道仅需不崩溃
     const transport: ChatTransport = {
       invoke: async () => ({ ok: false, error: { code: "E_INTERNAL", message: "叠序测试 transport 不支持该通道" } }),
       onEvent: () => () => undefined,
@@ -58,15 +58,15 @@ describe("顶部 banner 叠加顺序（#42 / spec G·F18：全局条在上，会
         }}
       />,
     );
-    const store = holder.controller!.store;
+    const ctl = holder.controller!;
     act(() => {
       // 同目录主仓库两个运行中会话（冲突条判据）+ 当前断开会话（恢复条）带同名 skill 冲突
       const repo = { cwd: "C:\\repo", dirIdentity: "main" as const, worktreeName: null };
-      store.registerSession({ sessionId: "run-1", cli: "claude", title: "运行A", permMode: "auto", model: "默认模型", ...repo });
-      store.registerSession({ sessionId: "run-2", cli: "claude", title: "运行B", permMode: "auto", model: "默认模型", ...repo });
-      store.updateStatus("run-1", "running");
-      store.updateStatus("run-2", "running");
-      store.registerSession({
+      ctl.registerExternalSession({ sessionId: "run-1", cli: "claude", title: "运行A", permMode: "auto", model: "默认模型", ...repo });
+      ctl.registerExternalSession({ sessionId: "run-2", cli: "claude", title: "运行B", permMode: "auto", model: "默认模型", ...repo });
+      ctl.updateExternalStatus("run-1", "running");
+      ctl.updateExternalStatus("run-2", "running");
+      ctl.registerExternalSession({
         sessionId: "disc-1",
         cli: "claude",
         title: "断开会话",
@@ -75,8 +75,8 @@ describe("顶部 banner 叠加顺序（#42 / spec G·F18：全局条在上，会
         ...repo,
         skillConflicts: ["setup"],
       });
-      store.updateStatus("disc-1", "disconnected");
-      store.setActive("disc-1");
+      ctl.updateExternalStatus("disc-1", "disconnected");
+      ctl.switchTo("disc-1");
     });
     // DOM 顺序断言（自上而下）：全局退出条 → 冲突条 → 同名 skill 条 → 恢复引导条
     const [shutdown, conflict, skillConflict, resume] = [

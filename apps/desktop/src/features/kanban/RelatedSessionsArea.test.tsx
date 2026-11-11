@@ -16,7 +16,7 @@ import { createAdapterSessionProcesses, createSessionLifecycle } from "../../../
 import { ProjectStore } from "../../../electron/main/project-store";
 import { SessionStore } from "../../../electron/main/session-store";
 import { AppShell } from "../../App";
-import type { ChatController, OpenDraftOptions } from "../chat/use-chat";
+import type { ChatController } from "../chat/use-chat";
 import type { SessionView } from "../chat/chat-store";
 import type { ChatTransport } from "../../lib/kanban-api";
 import { RelatedSessionsArea } from "./RelatedSessionsArea";
@@ -25,9 +25,11 @@ import { RelatedSessionsArea } from "./RelatedSessionsArea";
 const openDbs: Array<{ close(): void }> = [];
 
 /** #59 草稿创建会话：打开草稿并发送首条消息（原 createSession 直建的草稿语义等价物；text 可携带剧本关键词） */
-async function createViaDraft(ctl: ChatController, cli: CliKind, opts?: OpenDraftOptions, text = "默认演示"): Promise<void> {
-  ctl.openDraft(cli, opts);
-  ctl.store.updateDraft({ input: text });
+async function createViaDraft(ctl: ChatController, cli: CliKind, opts?: { projectId?: string | null }, text = "默认演示"): Promise<void> {
+  // issue #71 S4：经 openSessionDraft 单入口（cwd 由 projectId 解析），updateDraft 为收窄动作
+  const r = ctl.openSessionDraft({ projectId: opts?.projectId ?? null, cli });
+  if (!r.ok) throw new Error(`草稿打开失败：${r.reason}`);
+  ctl.updateDraft({ input: text });
   await ctl.submitDraft();
 }
 
@@ -238,8 +240,9 @@ describe("详情面板关联区（#20；原型一致项 4 关联区）", () => {
   async function bootWithLinkedCard(): Promise<void> {
     fireEvent.click(screen.getByRole("button", { name: "＋ 注册本地目录…" }));
     await screen.findAllByText("demo-repo");
+    await t.flush(); // 冲刷 passive effects：holder 里的 controller 须携带最新项目列表（openSessionDraft 依赖）
     await act(async () => {
-      await createViaDraft(t.ctl(), "claude", { cwd: projDir, projectId: await currentProjectId() }, "/design-feature verified");
+      await createViaDraft(t.ctl(), "claude", { projectId: await currentProjectId() }, "/design-feature verified");
     });
     await screen.findByText("新会话 · Claude");
     t.advance();
@@ -257,7 +260,7 @@ describe("详情面板关联区（#20；原型一致项 4 关联区）", () => {
   async function createOpencodeSession(): Promise<string> {
     const projectId = await currentProjectId();
     await act(async () => {
-      await createViaDraft(t.ctl(), "opencode", { cwd: projDir, projectId });
+      await createViaDraft(t.ctl(), "opencode", { projectId });
     });
     await screen.findByText("新会话 · OpenCode");
     const s = t.ctl().sessions.find((x) => x.cli === "opencode");
