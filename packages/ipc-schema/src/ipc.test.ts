@@ -129,6 +129,13 @@ describe("ipcRequestSchema 最小消息集", () => {
     expect(() => ipcRequestSchema.parse({ channel: "session:unarchive" })).toThrow();
   });
 
+  it("session:delete：仅需 sessionId（#62 删除编排入口；空 sessionId 拒绝）", () => {
+    const del = { channel: "session:delete", sessionId: "s-1" };
+    expect(ipcRequestSchema.parse(del)).toEqual(del);
+    expect(() => ipcRequestSchema.parse({ channel: "session:delete", sessionId: "" })).toThrow();
+    expect(() => ipcRequestSchema.parse({ channel: "session:delete" })).toThrow();
+  });
+
   it("未知 channel / 非 discriminated 对象被拒", () => {
     expect(() => ipcRequestSchema.parse({ channel: "session:nuke", sessionId: "s-1" })).toThrow();
     expect(() => ipcRequestSchema.parse(null)).toThrow();

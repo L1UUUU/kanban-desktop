@@ -191,7 +191,7 @@ export class ChatStore {
     this.changed();
   }
 
-  /** #58 移除会话行（归档/删除编排的 renderer 侧）：移除的是激活会话时切到排序中的下一条，无则上一条，全无则空态 */
+  /** #58/#62 移除会话行（归档/删除编排的 renderer 侧）：移除的是激活会话时切到排序中的下一条，无则上一条，全无则空态 */
   removeSession(id: string): void {
     if (!this.sessions.has(id)) return;
     const order = [...this.sessions.keys()];

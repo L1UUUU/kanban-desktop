@@ -257,14 +257,14 @@ app.whenReady().then(async () => {
 
   // PTY 宿主装配：平台能力注入（shell/CLI exe 覆盖来自 config，不硬编码）；事件出站过 schema 校验并转发 renderer，
   // started/exit 顺带落 sessions 状态（PTY 活=空闲徽标，退出=已断开徽标）
-  // #58：已归档终端的迟到事件不落库不转发（spec #57 D 节；store 未归档守卫挡写库，此处挡转发渲染端）
+  // #58/#62：已归档/已删除终端的迟到事件不落库不转发（spec #57 D 节；store 未归档守卫挡写库，此处挡转发渲染端）
   const sendTerminalEvent = (event: unknown): void => {
     terminalEventSchema.parse(event);
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("terminal:event", event);
     }
   };
-  const skipArchivedTerminal = (terminalId: string): boolean => sessions.get(terminalId)?.archivedAt != null;
+  const skipDroppedTerminal = (terminalId: string): boolean => sessions.shouldDropEvents(terminalId);
   const ptyHost = createPtyHost(
     {
       pty: nodePty,
@@ -281,22 +281,22 @@ app.whenReady().then(async () => {
     },
     {
       started: (terminalId, payload) => {
-        if (skipArchivedTerminal(terminalId)) return;
+        if (skipDroppedTerminal(terminalId)) return;
         sessions.updateStatus(terminalId, "idle");
         sendTerminalEvent({ terminalId, type: "started", ...payload });
       },
       data: (terminalId, data) => {
-        if (skipArchivedTerminal(terminalId)) return;
+        if (skipDroppedTerminal(terminalId)) return;
         sendTerminalEvent({ terminalId, type: "data", data });
       },
       exit: (terminalId, payload) => {
-        if (skipArchivedTerminal(terminalId)) return;
+        if (skipDroppedTerminal(terminalId)) return;
         sessions.updateStatus(terminalId, "disconnected");
         sessions.touch(terminalId, new Date().toISOString());
         sendTerminalEvent({ terminalId, type: "exit", ...payload });
       },
       error: (terminalId, payload) => {
-        if (skipArchivedTerminal(terminalId)) return;
+        if (skipDroppedTerminal(terminalId)) return;
         sendTerminalEvent({ terminalId, type: "error", message: payload.message });
       },
     },

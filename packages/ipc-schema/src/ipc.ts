@@ -94,6 +94,8 @@ export const ipcRequestSchema = z.discriminatedUnion("channel", [
   z.object({ channel: z.literal("session:unarchive"), sessionId: sessionIdSchema }),
   /** #58 归档视图查询（设置面板用；wire 行含归档时间） */
   z.object({ channel: z.literal("session:archivedList") }),
+  /** #62 删除（spec #57 D 节）：先解除看板关联（落 unlink 事件）→ 终止进程 → 删记录；幂等（记录不存在返回成功）；不删 CLI 原生历史 */
+  z.object({ channel: z.literal("session:delete"), sessionId: sessionIdSchema }),
   z.object({ channel: z.literal("project:list") }),
   /** 注册项目：Main 弹原生目录选择对话框，路径归一化与去重在 Main 侧完成 */
   z.object({ channel: z.literal("project:register") }),

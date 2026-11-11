@@ -24,8 +24,8 @@ export function createAdapterEventHandler(deps: AdapterEventDeps): (event: Adapt
       deps.log?.("error", "adapter", `事件不符合契约，已丢弃：${err instanceof Error ? err.message : String(err)}`);
       return;
     }
-    // #58 迟到事件守卫（spec #57 D 节）：已归档会话的事件不写库、不进 tracker、不转发 renderer（杜绝幽灵行）
-    if (deps.sessions.get(event.sessionId)?.archivedAt != null) return;
+    // #58/#62 迟到事件守卫（spec #57 D 节）：已归档/已删除会话的事件不写库、不进 tracker、不转发 renderer（杜绝幽灵行）
+    if (deps.sessions.shouldDropEvents(event.sessionId)) return;
     if ("type" in event) {
       // 会话状态与活跃时间随事件流落库（sessions 表，重启恢复依据）
       if (event.type === "session_status") deps.sessions.updateStatus(event.sessionId, event.status);

@@ -469,6 +469,62 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     expect(screen.queryByText("演示会话 · Fake")).toBeNull(); // 行移出默认列表（全无则空态）
   });
 
+  it("#62 删除：hover「删除」→ 二次确认 → Main 编排（unlink+终止+删记录）→ 侧栏行移除（唯一会话删除后空态）", async () => {
+    const t = mount();
+    await t.flush();
+    expect(screen.getByText("演示会话 · Fake")).toBeTruthy();
+    fireEvent.click(screen.getAllByTitle("删除（终止进程并移除会话记录，不可撤销）")[0]);
+    expect(screen.getByTestId("delete-session-dialog")).toBeTruthy(); // 先弹二次确认
+    fireEvent.click(screen.getByTestId("delete-session-confirm"));
+    await t.flush();
+    expect(screen.queryByText("演示会话 · Fake")).toBeNull(); // 行移除（记录已删，唯一会话 → 空态）
+    expect(screen.getAllByText("暂无会话").length).toBeGreaterThanOrEqual(1); // 侧栏结构化分组空态
+    expect(t.ctl().activeId).toBeNull(); // 激活切空态
+  });
+
+  it("#62 删除激活会话：切到排序中的相邻会话（上一条档；下一条/空态档由 chat-store removeSession 三态覆盖）", async () => {
+    const t = mount();
+    await t.flush();
+    await act(async () => {
+      await t.ctl().createSession("fake"); // 新会话登记为激活（排序最前，演示会话在后）
+    });
+    await t.flush();
+    const deleted = t.ctl().activeId;
+    expect(deleted).toBeTruthy();
+    await act(async () => {
+      await t.ctl().deleteSession(deleted!);
+    });
+    await t.flush();
+    expect(t.ctl().activeId).not.toBe(deleted);
+    expect(screen.getByText("演示会话 · Fake")).toBeTruthy(); // 激活切到相邻（上一条）会话，行保留
+  });
+
+  it("#62 删除失败（IPC 错误）：行保留并在会话上呈现错误（可重试）", async () => {
+    // 桩 transport：session:create 成功、session:delete 返回错误（模拟解关联失败中止）
+    const stub: ChatTransport = {
+      invoke: async (req: IpcRequest): Promise<IpcResult> => {
+        if (req.channel === "session:create") {
+          return { ok: true, sessionId: "s-1", cli: "fake", title: "演示会话 · Fake" };
+        }
+        if (req.channel === "session:delete") {
+          return { ok: false, error: { code: "E_INTERNAL", message: "sqlite 写入失败（注入）" } };
+        }
+        return { ok: true };
+      },
+      onEvent: () => () => undefined,
+      onTerminalEvent: () => () => undefined,
+      onTrackerEvent: () => () => undefined,
+    };
+    const t = mount(stub);
+    await t.flush();
+    expect(screen.getByText("演示会话 · Fake")).toBeTruthy();
+    fireEvent.click(screen.getAllByTitle("删除（终止进程并移除会话记录，不可撤销）")[0]);
+    fireEvent.click(screen.getByTestId("delete-session-confirm"));
+    await t.flush();
+    expect(screen.getByText("演示会话 · Fake")).toBeTruthy(); // 失败中止：行保留
+    expect(await screen.findByText(/sqlite 写入失败/)).toBeTruthy(); // 错误在会话上呈现
+  });
+
   it("真实 CLI 无显式 cwd：拒绝创建（不得以任何隐式演示目录创建真实会话，code-review 硬违规回归）", async () => {
     const t = mount();
     await t.flush();

@@ -1281,6 +1281,132 @@ describe("会话归档通道（#58 spec #57）", () => {
     }
   });
 });
+
+// ========== #62 会话删除通道（spec #57 D 节：unlink → 终止 → 删记录编排） ============
+
+/** 组装删除测试路由：spy adapter + 真库 deps + tracker 变更捕获（dbPath 注入文件库做重启重放；pick 固定目录——register 容忍 missing） */
+function makeDeleteRouter(fails?: { interrupt?: boolean; dispose?: boolean }, opts?: { dbPath?: string; ptyHost?: ReturnType<typeof makePtyHost> }) {
+  const clock = new VirtualClock();
+  const spy = spyAdapter(new FakeAdapter({ clock }), fails);
+  const db = opts?.dbPath ? openDatabase(opts.dbPath) : openDatabase(":memory:");
+  const changes: TrackerChange[] = [];
+  const deps: IpcDeps = {
+    adapter: spy.adapter,
+    engine: new TrackerEngine(db),
+    projects: new ProjectStore(db),
+    sessions: new SessionStore(db),
+    pickDirectory: async () => "C:\\del-repo",
+    getCurrentProjectId: () => null,
+    setCurrentProjectId: () => undefined,
+    pty: (opts?.ptyHost ?? makePtyHost()).host,
+    emitTrackerChange: (c) => changes.push(c),
+  };
+  return { clock, spy, deps, changes, db, handle: (raw: unknown) => handleIpc(deps, raw) };
+}
+
+describe("会话删除通道（#62 spec #57）", () => {
+
+  it("结构化删除全链：unlink 事件落库（session_unlinked 推送）→ 中断+受控终止 → 行删除；重启重放后映射干净、事件日志保留", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "kb-del-"));
+    const dbPath = join(tmpRoot, "state.db");
+    const { clock, spy, deps, changes, handle } = makeDeleteRouter(undefined, { dbPath });
+    // 建项目 + 需求 + 已关联会话（session:create+requirementId 原子关联）
+    await handle({ channel: "project:register" });
+    const projList = await handle({ channel: "project:list" });
+    const projectId = projList.ok && projList.projects ? projList.projects[0].id : "";
+    const req = await handle({ channel: "kanban:create", projectId, title: "删除链路" });
+    const requirementId = req.ok ? req.requirementId! : "";
+    const created = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\del-repo", projectId, requirementId, title: "调研" });
+    const sessionId = created.ok ? created.sessionId! : "";
+    await handle({ channel: "session:send", sessionId, text: "在跑" }); // turn 进行中
+
+    const res = await handle({ channel: "session:delete", sessionId });
+    expect(res.ok).toBe(true);
+    // 编排顺序：先解关联（unlink 事件 → session_unlinked 推送）再中断再终止
+    expect(changes.some((c) => c.type === "session_unlinked" && c.sessionId === sessionId && c.requirementId === requirementId)).toBe(true);
+    expect(spy.calls[0]).toBe(`interrupt:${sessionId}`);
+    expect(spy.calls[1]).toBe(`dispose:${sessionId}`);
+    // 行删除：默认列表/归档视图均不可见；看板映射干净（REQ 徽标数据源）
+    const listed = await handle({ channel: "session:list" });
+    expect(listed.ok && listed.sessions).toEqual([]);
+    const kanban = await handle({ channel: "kanban:list" });
+    expect(kanban.ok && kanban.sessionToReq).toEqual({});
+    expect(kanban.ok && kanban.requirements?.[0].sessions).toEqual([]);
+    // 历史事件日志永不删除（link + unlink 均在）
+    const eventKinds = deps.engine.store.listEvents().map((e) => e.kind);
+    expect(eventKinds).toContain("link");
+    expect(eventKinds).toContain("unlink");
+    clock.runToIdle();
+    // 重启重放：新 engine 读同一库 restore 后映射干净（无幽灵映射）；断言完关闭两条连接（Windows 文件锁）
+    const replayDb = openDatabase(dbPath);
+    const replayed = new TrackerEngine(replayDb);
+    replayed.restore();
+    expect(replayed.tracker.sessionToReq.get(sessionId)).toBeUndefined();
+    expect(replayed.tracker.requirements.get(requirementId)?.sessions.has(sessionId)).toBe(false);
+    replayed.close();
+    deps.engine.close();
+  });
+
+  it("解关联失败即中止：ok:false 明确报错，行保留、进程未终止（可重试）", async () => {
+    const base = makeDeleteRouter();
+    // 注入解关联失败：engine.process 抛错（模拟事件落库失败）；setup 仍用真引擎建数据
+    const failing: IpcDeps = {
+      ...base.deps,
+      engine: new Proxy(base.deps.engine, {
+        get(target, prop, receiver) {
+          if (prop === "process") return (): never => { throw new Error("sqlite 写入失败（注入）"); };
+          return Reflect.get(target, prop, receiver);
+        },
+      }),
+    };
+    const handle = (raw: unknown) => handleIpc(failing, raw);
+    const handleSetup = (raw: unknown) => handleIpc(base.deps, raw);
+    // setup 用真引擎建关联会话
+    await handleSetup({ channel: "project:register" });
+    const projList = await handleSetup({ channel: "project:list" });
+    const projectId = projList.ok && projList.projects ? projList.projects[0].id : "";
+    const req = await handleSetup({ channel: "kanban:create", projectId });
+    const requirementId = req.ok ? req.requirementId! : "";
+    const created = await handleSetup({ channel: "session:create", cli: "fake", cwd: "C:\\p", projectId, requirementId });
+    const sessionId = created.ok ? created.sessionId! : "";
+
+    const res = await handle({ channel: "session:delete", sessionId });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.code).toBe("E_INTERNAL");
+      expect(res.error.message).toContain("sqlite 写入失败");
+    }
+    // 中止：行保留（可重试）、进程未终止（未走到 interrupt/dispose）、关联未清
+    expect(base.spy.calls).toEqual([]);
+    const listed = await handleSetup({ channel: "session:list" });
+    expect(listed.ok && listed.sessions).toHaveLength(1);
+    const kanban = await handleSetup({ channel: "kanban:list" });
+    expect(kanban.ok && kanban.sessionToReq).toEqual({ [sessionId]: requirementId });
+  });
+
+  it("重复删除幂等；未知会话（从未存在）同样返回成功（DELETE 语义）", async () => {
+    const { clock, handle } = makeDeleteRouter();
+    const created = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p" });
+    const sessionId = created.ok ? created.sessionId! : "";
+    expect((await handle({ channel: "session:delete", sessionId })).ok).toBe(true);
+    expect((await handle({ channel: "session:delete", sessionId })).ok).toBe(true); // 重复删除幂等
+    expect((await handle({ channel: "session:delete", sessionId: "ghost" })).ok).toBe(true); // 从未存在
+    clock.runToIdle();
+  });
+
+  it("PTY 删除：用终端终止（pty.kill），不触碰 adapter；行删除", async () => {
+    const ptyRec = makePtyHost();
+    const { spy, handle } = makeDeleteRouter(undefined, { ptyHost: ptyRec });
+    const terminalId = randomUUID(); // #60：渲染端草稿预生成的终端 id
+    expect((await handle({ channel: "terminal:create", terminalId, cwd: "C:\\p" })).ok).toBe(true);
+    const res = await handle({ channel: "session:delete", sessionId: terminalId });
+    expect(res.ok).toBe(true);
+    expect(ptyRec.killed).toEqual([terminalId]);
+    expect(spy.calls).toEqual([]); // 不经 adapter
+    const listed = await handle({ channel: "session:list" });
+    expect(listed.ok && listed.sessions).toEqual([]);
+  });
+});
 describe("config:ipc 通道（#61 spec #57 配置链路：读 autoArchive 子集 / 写字段级合并 + 先持久化成功再改内存）", () => {
   /** config 专用路由：真实 AppConfig 对象（getConfig 恒返回同一引用 = Main 内存态）+ 可注入抛错的 persist */
   function makeConfigRouter(opts: { persistThrows?: Error } = {}) {
