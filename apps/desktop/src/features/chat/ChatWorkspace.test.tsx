@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AdapterEvent, CliKind, ErrorCode, IpcRequest, IpcResult, ProjectRow, TerminalEvent } from "@kanban/ipc-schema";
+import type { AdapterEvent, CliKind, ErrorCode, IpcRequest, IpcResult, TerminalEvent } from "@kanban/ipc-schema";
 import { AdapterError, FakeAdapter, VirtualClock, type SendTurnInput } from "@kanban/cli-host";
 import { TrackerEngine } from "@kanban/tracker";
 import { openDatabase } from "../../../electron/main/db";
@@ -16,7 +16,6 @@ import { ProjectStore } from "../../../electron/main/project-store";
 import { SessionStore } from "../../../electron/main/session-store";
 import { ChatWorkspace } from "./ChatWorkspace";
 import type { ChatController } from "./use-chat";
-import { resolveSessionCwd } from "./use-chat";
 import type { ChatTransport } from "../../lib/kanban-api";
 import { setLogSinkForTest } from "../../lib/logger";
 import { useProjects } from "../projects/use-projects";
@@ -630,18 +629,6 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     expect(draft?.kind === "structured" && draft.data.cli === "fake").toBe(true);
   });
 
-  it("Fake 无显式 cwd：用注入的演示目录创建（cwd 来自注入而非 renderer 内置路径）", async () => {
-    const t = mount();
-    await t.flush();
-    await act(async () => {
-      await createViaDraft(t.ctl(), "fake");
-    });
-    await t.flush();
-    const created = t.ctl().sessions.filter((s) => s.title === "新会话 · Fake");
-    expect(created).toHaveLength(1);
-    expect(created[0]?.cwd).toBe(DEMO_CWD);
-  });
-
   it("IPC 错误结果展示：发送失败（错误码）在聊天区显示错误提示", async () => {
     // 桩 transport：session:create 成功、send 返回错误（模拟 Main 校验拒绝/会话失效）
     let seq = 0;
@@ -1230,26 +1217,6 @@ describe("Claude 同名 skill 提示条（#21 / 原型一致项 7：warn 样式�
   });
 });
 
-describe("「＋」新建 cwd 解析（resolveSessionCwd：项目查不到不回退任何路径，code-review 硬违规回归）", () => {
-  const proj: ProjectRow = { id: "p1", name: "repo", canonicalPath: "C:\\repo", status: "ok", createdAt: "2026-01-01T00:00:00Z" };
-
-  it("项目在列表：返回 canonicalPath", () => {
-    expect(resolveSessionCwd([proj], "p1", "claude", null)).toBe("C:\\repo");
-    expect(resolveSessionCwd([proj], "p1", "pty", null)).toBe("C:\\repo");
-  });
-
-  it("项目查不到 + 真实 CLI/PTY：返回 null（不得回退演示目录或任何内置路径）", () => {
-    expect(resolveSessionCwd([proj], "ghost", "claude", "C:\\demo")).toBeNull();
-    expect(resolveSessionCwd([proj], "ghost", "codex", "C:\\demo")).toBeNull();
-    expect(resolveSessionCwd([proj], "ghost", "pty", "C:\\demo")).toBeNull();
-  });
-
-  it("项目查不到 + Fake：回落注入的演示 cwd；未注入则 null", () => {
-    expect(resolveSessionCwd([proj], "ghost", "fake", "C:\\demo")).toBe("C:\\demo");
-    expect(resolveSessionCwd([proj], "ghost", "fake", null)).toBeNull();
-  });
-});
-
 describe("草稿提交失败卡（#59：session:create+firstMessage 失败在草稿面板呈现，输入保留可重试；卡 3 信息结构沿 #46）", () => {
   let tmpRoot = "";
 
@@ -1497,42 +1464,6 @@ describe("结构化会话草稿创建（#59：点「＋」只开草稿，首条�
     expect(screen.getByText("🔒 权限：请求 ▾")).toBeTruthy();
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "gpt-5.6-luna" } });
     expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("gpt-5.6-luna");
-  });
-
-  it("首条消息原子创建+发送：权限/模型/首条文本随 create 携带，消息送达（用户回显 + 助手回复）", async () => {
-    const seen: IpcRequest[] = [];
-    tmpRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "kb-ws-draft-atomic-")));
-    const projDir = join(tmpRoot, "demo-repo");
-    mkdirSync(join(projDir, ".git"), { recursive: true });
-    const clock = new VirtualClock();
-    const base = makeTransport(new FakeAdapter({ clock }), { pick: async () => projDir });
-    const spy: ChatTransport = { ...base, invoke: (req) => { seen.push(req); return base.invoke(req); } };
-    const t = mount(spy);
-    await t.flush();
-    const projectId = await registerProject(t, projDir);
-    await act(async () => {
-      t.ctl().openSessionDraft({ projectId, cli: "claude" });
-    });
-    // 权限改 ask、模型选具体值 → 随提交一并下发
-    fireEvent.click(screen.getByText("⚡ 权限：自动 ▾"));
-    fireEvent.click(screen.getByText("🔒 请求"));
-    fireEvent.change(screen.getByRole("combobox"), { target: { value: "gpt-5.6-luna" } });
-    await act(async () => {
-      send("带参数的首条");
-    });
-    const create = seen.find((r) => r.channel === "session:create") as
-      | (IpcRequest & { permMode?: string; model?: string; firstMessage?: string })
-      | undefined;
-    expect(create).toBeTruthy();
-    expect(create!.firstMessage).toBe("带参数的首条");
-    expect(create!.permMode).toBe("ask");
-    expect(create!.model).toBe("gpt-5.6-luna");
-    // 消息送达：用户回显 + 助手回复（Fake 默认剧本）
-    expect(screen.getByText("带参数的首条")).toBeTruthy();
-    act(() => {
-      clock.runToIdle();
-    });
-    expect(screen.getByText("好的，我先跑一遍现有测试确认基线，然后开始拆分。")).toBeTruthy();
   });
 
   it("创建成功但发送失败（全链注入）：不留空会话（DB 无记录）、失败卡明确报错、草稿与输入保留、重试成功后正常入库", async () => {

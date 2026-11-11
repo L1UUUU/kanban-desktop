@@ -1,48 +1,14 @@
 // 用途：聊天会话视图 store —— ChatEvent 按合并键归并成每会话 items（不变量 3/4 的 renderer 侧），useSyncExternalStore 兼容（快照引用稳定）；#59 起承载结构化会话草稿态
 // 行数评估（~547 行，超 500 行阈值）：主体是 applyEvent 的 ChatEvent 归并 switch（各 case 独立低交织），与会话登记/CRUD、#59 草稿态共享同一快照通知骨架（changed + 引用稳定 snapshot + 订阅），拆开只复制骨架不减耦合，本次不拆；触发条件：再承载一类独立状态域（如草稿态膨胀出独立面板状态）时按域拆分（草稿独立 store）。
-import type { ApprovalSuggestion, ChatEvent, CliKind, PermMode, SessionRow, SessionStatus } from "@kanban/ipc-schema";
+// issue #71 搭车：SessionView 族类型已 type-only 搬移 session-view.ts（单源），此处 re-export 保持既有 import 不变（过渡期）
+import type { ChatEvent, CliKind, PermMode, SessionRow, SessionStatus } from "@kanban/ipc-schema";
 import { CLI_LABELS } from "../../lib/cli-catalog";
+import type { AssistantItem, SessionView, ToolItem } from "./session-view";
+
+export type { AssistantItem, ChatItem, PendingApproval, ResumeState, SessionView, ToolItem, UserItem } from "./session-view";
 
 /** 「默认模型」UI 占位串（composer 候选/草稿缺省/恢复与占位会话模型统一数据源；占位值不下发，后端按各 CLI 探测链自选） */
 export const DEFAULT_MODEL = "默认模型";
-
-/** 用户消息条目（ChatEvent 无 user 成员：renderer 发送时本地回显） */
-export interface UserItem {
-  kind: "user";
-  itemId: string;
-  text: string;
-}
-
-/** 助手消息条目（按 itemId+partId 归并 delta；streaming 驱动光标） */
-export interface AssistantItem {
-  kind: "assistant";
-  itemId: string;
-  partId: string;
-  text: string;
-  streaming: boolean;
-}
-
-/** 工具卡片条目（按 itemId 归并 started/update/completed） */
-export interface ToolItem {
-  kind: "tool";
-  itemId: string;
-  tool: string;
-  argsSummary: string;
-  status: "running" | "completed" | "denied" | "interrupted";
-  output: string;
-  durationMs: number | null;
-}
-
-export type ChatItem = UserItem | AssistantItem | ToolItem;
-
-export interface PendingApproval {
-  requestId: string;
-  command: string;
-  suggestions: ApprovalSuggestion[];
-}
-
-/** #42 恢复引导条三态：idle=待恢复（无恢复进行）；resuming=恢复中（不可中断，D1）；failed=上次尝试失败（附 IPC 错误） */
-export type ResumeState = { phase: "idle" } | { phase: "resuming" } | { phase: "failed"; code: string; message: string };
 
 /** #46 会话创建失败信息（session:create 失败的错误形状：错误卡数据源；#59 起由草稿 submitError 构造） */
 export interface CreateFailure {
@@ -86,33 +52,6 @@ export interface DraftSession {
   replacedHint: boolean;
   /** 首条消息提交失败（创建+发送原子链错误；null=无） */
   submitError: { code: string; message: string } | null;
-}
-
-export interface SessionView {
-  sessionId: string;
-  cli: string;
-  title: string;
-  status: SessionStatus;
-  /** 权限档位/模型为 renderer 本地会话状态（createSession 传入；chip/select 切换） */
-  permMode: PermMode;
-  model: string;
-  /** 会话挂靠项目（null=无项目演示会话；侧栏按当前项目过滤） */
-  projectId: string | null;
-  /** 会话工作目录与目录身份徽标数据（spec I-3） */
-  cwd: string | null;
-  dirIdentity: SessionRow["dirIdentity"];
-  worktreeName: string | null;
-  items: ChatItem[];
-  pendingApproval: PendingApproval | null;
-  /** 「本轮已取消」提示（turnnote）标记 */
-  lastTurnInterrupted: boolean;
-  lastError: { code: string; message: string } | null;
-  /** #21：Claude 同名 skill 冲突名（session:create 响应附回；仅创建时检测一次，空数组=无冲突，非 claude 会话恒空） */
-  skillConflicts: string[];
-  /** #21：冲突提示条已关闭（关闭仅隐藏，不影响会话；再次创建会话重新出现） */
-  skillConflictDismissed: boolean;
-  /** #42：恢复引导条状态（banner 三态数据源；成功收敛由 resume 后实时 session_status 驱动复位） */
-  resumeState: ResumeState;
 }
 
 export interface SessionMeta {
