@@ -1,10 +1,11 @@
 // 用途：worker 入口 {log} 消息协议密封测试（#54 / spec #52 B 节）—— fake parentPort + 捕获 adapter 工厂 log 注入，验证 log 回调上报目标替换为 parentPort.postMessage({log:{kind,detail}})、消息形状与既有事件/命令往返/停机监听器正交共存
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import type { LogKind } from "@kanban/ipc-schema";
 import type { CliAdapter } from "../adapter";
 import type { DesktopAdapterFactoryOptions } from "./desktop-adapters";
 
-// 捕获 worker.ts 传给 createDesktopAdapterFactory 的 options（含 log 注入点）；工厂替身返回最小 adapter（worker 入口测试不驱动真实 CLI）
-const h = vi.hoisted(() => ({ factoryOptions: [] as Array<{ log?: (kind: string, detail: string) => void }> }));
+// 捕获 worker.ts 传给 createDesktopAdapterFactory 的 options（含 log 注入点，类型随工厂签名收窄 LogKind）；工厂替身返回最小 adapter（worker 入口测试不驱动真实 CLI）
+const h = vi.hoisted(() => ({ factoryOptions: [] as Array<{ log?: (kind: LogKind, detail: string) => void }> }));
 vi.mock("./desktop-adapters", () => ({
   createDesktopAdapterFactory: (options: DesktopAdapterFactoryOptions) => {
     h.factoryOptions.push(options);
@@ -53,14 +54,14 @@ beforeAll(async () => {
 });
 
 describe("worker 入口 {log} 上报（#54 spec #52 B 节）", () => {
-  it("adapter log 回调上报目标 = parentPort.postMessage({ log: { kind, detail } })；kind 原样透传（worker 不做映射，ADR-0001）", () => {
+  it("adapter log 回调上报目标 = parentPort.postMessage({ log: { kind, detail } })；kind 原样透传（worker 不做映射，ADR-0001；探针取非 Main 映射表键，若 worker 偷偷映射即败）", () => {
     const log = h.factoryOptions[0]?.log;
     expect(typeof log).toBe("function");
     log!("stderr", "boom");
-    log!("anything-else", "d");
+    log!("text-mismatch", "d");
     expect(port.posted).toEqual([
       { log: { kind: "stderr", detail: "boom" } },
-      { log: { kind: "anything-else", detail: "d" } },
+      { log: { kind: "text-mismatch", detail: "d" } },
     ]);
   });
 

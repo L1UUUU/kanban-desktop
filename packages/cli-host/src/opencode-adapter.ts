@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { AdapterEvent, ApprovalDecision, ApprovalSuggestion, ChatEvent, ChatEventSeed, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
+import type { LogKind, AdapterEvent, ApprovalDecision, ApprovalSuggestion, ChatEvent, ChatEventSeed, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
 import { AdapterError, ExeNotFoundError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
 import type { OpenCodeSseEvent, OpenCodeServerClientLike } from "./opencode/client";
 import { OpenCodeServerHost, type OpenCodeServerHostLike, type OpenCodeServerHostOptions } from "./opencode/server-host";
@@ -43,7 +43,7 @@ export interface OpenCodeAdapterOptions extends Omit<OpenCodeServerHostOptions, 
   /** 卡死确认：连续两次快照探测的最小间隔（缺省 10s；内容零变化才收尾，测试调小） */
   stuckConfirmMs?: number;
   /** 诊断日志 */
-  log?: (kind: string, detail: string) => void;
+  log?: (kind: LogKind, detail: string) => void;
 }
 
 /** 待决审批：轮询/SSE asked 发现；POST 响应终结 */
@@ -108,7 +108,7 @@ export class OpenCodeAdapter implements CliAdapter {
   private readonly handlers = new Set<(event: AdapterEvent) => void>();
   private readonly host: OpenCodeServerHostLike;
   private readonly ownHost: OpenCodeServerHost | null;
-  private readonly log: (kind: string, detail: string) => void;
+  private readonly log: (kind: LogKind, detail: string) => void;
   private readonly pollIntervalMs: number;
   private readonly stuckIdleMs: number;
   private readonly stuckConfirmMs: number;

@@ -1,4 +1,5 @@
 // 用途：main 侧生命周期编排（spec H §6.1 全表/#13）—— 统一退出序列状态机（停新请求→有序取消→有限等待→Session 粒度受控终止→全量 dispose→PTY 停止）与重开恢复编排（启动收养 DB 断开会话）；纯依赖注入可单测
+import type { LogKind } from "@kanban/ipc-schema";
 import type { CliAdapter, AdoptSessionInput } from "@kanban/cli-host";
 import type { SessionStore } from "./session-store";
 import type { PtyHost } from "./pty-host";
@@ -16,7 +17,7 @@ export interface ShutdownDeps {
   /** memory 提取停止（issue #32，spec #27 C 节）：running 批次 → cancelled；排在 adapter/PTY 之后、DB 关闭前 */
   memory?: { stop(): Promise<void> };
   /** 诊断日志 */
-  log?(kind: string, detail: string): void;
+  log?(kind: LogKind, detail: string): void;
 }
 
 export interface ShutdownOrchestrator {
@@ -91,7 +92,7 @@ export function createShutdownOrchestrator(deps: ShutdownDeps): ShutdownOrchestr
 export interface RestoreDeps {
   adapter: CliAdapter;
   sessions: SessionStore;
-  log?(kind: string, detail: string): void;
+  log?(kind: LogKind, detail: string): void;
 }
 
 /**

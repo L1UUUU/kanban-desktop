@@ -1,5 +1,5 @@
 // 用途：CliHost seam（spec C5 冻结：command/subscribe/shutdown，纯 Node 无 Electron 依赖）—— utilityProcess worker 的核心；多 Adapter 经 AdapterRouter 分发；run-once 一次性执行（#29 C5 演进）
-import type { AdapterEvent, ChatEvent, TranscriptEvent } from "@kanban/ipc-schema";
+import type { LogKind, AdapterEvent, ChatEvent, TranscriptEvent } from "@kanban/ipc-schema";
 import { AdapterError } from "../adapter";
 import { AdapterRouter, type AdapterFactory } from "../router-adapter";
 import { RunOnceRunner, type RunOnceResult } from "./run-once";
@@ -48,7 +48,7 @@ export class CliHost {
   private shuttingDown = false;
 
   /** log 可选：worker 形态注入 {log} 上报闭包（#54），进程内/测试缺省丢弃；不影响既有单参构造 */
-  constructor(factory: AdapterFactory, log?: (kind: string, detail: string) => void) {
+  constructor(factory: AdapterFactory, log?: (kind: LogKind, detail: string) => void) {
     this.router = new AdapterRouter(factory);
     this.runOnceRunner = new RunOnceRunner(log);
     this.router.subscribe((event) => {

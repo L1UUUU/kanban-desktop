@@ -1,6 +1,6 @@
-// 用途：日志 wire 契约密封单测（#55 spec #52 C 节）—— logLevelSchema/logEntrySchema 往返、ctx 逐键标量剥离（嵌套对象丢弃 = 逐键剥、条目保留）、scope 边界、message 无长度上限（N12：截断只在 Logger 按 config 生效）
+// 用途：日志 wire 契约密封单测（#55 spec #52 C 节）—— logLevelSchema/logEntrySchema 往返、ctx 逐键标量剥离（嵌套对象丢弃 = 逐键剥、条目保留）、scope 边界、message 无长度上限（N12：截断只在 Logger 按 config 生效）+ 诊断 kind 联合（issue #68：LOG_KINDS 全集供两包 producer 签名收窄）
 import { describe, expect, it } from "vitest";
-import { logCtxSchema, logEntrySchema, logLevelSchema, logSourceSchema, type LogEntryWire } from "./log";
+import { LOG_KINDS, logCtxSchema, logEntrySchema, logKindSchema, logLevelSchema, logSourceSchema, type LogEntryWire } from "./log";
 
 // renderer 经 log:write 上报的典型形状（独立于实现构造，作为期望来源）
 const validInput: LogEntryWire = {
@@ -78,5 +78,19 @@ describe("logCtxSchema（标量 Record，逐键剥离）", () => {
     expect(
       logCtxSchema.parse({ err: { code: "E_X" }, list: [1, 2], n: null, u: undefined, keep: "x", cnt: 3, ok: false }),
     ).toEqual({ keep: "x", cnt: 3, ok: false });
+  });
+});
+
+describe("logKindSchema（诊断 kind 联合，issue #68）", () => {
+  it("LOG_KINDS 全集各自往返且无重复（生产者横跨 cli-host 适配器与 desktop main）", () => {
+    expect(LOG_KINDS.length).toBeGreaterThan(0);
+    expect(new Set(LOG_KINDS).size).toBe(LOG_KINDS.length);
+    for (const k of LOG_KINDS) expect(logKindSchema.parse(k)).toBe(k);
+  });
+
+  it("联合外取值被拒绝（wire 守卫用：parentPort 消息 kind 未命中 → Main debug 兜底）", () => {
+    expect(logKindSchema.safeParse("brand-new-kind").success).toBe(false);
+    expect(logKindSchema.safeParse("").success).toBe(false);
+    expect(logKindSchema.safeParse(123).success).toBe(false);
   });
 });

@@ -1,7 +1,7 @@
 // 用途：CodexAdapter —— C1 契约的真实 Codex 实现：spawn 直连 vendored codex.exe app-server（JSON-RPC/stdio，单进程多 thread），通知流映射 ChatEvent（poc-1/t0-01 实证 wire 行为）+ readTranscript rollout 落盘双视角（#28）
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import type { AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, PermMode, SessionStatus, TranscriptEvent } from "@kanban/ipc-schema";
+import type { LogKind, AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, PermMode, SessionStatus, TranscriptEvent } from "@kanban/ipc-schema";
 import { AdapterError, ExeNotFoundError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
 import { resolveCodexExe } from "./codex/exe";
 import { CodexRpcClient } from "./codex/rpc";
@@ -33,7 +33,7 @@ export interface CodexAdapterOptions {
   /** 测试注入 rpc 客户端工厂 */
   clientFactory?: () => CodexRpcClientLike;
   /** 诊断日志 */
-  log?: (kind: string, detail: string) => void;
+  log?: (kind: LogKind, detail: string) => void;
 }
 
 /**
@@ -109,7 +109,7 @@ export class CodexAdapter implements CliAdapter {
   private readonly effort?: string;
   private readonly modelResolver: ModelResolver;
   private readonly clientFactory: () => CodexRpcClientLike;
-  private readonly log: (kind: string, detail: string) => void;
+  private readonly log: (kind: LogKind, detail: string) => void;
 
   constructor(options: CodexAdapterOptions = {}) {
     this.effort = options.effort;

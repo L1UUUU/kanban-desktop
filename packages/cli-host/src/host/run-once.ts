@@ -1,4 +1,5 @@
 // 用途：run-once 一次性 CLI 进程执行器（spec #27 C 节 C5 演进，issue #29）—— 在 worker 内 spawn 直连真实 exe（不经 shell，MSYS 规约不破坏）、认证 env 不切断、stdout/stderr/exitCode 回传；子进程为 worker 子进程，自动落入宿主 Windows Job Object（Main 侧 JobGuard，t0-01：宿主强杀则 OS 全灭无孤儿）
+import type { LogKind } from "@kanban/ipc-schema";
 import { spawn, type ChildProcess } from "node:child_process";
 import { AdapterError } from "../adapter";
 import { resolveClaudeExe } from "../claude/exe";
@@ -96,9 +97,9 @@ export class RunOnceRunner {
   private readonly active = new Map<string, ActiveRun>();
   private readonly exeCache = new Map<string, string>();
   /** #54：诊断上报（2 参 kind 回调；worker 形态经 CliHost 透传到 {log} 消息，缺省丢弃） */
-  private readonly log: (kind: string, detail: string) => void;
+  private readonly log: (kind: LogKind, detail: string) => void;
 
-  constructor(log?: (kind: string, detail: string) => void) {
+  constructor(log?: (kind: LogKind, detail: string) => void) {
     this.log = log ?? (() => {});
   }
 

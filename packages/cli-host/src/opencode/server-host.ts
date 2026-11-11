@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import net from "node:net";
-import type { PermMode } from "@kanban/ipc-schema";
+import type { LogKind, PermMode } from "@kanban/ipc-schema";
 import { resolveOpenCodeExe } from "./exe";
 import { OpenCodeHttpServerClient, type OpenCodeServerClientLike } from "./client";
 
@@ -58,7 +58,7 @@ export interface OpenCodeServerHostOptions {
   /** OPENCODE_CONFIG_CONTENT 追加字段（e2e provider 只读注入等；permission 字段以档位注入为准） */
   extraConfig?: Record<string, unknown>;
   /** 诊断日志 */
-  log?: (kind: string, detail: string) => void;
+  log?: (kind: LogKind, detail: string) => void;
 }
 
 /** 路径比较键（win32 大小写不敏感 + 斜杠方向归一；宿主 cwd/exe 比对与残留检测候选比对共用，S3 归一） */
@@ -158,7 +158,7 @@ export class OpenCodeServerHost implements OpenCodeServerHostLike {
   private readonly portPicker: () => Promise<number>;
   private readonly portRetries: number;
   private readonly startTimeoutMs: number;
-  private readonly log: (kind: string, detail: string) => void;
+  private readonly log: (kind: LogKind, detail: string) => void;
   private readonly manualExe: string | null;
   private readonly xdgRoot: string | undefined;
   private readonly extraConfig: Record<string, unknown> | undefined;

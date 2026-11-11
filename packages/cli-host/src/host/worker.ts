@@ -1,4 +1,5 @@
 // 用途：CliHost 的 Electron utilityProcess 入口（ADR-0001 形态）—— parentPort 消息协议 {id,cmd}→{id,ok,result|error} 与事件 {event}；纯 Node 可加载（不 import electron）
+import type { LogKind } from "@kanban/ipc-schema";
 import { CliHost, type HostCommand } from "./cli-host";
 import { createDesktopAdapterFactory } from "./desktop-adapters";
 
@@ -16,7 +17,7 @@ if (!port) {
 }
 
 // #54（spec #52 B 节）：诊断上报目标 —— (kind, detail) 2 参回调签名不变，改为向父端口发 {log} 消息（与事件/命令响应/停机消息并列，不进 HostCommand；级别映射与落盘归 Main，本文件保持纯 Node，ADR-0001）
-const reportLog = (kind: string, detail: string): void => {
+const reportLog = (kind: LogKind, detail: string): void => {
   port.postMessage({ log: { kind, detail } });
 };
 

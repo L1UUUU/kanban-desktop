@@ -1,4 +1,5 @@
 // 用途：desktop 场景 Adapter 工厂 —— fake/codex/claude/opencode 构造与 env 开关（KANBAN_DISABLE_* 回切 Fake 演示模式）；utilityProcess worker 与 Main 进程内回退共用
+import type { LogKind } from "@kanban/ipc-schema";
 import path from "node:path";
 import type { CliAdapter } from "../adapter";
 import { ClaudeAdapter } from "../claude-adapter";
@@ -17,7 +18,7 @@ export interface DesktopAdapterFactoryOptions {
   /** 模型探测缓存目录（userData；缺省不落盘）——亦作 OpenCode 孤儿接管注册表落盘目录 */
   cacheDir?: string;
   /** 诊断日志 */
-  log?: (kind: string, detail: string) => void;
+  log?: (kind: LogKind, detail: string) => void;
 }
 
 /** 按需构造：codex/claude/opencode 真实 Adapter（env KANBAN_DISABLE_CODEX/KANBAN_DISABLE_CLAUDE/KANBAN_DISABLE_OPENCODE=1 时回落 Fake 演示模式）；fake 恒可用 */

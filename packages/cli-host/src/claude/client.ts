@@ -1,4 +1,5 @@
 // 用途：Claude Code stream-json 行协议持久客户端（演进自 poc-7 lib/client.mjs + poc-2 protocol-client.mjs 谱系，t0-02 裁决为唯一传输层）—— 单进程单会话：spawn 直连、initialize 握手、多轮 user 行、interrupt 控制请求、CLI→host 控制请求（can_use_tool 审批）应答、进程死亡明确报错
+import type { LogKind } from "@kanban/ipc-schema";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
@@ -27,7 +28,7 @@ export interface ClaudeStreamOptions {
   /** 额外 spawn 参数（--settings/--model/--resume/--dangerously-skip-permissions 等） */
   args?: string[];
   /** 诊断日志 */
-  log?: (kind: string, detail: string) => void;
+  log?: (kind: LogKind, detail: string) => void;
   /** initialize 握手超时（缺省 90s，poc-7 同款） */
   initTimeoutMs?: number;
   /** interrupt 确认等待上限（缺省 15s；超时按已尽力处理不报错——中断效果以流为准） */
@@ -58,7 +59,7 @@ export class ClaudeStreamClient {
   private readonly pendingControl = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private readonly messageListeners = new Set<(msg: Record<string, unknown>) => void>();
   private readonly deadListeners = new Set<(err: Error) => void>();
-  private readonly log: (kind: string, detail: string) => void;
+  private readonly log: (kind: LogKind, detail: string) => void;
 
   constructor(private readonly options: ClaudeStreamOptions) {
     this.log = options.log ?? (() => {});

@@ -1,4 +1,5 @@
 // 用途：OpenCode server HTTP+SSE 客户端（演进自 poc-3 client.mjs EventClient/api）—— api 带陈旧连接重试（t0-01 发现 9）、SSE 帧解析与事件分发、进程/连接死亡上报；Adapter 与 ServerHost 的共同底层
+import type { LogKind } from "@kanban/ipc-schema";
 import { spawnSync, type ChildProcess } from "node:child_process";
 
 /** HTTP API 响应（json 尽力解析，text 保留原文） */
@@ -39,7 +40,7 @@ export interface OpenCodeHttpClientOptions {
   /** 单次 HTTP 请求超时（缺省 15s；防对端不响应永久挂起） */
   apiTimeoutMs?: number;
   /** 诊断日志 */
-  log?: (kind: string, detail: string) => void;
+  log?: (kind: LogKind, detail: string) => void;
 }
 
 /**
@@ -55,7 +56,7 @@ export class OpenCodeHttpServerClient implements OpenCodeServerClientLike {
   private readonly base: string;
   private readonly reconnectDelayMs: number;
   private readonly apiTimeoutMs: number;
-  private readonly log: (kind: string, detail: string) => void;
+  private readonly log: (kind: LogKind, detail: string) => void;
   private readonly eventFns = new Set<(ev: OpenCodeSseEvent) => void>();
   private readonly deadFns = new Set<(err: Error) => void>();
   private sseAbort: AbortController | null = null;

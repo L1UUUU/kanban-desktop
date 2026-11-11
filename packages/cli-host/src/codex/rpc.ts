@@ -1,4 +1,5 @@
 // 用途：Codex app-server JSON-RPC/stdio 客户端（自 poc/poc-1-codex-appserver/client.mjs 演进）：spawn 直连 exe、LF 行分帧、三形状解复用（响应/通知/服务端请求）、进程死亡明确报错
+import type { LogKind } from "@kanban/ipc-schema";
 import { spawn, type ChildProcess } from "node:child_process";
 
 /** JSON-RPC 消息三形状（app-server v2 协议，LF 分帧每行一条） */
@@ -23,7 +24,7 @@ export interface RpcClientOptions {
   /** 子进程 cwd（会话工作目录；缺省继承当前进程） */
   cwd?: string;
   /** 诊断日志（stderr/解析错误等；缺省丢弃） */
-  log?: (kind: string, detail: string) => void;
+  log?: (kind: LogKind, detail: string) => void;
   /** 进程退出（含异常）回调 —— Adapter 据此发 session_exit */
   onExit?: (info: { code: number | null; signal: NodeJS.Signals | null }) => void;
 }

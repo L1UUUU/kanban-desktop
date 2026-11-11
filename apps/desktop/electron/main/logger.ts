@@ -1,11 +1,11 @@
 // 用途：Main 侧唯一日志深模块（spec #52 A 节）—— 级别过滤、单条截断、JSONL 落盘、控制台纯文本双写、按启动建文件、启动横幅、大小切分、保留清理、写失败自保护与崩溃兜底；四来源（Main/worker/Renderer/CLI stderr）诊断事件唯一汇聚点
 import { mkdirSync, appendFileSync, existsSync, readdirSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { LOG_LEVELS, type LogCtx, type LogLevel, type LogSource, type LoggingConfig } from "@kanban/ipc-schema";
+import { LOG_LEVELS, logKindSchema, type LogCtx, type LogLevel, type LogKind, type LogSource, type LoggingConfig } from "@kanban/ipc-schema";
 
 // 枚举与 ctx 类型单源（main→ipc-schema，方向先例 log-write.ts）：@kanban/ipc-schema 是 wire 契约唯一来源，此处 re-export 维持 main 内既有 import 路径
 export { LOG_LEVELS };
-export type { LogCtx, LogLevel, LogSource, LoggingConfig };
+export type { LogCtx, LogLevel, LogKind, LogSource, LoggingConfig };
 
 /** 级别严重度序（数值越小越严重；条目级别 ≤ 生效级别才记录） */
 const LEVEL_ORDER: Record<LogLevel, number> = { error: 0, warn: 1, info: 2, debug: 3 };
@@ -277,8 +277,11 @@ export function registerCrashHandlers(target: CrashTarget, logger: Pick<Logger, 
   });
 }
 
-/** kind→level/scope 集中映射表（spec #52 E 节，Main 唯一一份；worker 只上报 raw kind） */
-const KIND_LOG_MAP: Record<string, { level: LogLevel; scope: string }> = {
+/**
+ * kind→level/scope 集中映射表（spec #52 E 节，Main 唯一一份；worker 只上报 raw kind）。
+ * 键穷尽 Record<LogKind,…>（issue #68）：LOG_KINDS 漏键或多键均为编译错误——新增 kind 从「静默落 debug」变为强制显式声明级别；debug 组为原 `?? debug` 兜底路径的显式条目化。
+ */
+const KIND_LOG_MAP: Record<LogKind, { level: LogLevel; scope: string }> = {
   stderr: { level: "warn", scope: "cli-host" },
   "server-stderr": { level: "warn", scope: "cli-host" },
   dead: { level: "error", scope: "cli-host" },
@@ -291,9 +294,29 @@ const KIND_LOG_MAP: Record<string, { level: LogLevel; scope: string }> = {
   "command-failed": { level: "error", scope: "cli-host" },
   "worker-exit": { level: "error", scope: "cli-host" },
   "worker-exit-pending": { level: "warn", scope: "cli-host" },
+  readTranscript: { level: "debug", scope: "cli-host" },
+  "text-mismatch": { level: "debug", scope: "cli-host" },
+  "stuck-finish": { level: "debug", scope: "cli-host" },
+  "tool-reconcile": { level: "debug", scope: "cli-host" },
+  "session-id-mismatch": { level: "debug", scope: "cli-host" },
+  "unknown-control-request": { level: "debug", scope: "cli-host" },
+  "perm-mode-shared": { level: "debug", scope: "cli-host" },
+  "server-stop": { level: "debug", scope: "cli-host" },
+  "registry-write": { level: "debug", scope: "cli-host" },
+  "orphan-reject": { level: "debug", scope: "cli-host" },
+  "orphan-unreachable": { level: "debug", scope: "cli-host" },
+  "orphan-adopt": { level: "debug", scope: "cli-host" },
+  "orphan-response": { level: "debug", scope: "cli-host" },
+  "unknown-shape": { level: "debug", scope: "cli-host" },
+  "server-start": { level: "debug", scope: "cli-host" },
+  "port-retry": { level: "debug", scope: "cli-host" },
+  "api-retry": { level: "debug", scope: "cli-host" },
+  "sse-error": { level: "debug", scope: "cli-host" },
+  "sse-parse": { level: "debug", scope: "cli-host" },
 };
 
-/** kind 查表（cli-host `log(kind, detail)` 回调 / worker {log} 消息共用）：未命中缺省 debug（新增 kind 无需改表），scope 归 cli-host */
+/** kind 查表（cli-host `log(kind, detail)` 回调 / worker {log} 消息共用）：入参保持 string——parentPort 跨进程输入不可信，经 logKindSchema.safeParse 守卫，未命中仍 debug 兜底（wire 运行时防御，与进程内编译期收窄互补） */
 export function resolveKindLog(kind: string): { level: LogLevel; scope: string } {
-  return KIND_LOG_MAP[kind] ?? { level: "debug", scope: "cli-host" };
+  const parsed = logKindSchema.safeParse(kind);
+  return parsed.success ? KIND_LOG_MAP[parsed.data] : { level: "debug", scope: "cli-host" };
 }

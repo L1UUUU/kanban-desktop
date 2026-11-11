@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
+import type { LogKind, AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
 import { transformHookEvents } from "@kanban/tracker";
 import { AdapterError, ExeNotFoundError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
 import { resolveClaudeExe } from "./claude/exe";
@@ -37,7 +37,7 @@ export interface ClaudeAdapterOptions {
   /** 测试注入客户端工厂 */
   clientFactory?: (options: ClaudeStreamOptions) => ClaudeStreamClientLike;
   /** 诊断日志 */
-  log?: (kind: string, detail: string) => void;
+  log?: (kind: LogKind, detail: string) => void;
 }
 
 /** 权限三档映射（spec B 表 Claude 列）：请求=default+permissions.ask 严格工具配置；自动=default（读自动写/Bash 问）；完全访问=--dangerously-skip-permissions（bypassPermissions） */
@@ -99,7 +99,7 @@ export class ClaudeAdapter implements CliAdapter {
   private readonly hookDir: string;
   private readonly hookNodeBin: string;
   private readonly clientFactory: (options: ClaudeStreamOptions) => ClaudeStreamClientLike;
-  private readonly log: (kind: string, detail: string) => void;
+  private readonly log: (kind: LogKind, detail: string) => void;
   private exeCache: string | null = null;
 
   constructor(options: ClaudeAdapterOptions = {}) {

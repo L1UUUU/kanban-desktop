@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { AdapterEvent, ChatEvent, TranscriptEvent } from "@kanban/ipc-schema";
+import type { AdapterEvent, ChatEvent, LogKind, TranscriptEvent } from "@kanban/ipc-schema";
 import { utilityProcess } from "electron";
 import { AdapterError, JOB_GUARD_PS, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type RunOnceResult, type SendTurnInput } from "@kanban/cli-host";
 
@@ -20,9 +20,9 @@ export interface CliHostClientOptions {
   opencodeExe?: string | null;
   /** 全量 dispose 后等 worker 自行退出的上限 ms（超时 kill 兜底；与退出序列 graceMs 对齐，缺省 3000） */
   fullDisposeWaitMs?: number;
-  /** 诊断日志 */
-  log?: (kind: string, detail: string) => void;
-  /** worker {log} 消息分派目标（#54 spec #52 B 节）：worker 经 parentPort 上报的 (kind, detail) 2 参回调，Main 装配侧强制 source=worker；缺省丢弃（Logger 未就绪不抛错） */
+  /** 诊断日志（main 进程内生产者，kind 联合编译期收窄；index.ts 装配传入的 (kind: string) 宽签名天然兼容） */
+  log?: (kind: LogKind, detail: string) => void;
+  /** worker {log} 消息分派目标（#54 spec #52 B 节）：worker 经 parentPort 上报的 (kind, detail) 2 参回调，Main 装配侧强制 source=worker；入参保持 string——跨进程 wire 输入不可信，级别兜底由 resolveKindLog safeParse 守卫；缺省丢弃（Logger 未就绪不抛错） */
   onWorkerLog?: (kind: string, detail: string) => void;
   /** fork 替身注入（#54 A 类测试 seam）：缺省走真实 utilityProcess.fork（env 传参行为不变）；注入替身时不绑 Job Object（无 OS 进程可绑） */
   fork?: (options: CliHostClientOptions) => UtilityProcessLike;
@@ -78,7 +78,7 @@ export class CliHostClient implements CliAdapter {
   private expectingShutdown = false;
   private readonly pending = new Map<number | string, { resolve: (v: unknown) => void; reject: (e: Error) => void; summary: string }>();
   private readonly handlers = new Set<(event: AdapterEvent) => void>();
-  private readonly log: (kind: string, detail: string) => void;
+  private readonly log: (kind: LogKind, detail: string) => void;
   private readonly workerLog: (kind: string, detail: string) => void;
 
   constructor(options: CliHostClientOptions) {

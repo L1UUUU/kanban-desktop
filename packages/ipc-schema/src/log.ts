@@ -11,6 +11,50 @@ export const LOG_SOURCES = ["main", "worker", "renderer"] as const;
 export const logSourceSchema = z.enum(LOG_SOURCES);
 export type LogSource = (typeof LOG_SOURCES)[number];
 
+/**
+ * 诊断日志 kind 全集（issue #68）：cli-host `log(kind, detail)` 通道的固定枚举，生产者横跨 cli-host（三 CLI 适配器 / codex rpc / opencode server-host / run-once）与 desktop main（cli-host-client / shutdown 编排）。
+ * 单源于 ipc-schema 使两包生产者签名共用 LogKind 编译期收窄；level/scope 映射由 Main KIND_LOG_MAP: Record<LogKind,…> 穷尽（新增 kind 不改表从静默落 debug 变为编译错误）。
+ */
+export const LOG_KINDS = [
+  // warn / cli-host
+  "stderr",
+  "server-stderr",
+  "job-guard",
+  "worker-exit-pending",
+  // error / cli-host
+  "dead",
+  "server-dead",
+  "parse-error",
+  "init-error",
+  "command-failed",
+  "worker-exit",
+  // info / lifecycle
+  "shutdown",
+  "restore",
+  // debug / cli-host（默认静默诊断，映射表显式条目化）
+  "readTranscript",
+  "text-mismatch",
+  "stuck-finish",
+  "tool-reconcile",
+  "session-id-mismatch",
+  "unknown-control-request",
+  "perm-mode-shared",
+  "server-stop",
+  "registry-write",
+  "orphan-reject",
+  "orphan-unreachable",
+  "orphan-adopt",
+  "orphan-response",
+  "unknown-shape",
+  "server-start",
+  "port-retry",
+  "api-retry",
+  "sse-error",
+  "sse-parse",
+] as const;
+export const logKindSchema = z.enum(LOG_KINDS);
+export type LogKind = (typeof LOG_KINDS)[number];
+
 /** ctx 标量 Record：逐键收敛，仅保留 string/number/boolean，嵌套对象/数组/null/undefined 值剥键不弃条目（N14） */
 export const logCtxSchema = z.preprocess(
   (raw) => {
