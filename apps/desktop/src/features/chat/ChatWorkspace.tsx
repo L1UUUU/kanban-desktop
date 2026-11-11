@@ -1,4 +1,4 @@
-// 用途：聊天工作区 —— useChatController + useTerminals + useProjects 接线侧栏与中央区（transport 可注入：生产 window.api，测试 FakeAdapter 直连；活跃会话为 PTY 时中央渲染终端面板；#59/#60 起「＋」/卡片建会话只开草稿（结构化首条消息、PTY 首输入才创建）；#18 起中央区在聊天/看板视图间切换，本组件常挂 → 会话与 CLI 生命周期与视图切换无关）
+// 用途：聊天工作区 —— useChatController + useProjects 接线侧栏与中央区（transport 可注入：生产 window.api，测试 FakeAdapter 直连；活跃会话为 PTY 时中央渲染终端面板；#59/#60 起「＋」/卡片建会话只开草稿（结构化首条消息、PTY 首输入才创建）；#18 起中央区在聊天/看板视图间切换，本组件常挂 → 会话与 CLI 生命周期与视图切换无关；issue #71 S3 起终端草稿机制由会话控制器内聚，本组件不再挂 useTerminals）
 import { useEffect, type ReactNode } from "react";
 import type { CliKind, RequirementCardRow, TerminalCommand } from "@kanban/ipc-schema";
 import { Sidebar } from "../../components/Sidebar";
@@ -12,7 +12,6 @@ import { resolveSessionCwd, useChatController, type ChatController } from "./use
 import { KanbanWorkspace } from "../kanban/KanbanWorkspace";
 import type { KanbanController } from "../kanban/use-kanban";
 import { TerminalWorkspace } from "../terminal/TerminalWorkspace";
-import { useTerminals } from "../terminal/use-terminals";
 
 export function ChatWorkspace({
   transport,
@@ -52,7 +51,8 @@ export function ChatWorkspace({
   diff?: ReactNode;
 }) {
   const controller = useChatController(transport, demoCwd ?? null);
-  const terminals = useTerminals(transport, controller);
+  // PTY 终端控制面来自会话控制器（issue #71 S3：use-terminals 已消亡）
+  const terminals = controller.terminals;
   // 暴露 controller（App chatRef 写入/测试 holder）：effect 而非渲染期调用——废弃渲染不再触发回调（#67）
   useEffect(() => {
     onController?.(controller);

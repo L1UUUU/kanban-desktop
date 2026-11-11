@@ -4,7 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import type { TerminalEvent } from "@kanban/ipc-schema";
 
-/** 出站 io：写入/尺寸透传（由 use-terminals 接 transport） */
+/** 出站 io：写入/尺寸透传（由会话控制器 use-chat 接 transport，含草稿态门闸路由） */
 export interface TerminalIO {
   write(terminalId: string, data: string): void;
   resize(terminalId: string, cols: number, rows: number): void;

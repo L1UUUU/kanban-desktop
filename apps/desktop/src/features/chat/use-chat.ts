@@ -1,12 +1,15 @@
-// 用途：聊天控制器 hook —— transport → ChatStore 接线：启动恢复（session:list 断开会话登记）+ 无项目时 boot 演示草稿（#59：发出首条消息才创建会话，空会话永不进历史）+ 全部会话始终归并（切会话不中断，一致项 7），动作经 IPC 单通道发出
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { AdapterEvent, ApprovalDecision, ChatEvent, CliKind, IpcResult, PermMode, ProjectRow, SessionRow, SessionStatus } from "@kanban/ipc-schema";
+// 用途：会话控制器 hook（issue #71 S3 起内聚 PTY 草稿机制）—— transport → ChatStore 接线：启动恢复（session:list 断开会话登记）+ 无项目时 boot 演示草稿（#59：发出首条消息才创建会话，空会话永不进历史）+ 全部会话始终归并（切会话不中断，一致项 7），动作经 IPC 单通道发出；TerminalDraftController/TerminalManager/terminal:event 订阅隐藏在 seam 之后（use-terminals.ts 已消亡）
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import type { AdapterEvent, ApprovalDecision, ChatEvent, CliKind, IpcResult, PermMode, ProjectRow, SessionRow, SessionStatus, TerminalCommand } from "@kanban/ipc-schema";
 import type { ChatTransport } from "../../lib/kanban-api";
 import { createScopedLogger } from "../../lib/logger";
 import { ChatStore, DEFAULT_MODEL, type DraftSession, type SessionMeta, type SessionView } from "./chat-store";
+import { TerminalDraftController, type TerminalDraftSnapshot } from "../terminal/terminal-draft";
+import { TerminalManager } from "../terminal/TerminalManager";
 
-// 本文件日志出口（scope 固定 chat，经 lib/logger 唯一出口发出）
+// 本文件日志出口（scope 固定 chat，经 lib/logger 唯一出口发出；终端链路沿用 terminal scope 保留过滤语义）
 const log = createScopedLogger("chat");
+const termLog = createScopedLogger("terminal");
 
 /** #59 草稿打开可选项（cwd 必填：挂当前项目的会话传项目 canonicalPath；权限/模型缺省继承当前 composer 选定值） */
 export interface OpenDraftOptions {
@@ -48,6 +51,19 @@ export interface SessionRegistry {
   registerRestored(row: SessionRow): void;
 }
 
+/** PTY 终端控制面（issue #71 S3 由 use-terminals 吸收进会话控制器；S4 将随 openSessionDraft 收窄） */
+export interface TerminalController {
+  /** 打开 PTY 终端草稿（#60：全局仅一个，已有草稿被替换；无 command=交互 shell；requirementId 随首输入触发的创建落关联） */
+  openDraft(opts: { projectId: string | null; cwd: string; command?: TerminalCommand; requirementId?: string }): void;
+  /** 显式停止终端（PTY 进程终止唯一入口；切换/关标签不触发） */
+  kill(terminalId: string): void;
+  /** 丢弃当前草稿（切换会话/项目时静默丢弃；在途创建不取消，迟到成功仍登记会话） */
+  discardDraft(): void;
+  manager: TerminalManager;
+  /** 当前 PTY 草稿（null=无；中央区渲染终端草稿视图的依据） */
+  draft: TerminalDraftSnapshot | null;
+}
+
 export interface ChatController extends ChatControllerActions, SessionRegistry {
   sessions: SessionView[];
   activeSession: SessionView | null;
@@ -56,7 +72,9 @@ export interface ChatController extends ChatControllerActions, SessionRegistry {
   version: number;
   /** #59：当前结构化会话草稿（null=无；中央区草稿面板数据源） */
   draft: DraftSession | null;
-  /** store 直面（终端控制器等并列模块登记 PTY 会话/更新状态用） */
+  /** PTY 终端控制面（TerminalWorkspace 数据源与终端动作） */
+  terminals: TerminalController;
+  /** store 直面（过渡帧：issue #71 S4 摘除；现仅测试直驱与 ChatWorkspace 丢弃接线使用） */
   store: ChatStore;
 }
 
@@ -169,6 +187,57 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
   // useState 初始化器保证每 hook 实例一个 store（渲染期可安全读取）
   const [store] = useState(() => new ChatStore());
   const snap = useSyncExternalStore(store.subscribe, store.getSnapshot);
+  // PTY 草稿机制（issue #71 S3 吸收自 use-terminals）：草稿控制器与多路复用管理器为本 hook 实现细节
+  // shortcut: drafts/manager 闭包直接捕获首帧 transport 与 store（App 经 useMemo 同步建桥、测试首帧给定，身份稳定；
+  // 复查触发：若未来出现「挂载时 transport=null、之后才可用」的路径，需改回 ref/effect 同步）
+  const [drafts] = useState(
+    () =>
+      new TerminalDraftController({
+        invoke: (req) =>
+          transport?.invoke(req) ??
+          Promise.resolve({ ok: false, error: { code: "E_INTERNAL", message: "transport 不可用" } } satisfies IpcResult),
+        onCreated: (ev) => {
+          // #20：卡片建终端的自动关联由 Main 原子完成（session_linked 推送回流看板 store）；拒绝仅报告不阻断终端
+          if (ev.ok.linked === false)
+            termLog.error("终端创建后自动关联被拒绝", {
+              sessionId: ev.terminalId,
+              ...(ev.ok.reason ? { reason: ev.ok.reason } : {}),
+            });
+          store.registerSession({
+            sessionId: ev.terminalId,
+            cli: "pty",
+            title: ev.ok.title ?? "终端",
+            permMode: "auto",
+            model: DEFAULT_MODEL,
+            projectId: ev.opts.projectId,
+            cwd: ev.opts.cwd,
+            dirIdentity: ev.ok.dirIdentity ?? "none",
+            worktreeName: ev.ok.worktreeName ?? null,
+          });
+          // 创建在途期间到达的输入补写（首输入已由 Main 在启动成功后重放，此处保持顺序补剩余）
+          if (ev.remainder) void transport?.invoke({ channel: "terminal:write", terminalId: ev.terminalId, data: ev.remainder });
+        },
+        onFailed: (ev) => {
+          termLog.error("终端创建失败", { terminalId: ev.terminalId, code: ev.code, message: ev.message });
+        },
+      }),
+  );
+  const ptyDraft = useSyncExternalStore(drafts.subscribe, drafts.getSnapshot);
+  const [manager] = useState(
+    () =>
+      new TerminalManager({
+        // #60：草稿态输入不直写通道（首输入触发创建、失败保留缓冲）；非草稿按原路径直写
+        write: (terminalId, data) => {
+          if (drafts.handleInput(terminalId, data)) return;
+          void transport?.invoke({ channel: "terminal:write", terminalId, data });
+        },
+        resize: (terminalId, cols, rows) => {
+          // 草稿无进程可 resize：仅记录尺寸，随创建请求携带
+          if (drafts.recordSize(terminalId, cols, rows)) return;
+          void transport?.invoke({ channel: "terminal:resize", terminalId, cols, rows });
+        },
+      }),
+  );
   // 启动自举一次性标记（仅 effect 内读写：StrictMode 双挂载下只跑一次，订阅仍每次重建）
   const bootRef = useRef(false);
 
@@ -185,6 +254,50 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
     }
     return off;
   }, [transport, store, demoCwd]);
+
+  // terminal:event 订阅：data/横幅进 manager；started/exit 同步会话状态徽标（store 内部自用直调）
+  useEffect(() => {
+    if (!transport) return;
+    return transport.onTerminalEvent((event) => {
+      manager.handleEvent(event);
+      if (event.type === "started") store.updateStatus(event.terminalId, "idle");
+      else if (event.type === "exit") store.updateStatus(event.terminalId, "disconnected");
+    });
+  }, [transport, manager, store]);
+
+  // PTY 终端控制面（issue #71 S3）：openDraft/discardDraft/kill 引用稳定——ChatWorkspace 切项目 effect 依赖
+  // discardDraft，draft 快照变化不得重建它（terminals 聚合对象随快照重建，方法引用不变）
+  const openPtyDraftInternal = useCallback(
+    (opts: { projectId: string | null; cwd: string; command?: TerminalCommand; requirementId?: string }) => {
+      // 全局仅一个草稿：替换时释放旧草稿的 xterm 实例（在途创建不取消，迟到成功仍登记）
+      const prev = drafts.getSnapshot();
+      if (prev) manager.dispose(prev.terminalId);
+      drafts.open(opts);
+    },
+    [manager, drafts],
+  );
+  const discardPtyDraft = useCallback(() => {
+    const prev = drafts.getSnapshot();
+    if (!prev) return;
+    manager.dispose(prev.terminalId);
+    drafts.discard();
+  }, [manager, drafts]);
+  const killTerminal = useCallback(
+    (terminalId: string) => {
+      void transport?.invoke({ channel: "terminal:kill", terminalId });
+    },
+    [transport],
+  );
+  const terminals = useMemo<TerminalController>(
+    () => ({
+      manager,
+      draft: ptyDraft,
+      openDraft: openPtyDraftInternal,
+      discardDraft: discardPtyDraft,
+      kill: killTerminal,
+    }),
+    [manager, ptyDraft, openPtyDraftInternal, discardPtyDraft, killTerminal],
+  );
 
   const actions = useMemo<ChatControllerActions>(() => {
     const activeId = (): string | null => store.getSnapshot().activeId;
@@ -295,6 +408,7 @@ export function useChatController(transport: ChatTransport | null, demoCwd: stri
     activeId: snap.activeId,
     version: snap.version,
     draft: snap.draft,
+    terminals,
     store,
   };
 }
