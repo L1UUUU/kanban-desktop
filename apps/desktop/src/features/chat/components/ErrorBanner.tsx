@@ -1,6 +1,7 @@
 // 用途：会话内错误卡 ErrorBanner（#46 / spec I 一致项 2、原型 d2 五卡信息结构）—— 按 classify 结果渲染四类 + 未知兜底：
 // 卡式布局（图标+标题头 / 原因区含原始信息 / 指引命令块（认证）/ 动作按钮区右对齐）；动作仅编排不执行破坏性操作（恢复=ResumeBanner 同一动作 D4，重试/开终端/复制）
-import { authLoginCommand, classifyError, CLI_LABELS } from "../error-classify";
+import { authLoginCommand, classifyError } from "../error-classify";
+import { sessionCliLabel } from "../../../lib/cli-catalog";
 import { copyText } from "../../../lib/copy-text";
 
 /** 次要按钮（知道了/复制类）：中性描边 */
@@ -36,7 +37,7 @@ export interface ErrorBannerProps {
 export function ErrorBanner(props: ErrorBannerProps) {
   const { code, message, cli, title, configPath = null, canRetry = false, canOpenPtyTerminal = false } = props;
   const kind = classifyError(code);
-  const label = CLI_LABELS[cli] ?? cli;
+  const label = sessionCliLabel(cli);
 
   // ── 卡头（图标 + 标题；unknown 用中性配色，其余 destructive）──
   const head =

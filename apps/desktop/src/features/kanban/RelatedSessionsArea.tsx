@@ -1,7 +1,7 @@
 // 用途：详情面板「关联会话」区（#20，原型一致项 4 关联区）—— 关联会话列表（CLI 色点 + 活动状态徽标 + 跳转 + 解除，US18 分离：活动状态只在会话行显示）、「＋新建会话」四 CLI 菜单（PTY 项标注「无 skill 信号」；session:create/terminal:create+requirementId 原子关联）、关联已有会话选择器（仅当前项目未关联会话，含 PTY）+ link 拒绝原因直达呈现；挂点 data-testid="detail-sessions" 保持稳定（#19 约定），无动作上下文时保持占位形态
 import { useState } from "react";
 import type { CliKind, RequirementCardRow } from "@kanban/ipc-schema";
-import { CLI_DOT_CLS } from "../../components/Sidebar";
+import { CLI_DOT_CLS, NEW_MENU_CLIS } from "../../lib/cli-catalog";
 import type { SessionView } from "../chat/chat-store";
 import { StatusBadge } from "../chat/components/StatusBadge";
 
@@ -27,13 +27,6 @@ export interface RelatedSessionsAreaProps {
   /** 关联区动作（缺省时保持 #19 占位形态——挂点在无动作上下文时不半渲染） */
   actions?: RelatedSessionActions;
 }
-
-// 「＋新建会话」菜单：三 CLI 结构化会话 + PTY 终端（原型一致项 4：PTY 项标注「无 skill 信号」）
-const NEW_SESSION_CLIS: Array<{ cli: CliKind; label: string }> = [
-  { cli: "codex", label: "Codex" },
-  { cli: "claude", label: "Claude" },
-  { cli: "opencode", label: "OpenCode" },
-];
 
 /** 会话行需求徽标展示名：CLI 类型后缀区分 PTY 终端 */
 function optionLabel(s: SessionView): string {
@@ -125,7 +118,7 @@ export function RelatedSessionsArea({ card, sessions = [], sessionToReq = {}, ac
         </button>
         {menuOpen ? (
           <div className="absolute left-0 top-full z-10 mt-1 min-w-[190px] rounded-lg border border-border bg-muted p-1 shadow-[0_8px_24px_rgba(0,0,0,.5)]">
-            {NEW_SESSION_CLIS.map(({ cli, label }) => (
+            {NEW_MENU_CLIS.map(({ cli, label }) => (
               <button
                 key={cli}
                 type="button"

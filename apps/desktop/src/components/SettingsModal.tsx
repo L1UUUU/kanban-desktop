@@ -2,8 +2,7 @@
 import { useEffect, useState } from "react";
 import { AUTO_ARCHIVE_DAYS_BOUNDS, type AutoArchiveConfig, type AutoArchiveScanSummary, type ProjectRow, type SessionRow } from "@kanban/ipc-schema";
 import { copyText } from "../lib/copy-text";
-import { CLI_LABELS } from "../features/chat/error-classify";
-import { CLI_DOT_CLS } from "./Sidebar";
+import { CLI_DOT_CLS, sessionCliLabel } from "../lib/cli-catalog";
 import { DeleteSessionDialog } from "./DeleteSessionDialog";
 
 /** 「打开日志文件」：资源管理器中定位当前启动主日志文件（Main 侧 shell.showItemInFolder 主文件）；jsdom 无桥可选链降级 */
@@ -331,7 +330,7 @@ export function SettingsModal({
                         {row.title ?? "历史会话"}
                       </span>
                       <span className="min-w-0 flex-1 truncate text-[11px] text-fg-faint">
-                        {CLI_LABELS[row.cli] ?? row.cli} · 最后活跃 {fmtTime(row.lastActiveAt)} · 归档于 {fmtTime(row.archivedAt)}
+                        {sessionCliLabel(row.cli)} · 最后活跃 {fmtTime(row.lastActiveAt)} · 归档于 {fmtTime(row.archivedAt)}
                       </span>
                       <span className="flex shrink-0 gap-1.5">
                         <button

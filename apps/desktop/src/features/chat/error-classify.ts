@@ -21,15 +21,6 @@ export function classifyError(code: string): ErrorKind {
   return KIND_BY_CODE[code] ?? "unknown";
 }
 
-/** CLI 显示名（错误卡标题「找不到 CLI 程序（Claude）」、设置面板归档行 meta 等共用；含 pty 终端） */
-export const CLI_LABELS: Record<string, string> = {
-  codex: "Codex",
-  claude: "Claude",
-  opencode: "OpenCode",
-  fake: "Fake",
-  pty: "PTY",
-};
-
 /**
  * 认证失效卡按 CLI 给出的具体登录指引命令（US 10；文案依据 docs/acceptance/stage4/auth-samples.md 与各 CLI 实际命令）。
  * claude 为两步（启动 CLI 后在会话内 /login）；fake/未知 CLI 返回空数组（卡面不渲染命令块）。

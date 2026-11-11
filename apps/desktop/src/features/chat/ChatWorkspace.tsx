@@ -4,6 +4,7 @@ import type { CliKind, RequirementCardRow, TerminalCommand } from "@kanban/ipc-s
 import { Sidebar } from "../../components/Sidebar";
 import type { ProjectsController } from "../projects/use-projects";
 import type { ChatTransport } from "../../lib/kanban-api";
+import type { AppView } from "../../lib/app-view";
 import { ChatPane } from "./ChatPane";
 import { DraftPane } from "./components/DraftPane";
 import { detectMainRepoConflict } from "./conflict";
@@ -38,7 +39,7 @@ export function ChatWorkspace({
   /** #46：配置文件绝对路径（AppInfo 注入；spawn 失败卡「复制配置路径」数据源） */
   configPath?: string | null;
   /** 当前视图（#18：chat=聊天区，kanban=看板；#34 增 memory=记忆视图；#43 增 diff=Diff 视图；组件常挂，切换不卸载会话/终端控制器） */
-  view?: "chat" | "kanban" | "memory" | "diff";
+  view?: AppView;
   /** 看板控制器（App 层创建常驻；view=kanban 时中央渲染看板） */
   kanban?: KanbanController | null;
   /** 卡片点击挂点（#19 详情滑出面板；本票不接） */
@@ -52,7 +53,10 @@ export function ChatWorkspace({
 }) {
   const controller = useChatController(transport, demoCwd ?? null);
   const terminals = useTerminals(transport, controller);
-  if (onController) onController(controller);
+  // 暴露 controller（App chatRef 写入/测试 holder）：effect 而非渲染期调用——废弃渲染不再触发回调（#67）
+  useEffect(() => {
+    onController?.(controller);
+  }, [onController, controller]);
 
   // #59/#60：切项目丢弃两类草稿——聊天与 PTY（不弹确认、输入不保留）；单一 effect 统一覆盖所有切项目路径
   // （含 register() 成功后 Main 自动切项目——不经侧栏点击，命令式 discard 会漏，spec #57 Story 5）；

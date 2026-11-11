@@ -1,8 +1,9 @@
 // 用途：候选编辑弹层（#33，原型一致项 7 / 演示 ③）—— claim textarea + 适用范围 input 可编辑、溯源区只读（来源会话/证据摘录/批次/编号）；两种模式：pending「编辑后接受」（保存=reviewCandidate edit，标注已编辑）与终态知识「去编辑」（保存=editAccepted）
 import { useState } from "react";
 import type { MemoryCandidateRow } from "@kanban/ipc-schema";
+import { sessionCliLabel } from "../../lib/cli-catalog";
 import type { MemorySessionRef } from "./MemoryArea";
-import { sessionCliLabel, shortId } from "./MemoryArea";
+import { shortId } from "./MemoryArea";
 
 export interface CandidateEditDialogProps {
   /** 待编辑候选（pending 或 accepted/edited 知识） */

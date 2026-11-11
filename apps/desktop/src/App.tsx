@@ -16,6 +16,7 @@ import { useWorkspaceDiff } from "./features/diff/use-workspace-diff";
 import { useProjects } from "./features/projects/use-projects";
 import { ResidueBanner } from "./features/residue/ResidueBanner";
 import { createWindowTransport, type ChatTransport } from "./lib/kanban-api";
+import type { AppView } from "./lib/app-view";
 
 export function App() {
   const [info, setInfo] = useState<AppInfo | null>(null);
@@ -105,10 +106,10 @@ export function AppShell({
   diffTransport?: DiffTransport | null;
 }) {
   // 视图状态（#18 spec D 节 + #34 记忆视图 + #43 Diff 视图）：chat|kanban|memory|diff，四视图共享侧栏
-  const [view, setView] = useState<"chat" | "kanban" | "memory" | "diff">("chat");
+  const [view, setView] = useState<AppView>("chat");
   const projects = useProjects(transport);
   const kanban = useKanban(transport);
-  // #63 chat controller 常驻引用（ChatWorkspace 每渲染上抛）：设置面板取消归档成功 → registerRestored 行回默认列表
+  // #63 chat controller 常驻引用（ChatWorkspace 经 effect 上抛）：设置面板取消归档成功 → registerRestored 行回默认列表
   const chatRef = useRef<ChatController | null>(null);
   // #34：memory transport 缺省走 preload 桥接（window.api 缺失时为 null → 视图降级）；useState 初始化器保证实例稳定
   const [memoryTransport_] = useState(() => memoryTransport ?? createWindowMemoryTransport());

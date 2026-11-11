@@ -1,7 +1,7 @@
 // 用途：聊天会话视图 store —— ChatEvent 按合并键归并成每会话 items（不变量 3/4 的 renderer 侧），useSyncExternalStore 兼容（快照引用稳定）；#59 起承载结构化会话草稿态
 // 行数评估（~547 行，超 500 行阈值）：主体是 applyEvent 的 ChatEvent 归并 switch（各 case 独立低交织），与会话登记/CRUD、#59 草稿态共享同一快照通知骨架（changed + 引用稳定 snapshot + 订阅），拆开只复制骨架不减耦合，本次不拆；触发条件：再承载一类独立状态域（如草稿态膨胀出独立面板状态）时按域拆分（草稿独立 store）。
 import type { ApprovalSuggestion, ChatEvent, CliKind, PermMode, SessionRow, SessionStatus } from "@kanban/ipc-schema";
-import { CLI_LABELS } from "./error-classify";
+import { CLI_LABELS } from "../../lib/cli-catalog";
 
 /** 「默认模型」UI 占位串（composer 候选/草稿缺省/恢复与占位会话模型统一数据源；占位值不下发，后端按各 CLI 探测链自选） */
 export const DEFAULT_MODEL = "默认模型";
@@ -251,7 +251,7 @@ export class ChatStore {
     const replaced = this.draft !== null;
     this.draft = {
       cli: meta.cli,
-      title: meta.title ?? `新会话 · ${CLI_LABELS[meta.cli] ?? meta.cli}`,
+      title: meta.title ?? `新会话 · ${CLI_LABELS[meta.cli]}`,
       cwd: meta.cwd,
       projectId: meta.projectId ?? null,
       permMode: meta.permMode ?? "auto",

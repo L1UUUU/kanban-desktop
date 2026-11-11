@@ -3,24 +3,9 @@ import { useState, type ReactNode } from "react";
 import type { AppInfo, CliKind, ProjectRow } from "@kanban/ipc-schema";
 import type { SessionView } from "../features/chat/chat-store";
 import { StatusBadge } from "../features/chat/components/StatusBadge";
+import { CLI_DOT_CLS, NEW_MENU_CLIS } from "../lib/cli-catalog";
 import { DeleteSessionDialog } from "./DeleteSessionDialog";
 import { DirBadge } from "./DirBadge";
-
-// CLI 色点（原型四色；fake 演示用 accent2 蓝；pty 终端用 pty 色）——详情面板关联会话行共用（#20 导出）
-export const CLI_DOT_CLS: Record<string, string> = {
-  fake: "bg-accent2",
-  codex: "bg-codex",
-  claude: "bg-claude",
-  opencode: "bg-opencode",
-  pty: "bg-pty",
-};
-
-// 「＋」菜单：三 CLI 结构化会话 + PTY 终端（原型一致项 2）
-const NEW_MENU_CLIS: Array<{ cli: CliKind; label: string }> = [
-  { cli: "codex", label: "Codex" },
-  { cli: "claude", label: "Claude" },
-  { cli: "opencode", label: "OpenCode" },
-];
 
 /** 会话行需求徽标（原型一致项 6，.req-badge）：REQ-id 文本 + 点击跳看板；span 避免 button 嵌套。
  *  可收缩截断（#65）：与状态徽标并存的 130px 行预算下 flex-none 徽标会把标题挤到 0 宽 */

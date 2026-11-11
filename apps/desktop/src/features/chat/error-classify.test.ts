@@ -1,6 +1,6 @@
 // 用途：classify 三源样本矩阵密封测试（#46 验收 1）—— ① session_error 六枚举 ② renderer 合成 E_SESSION_EXIT ③ IPC 错误码，× 五类 + unknown 兜底全覆盖
 import { describe, expect, it } from "vitest";
-import { authLoginCommand, classifyError, CLI_LABELS } from "./error-classify";
+import { authLoginCommand, classifyError } from "./error-classify";
 
 describe("classifyError 三源样本矩阵", () => {
   // 源 ①：ChatEvent session_error 六成员闭枚举（#41 收敛）
@@ -55,14 +55,5 @@ describe("认证指引命令（按 CLI）", () => {
   it("fake/未知 CLI 无指引命令（空数组，卡面不渲染命令块）", () => {
     expect(authLoginCommand("fake")).toEqual([]);
     expect(authLoginCommand("nonsense")).toEqual([]);
-  });
-});
-
-describe("CLI 显示名（卡面标题用）", () => {
-  it("四种 CLI 均有显示名", () => {
-    expect(CLI_LABELS.codex).toBe("Codex");
-    expect(CLI_LABELS.claude).toBe("Claude");
-    expect(CLI_LABELS.opencode).toBe("OpenCode");
-    expect(CLI_LABELS.fake).toBe("Fake");
   });
 });

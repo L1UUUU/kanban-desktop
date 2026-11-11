@@ -1,6 +1,7 @@
 // 用途：详情面板「需求经验」区（#33，spec #27 I 节原型一致项 3–7 / 原型演示 ②③）—— 提取按钮（零 structured 关联会话禁用 + tooltip；进行中替换为四步进度 + 段 i/n + 取消）/ 批次卡（元信息 + 缺失警示 + failed 重试 + cancelled 灰显）/ proposed 提示条与对比弹层 / 候选列表（跨批次待审累计 + 已处置按批次折叠 + 冲突提示 + 三动作 + 去编辑）/ 候选编辑弹层；数据与动作经 use-requirement-memory controller 注入
 import { useState } from "react";
 import type { MemoryBatchRow, MemoryCandidateRow, MemoryResult, MemorySummaryChoice, RequirementCardRow } from "@kanban/ipc-schema";
+import { sessionCliLabel } from "../../lib/cli-catalog";
 import { CandidateEditDialog } from "./CandidateEditDialog";
 import { SummaryCompareDialog } from "./SummaryCompareDialog";
 import type { RequirementMemoryController } from "./use-requirement-memory";
@@ -21,24 +22,9 @@ export interface MemoryAreaProps {
   sessions?: MemorySessionRef[];
 }
 
-// 会话 cli 显示名（SessionView 侧词表 claude/codex/opencode/fake/pty + tracker 侧 claude-code）
-const SESSION_CLI_LABELS: Record<string, string> = {
-  claude: "Claude",
-  "claude-code": "Claude",
-  codex: "Codex",
-  opencode: "OpenCode",
-  fake: "Fake",
-  pty: "PTY",
-};
-
 /** 会话/批次标识短显示（uuid 等长 id 截断展示，完整值放 title） */
 export function shortId(id: string): string {
   return id.length > 12 ? `${id.slice(0, 8)}…` : id;
-}
-
-/** 会话 cli → 显示名（未知原样） */
-export function sessionCliLabel(cli: string): string {
-  return SESSION_CLI_LABELS[cli] ?? cli;
 }
 
 /** ISO 时间 → MM-DD HH:mm（不可解析原样返回；批次状态时间用） */

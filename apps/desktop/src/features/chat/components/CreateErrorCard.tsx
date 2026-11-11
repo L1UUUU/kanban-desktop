@@ -1,7 +1,8 @@
 // 用途：会话创建失败卡（#46 / spec #40 F1 + 原型 d2 卡 3 形态；#59 起渲染在草稿面板 composer 上方）——
 // spawn 失败（E_SPAWN_NOT_FOUND）显示配置路径指引；其余保留 code/message 原文 +「复制错误详情」；动作仅编排不执行破坏性操作
 import type { CreateFailure } from "../chat-store";
-import { classifyError, CLI_LABELS } from "../error-classify";
+import { classifyError } from "../error-classify";
+import { CLI_LABELS } from "../../../lib/cli-catalog";
 import { copyText } from "../../../lib/copy-text";
 
 /** 次要按钮（复制/知道了）：中性描边（窄容器内小号） */
@@ -28,7 +29,7 @@ export function CreateErrorCard({
 }) {
   const kind = classifyError(failure.code);
   const spawn = kind === "spawn_not_found";
-  const label = CLI_LABELS[failure.cli] ?? failure.cli;
+  const label = CLI_LABELS[failure.cli];
 
   return (
     <div
