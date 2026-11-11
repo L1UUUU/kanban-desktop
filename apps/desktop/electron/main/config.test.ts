@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { defaultConfig, detectCliExe, loadConfig, resolveEffectiveLevel, saveConfig } from "./config";
+import { defaultConfig, loadConfig, resolveEffectiveLevel, saveConfig } from "./config";
 
 const tempDirs: string[] = [];
 
@@ -110,12 +110,6 @@ describe("autoArchive 配置（#61 spec #57：开关默认关 + 天数默认 30�
     expect(loadConfig(path).autoArchive).toEqual({ enabled: true, days: 30 });
     writeFileSync(path, JSON.stringify({ autoArchive: "nope" }), "utf8");
     expect(loadConfig(path).autoArchive).toEqual({ enabled: false, days: 30 });
-  });
-});
-
-describe("detectCliExe（探测占位）", () => {
-  it("返回三 CLI null 占位形状（真实探测由后续 Adapter 工单接入，spec G）", () => {
-    expect(detectCliExe()).toEqual({ codex: null, claude: null, opencode: null });
   });
 });
 
