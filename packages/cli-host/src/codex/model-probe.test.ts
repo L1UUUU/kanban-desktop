@@ -54,7 +54,7 @@ describe("latestRolloutModel", () => {
 describe("createDefaultModelResolver 候选链（mock 试探）", () => {
   it("显式模型试探成功 → 直接采用；缓存后免二次试探", async () => {
     const { client, state } = makeMockClient({ okModels: ["m-good"] });
-    const resolve = createDefaultModelResolver({});
+    const resolve = createDefaultModelResolver({ preferredModels: [] });
     expect(await resolve("m-good", client)).toBe("m-good");
     expect(await resolve(undefined, client)).toBe("m-good"); // 内存缓存命中
     expect(state.probes.length).toBe(1); // 仅试探一次
@@ -62,7 +62,7 @@ describe("createDefaultModelResolver 候选链（mock 试探）", () => {
 
   it("显式模型 400 失败 → 回退到可用候选（不再用失败模型）", async () => {
     const { client, state } = makeMockClient({ okModels: ["m-list-a"], listModels: ["m-list-a"] });
-    const resolve = createDefaultModelResolver({ rolloutModel: null });
+    const resolve = createDefaultModelResolver({ preferredModels: [], rolloutModel: null });
     const model = await resolve("m-broken", client);
     expect(model).toBe("m-list-a");
     expect(state.probes[0]).toBe("m-broken"); // 首选显式
@@ -71,7 +71,7 @@ describe("createDefaultModelResolver 候选链（mock 试探）", () => {
 
   it("全部候选失败 → 明确中文报错", async () => {
     const { client } = makeMockClient({ okModels: [], listModels: ["m1"] });
-    const resolve = createDefaultModelResolver({ rolloutModel: null });
+    const resolve = createDefaultModelResolver({ preferredModels: [], rolloutModel: null });
     await expect(resolve("m-broken", client)).rejects.toThrow(/未探测到可用的 Codex 模型/);
   });
 });
