@@ -1,6 +1,6 @@
 // 用途：聊天工作区 —— useChatController + useTerminals + useProjects 接线侧栏与中央区（transport 可注入：生产 window.api，测试 FakeAdapter 直连；活跃会话为 PTY 时中央渲染终端面板；主仓库并行冲突判据驱动提示条；#18 起中央区在聊天/看板视图间切换，本组件常挂 → 会话与 CLI 生命周期与视图切换无关）
 import type { ReactNode } from "react";
-import type { CliKind, RequirementCardRow } from "@kanban/ipc-schema";
+import type { CliKind, RequirementCardRow, TerminalCommand } from "@kanban/ipc-schema";
 import { Sidebar } from "../../components/Sidebar";
 import type { ProjectsController } from "../projects/use-projects";
 import type { ChatTransport } from "../../lib/kanban-api";
@@ -72,10 +72,18 @@ export function ChatWorkspace({
       return;
     }
     if (cli === "pty") {
-      void terminals.create({ projectId, cwd, requirementId: card.id });
+      // #60：卡片建终端走草稿（requirementId 随首输入触发的创建落关联）
+      openPtyDraft({ projectId, cwd, requirementId: card.id });
       return;
     }
+    terminals.discardDraft(); // 切换焦点到新会话：草稿静默丢弃
     void controller.createSession(cli, { projectId, cwd, requirementId: card.id });
+  };
+
+  // #60：打开 PTY 终端草稿并切回聊天视图（草稿须可见可交互——首输入才能触发创建；从看板/记忆等视图发起时带回）
+  const openPtyDraft = (opts: { projectId: string | null; cwd: string; command?: TerminalCommand; requirementId?: string }): void => {
+    onSetView?.("chat");
+    terminals.openDraft(opts);
   };
 
   return (
@@ -85,8 +93,15 @@ export function ChatWorkspace({
         currentProjectId={projects.currentProjectId}
         sessions={controller.sessions}
         activeId={controller.activeId}
-        onSelect={controller.switchTo}
-        onSelectProject={(id) => void projects.switchTo(id)}
+        onSelect={(sessionId) => {
+          // #60：切换会话 = 离开草稿（未发送的草稿静默丢弃，不弹确认）
+          terminals.discardDraft();
+          controller.switchTo(sessionId);
+        }}
+        onSelectProject={(id) => {
+          terminals.discardDraft(); // #60：切换项目同样丢弃草稿
+          void projects.switchTo(id);
+        }}
         onRegisterProject={() => void projects.register()}
         onCreateSession={(projectId, cli) => {
           // cwd 用项目 canonicalPath；项目查不到不回退任何路径——真实 CLI 拒绝新建并提示，Fake 回落注入的演示 cwd
@@ -95,6 +110,7 @@ export function ChatWorkspace({
             projects.setNotice("新建失败：项目不存在或已失效，请刷新项目列表后重试");
             return;
           }
+          terminals.discardDraft(); // #60：切换焦点到新会话：草稿静默丢弃
           void controller.createSession(cli, { projectId, cwd });
         }}
         onCreatePtySession={(projectId) => {
@@ -103,7 +119,8 @@ export function ChatWorkspace({
             projects.setNotice("新建失败：项目不存在或已失效，请刷新项目列表后重试");
             return;
           }
-          void terminals.create({ projectId, cwd });
+          // #60：点「＋」只开终端草稿——首输入才创建（不落库、不进侧栏、不起进程）
+          openPtyDraft({ projectId, cwd });
         }}
         onKillTerminal={terminals.kill}
         sessionToReq={kanban?.sessionToReq ?? {}}
@@ -163,6 +180,9 @@ export function ChatWorkspace({
       ) : view === "diff" ? (
         // #43：Diff 视图中央区（节点由 App 层注入；读取由视图挂载触发——进入视图自动读取一次）
         diff
+      ) : terminals.draft ? (
+        // #60：PTY 终端草稿（点「＋」后、首输入前：提示 + 可交互面板，优先于会话视图渲染）
+        <TerminalWorkspace session={null} draft={terminals.draft} manager={terminals.manager} onKill={terminals.kill} />
       ) : active && active.cli === "pty" ? (
         <TerminalWorkspace session={active} manager={terminals.manager} onKill={terminals.kill} />
       ) : (
@@ -180,11 +200,11 @@ export function ChatWorkspace({
             onResume: (sessionId) => void controller.resumeSession(sessionId),
             onDismissSkillConflict: controller.dismissSkillConflict,
             onDismissError: (sessionId) => controller.store.clearError(sessionId),
-            // 认证失效卡「打开 PTY 终端」：在会话 cwd 新建终端（登录指引命令在终端内运行）
+            // 认证失效卡「打开 PTY 终端」：在会话 cwd 打开终端草稿（登录指引命令在终端内运行；#60 首输入才创建）
             onOpenPtyTerminal: (sessionId) => {
               const s = controller.store.getSession(sessionId);
               if (!s?.cwd) return;
-              void terminals.create({ projectId: s.projectId, cwd: s.cwd });
+              openPtyDraft({ projectId: s.projectId, cwd: s.cwd });
             },
           }}
         />

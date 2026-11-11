@@ -101,9 +101,12 @@ test("会话内五类错误卡呈现与动作流转（四类 + 未知兜底，fa
     await win.getByRole("button", { name: "重试", exact: true }).click();
     await expect(win.getByText("认证演示", { exact: true }).nth(1)).toBeVisible({ timeout: 15_000 });
     await expect(card).toBeVisible({ timeout: 15_000 });
-    // 「打开 PTY 终端」= 在会话 cwd 新建终端（登录指引命令在终端内运行）→ 侧栏出现 PTY 终端行并切到终端视图
+    // 「打开 PTY 终端」= 在会话 cwd 打开终端草稿（#60：首输入才创建）→ 键入后侧栏出现 PTY 终端行并切到终端视图
     await win.getByRole("button", { name: "打开 PTY 终端" }).click();
-    await expect(win.getByText(/终端 · /).first()).toBeVisible({ timeout: 15_000 });
+    await expect(win.locator(".xterm").first()).toBeVisible({ timeout: 15_000 });
+    await win.locator(".xterm").first().click();
+    await win.keyboard.type("x");
+    await expect(win.getByText(/^终端 · /).first()).toBeVisible({ timeout: 15_000 });
     // 切回结构化会话继续驱动后续卡
     await win.getByText("新会话 · Claude").first().click();
 

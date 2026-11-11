@@ -66,6 +66,16 @@ export class SessionStore {
   touch(id: string, at: string): void {
     this.db.prepare("UPDATE sessions SET last_active_at = ? WHERE id = ?").run(at, id);
   }
+
+  /** 标题更新（#60：PTY 草稿先落库占位、spawn 成功后回写「终端 · shell」标题） */
+  updateTitle(id: string, title: string): void {
+    this.db.prepare("UPDATE sessions SET title = ? WHERE id = ?").run(title, id);
+  }
+
+  /** 删除会话行（#60：PTY spawn 失败回删占位行，不留孤儿记录） */
+  delete(id: string): void {
+    this.db.prepare("DELETE FROM sessions WHERE id = ?").run(id);
+  }
 }
 
 /** snake_case 行 → camelCase 记录 */
