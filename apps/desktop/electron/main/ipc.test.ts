@@ -14,6 +14,7 @@ import { openMemoryService } from "./memory-service";
 import type { LogFn, LogLevel } from "./logger";
 import type { PtyHost } from "./pty-host";
 import { ProjectStore } from "./project-store";
+import { createAdapterSessionProcesses, createSessionLifecycle } from "./session-lifecycle";
 import { SessionStore } from "./session-store";
 
 let tmpRoot = "";
@@ -61,15 +62,17 @@ function makeRouter() {
   return { clock, adapter, deps, handle: (raw: unknown) => handleIpc(deps, raw) };
 }
 
-/** 完整 deps：内存 store + 可注入的目录选择与当前项目存取（#17 起挂 TrackerEngine：kanban 通道落事件流） */
+/** 完整 deps：内存 store + 可注入的目录选择和当前项目存取（#17 起挂 TrackerEngine：kanban 通道落事件流；#70 起挂 lifecycle：归档/删除编排唯一写者） */
 function makeDeps(adapter: CliAdapter, pick: () => Promise<string | null> = async () => null, ptyHost = makePtyHost()): IpcDeps {
   const db = openDatabase(":memory:");
   let currentProjectId: string | null = null;
+  const sessions = new SessionStore(db);
   return {
     adapter,
     engine: new TrackerEngine(db),
     projects: new ProjectStore(db),
-    sessions: new SessionStore(db),
+    sessions,
+    lifecycle: createSessionLifecycle({ sessions, procs: createAdapterSessionProcesses(adapter, ptyHost.host) }),
     pickDirectory: pick,
     getCurrentProjectId: () => currentProjectId,
     setCurrentProjectId: (id) => {
@@ -443,11 +446,14 @@ describe("terminal 通道（#12：terminalApi × terminalId 参数化）", () =>
     const clock = new VirtualClock();
     const db = openDatabase(":memory:");
     const ptyState = makePtyHost();
+    const adapter = new FakeAdapter({ clock });
+    const sessions = new SessionStore(db);
     const deps: IpcDeps = {
-      adapter: new FakeAdapter({ clock }),
+      adapter,
       engine: new TrackerEngine(db),
       projects: new ProjectStore(db),
-      sessions: new SessionStore(db),
+      sessions,
+      lifecycle: createSessionLifecycle({ sessions, procs: createAdapterSessionProcesses(adapter, ptyState.host) }),
       pickDirectory: async () => projDir,
       getCurrentProjectId: () => null,
       setCurrentProjectId: () => undefined,
@@ -599,11 +605,14 @@ describe("kanban 通道（#17 spec #15 C 节：全量经 TrackerEngine.process �
     const db = openDatabase(":memory:");
     const engine = new TrackerEngine(db);
     const changes: TrackerChange[] = [];
+    const adapter = new FakeAdapter({ clock });
+    const sessions = new SessionStore(db);
     const deps: IpcDeps = {
-      adapter: new FakeAdapter({ clock }),
+      adapter,
       engine,
       projects: new ProjectStore(db),
-      sessions: new SessionStore(db),
+      sessions,
+      lifecycle: createSessionLifecycle({ sessions, procs: createAdapterSessionProcesses(adapter, makePtyHost().host) }),
       emitTrackerChange: (c) => changes.push(c),
       pickDirectory: async () => picked,
       getCurrentProjectId: () => null,
@@ -822,11 +831,14 @@ describe("kanban 通道（#17 spec #15 C 节：全量经 TrackerEngine.process �
       listLinkedStructuredSessions: () => [],
       getRequirementTitle: () => null,
     });
+    const adapter = new FakeAdapter({ clock });
+    const sessions = new SessionStore(db);
     const deps: IpcDeps = {
-      adapter: new FakeAdapter({ clock }),
+      adapter,
       engine,
       projects: new ProjectStore(db),
-      sessions: new SessionStore(db),
+      sessions,
+      lifecycle: createSessionLifecycle({ sessions, procs: createAdapterSessionProcesses(adapter, makePtyHost().host) }),
       memory,
       pickDirectory: async () => projA,
       getCurrentProjectId: () => null,
@@ -992,11 +1004,14 @@ describe("kanban 通道（#17 spec #15 C 节：全量经 TrackerEngine.process �
       const db = openDatabase(dbFile);
       const engine = new TrackerEngine(db);
       engine.restore();
+      const adapter = new FakeAdapter({ clock });
+      const sessions = new SessionStore(db);
       const deps: IpcDeps = {
-        adapter: new FakeAdapter({ clock }),
+        adapter,
         engine,
         projects: new ProjectStore(db),
-        sessions: new SessionStore(db),
+        sessions,
+        lifecycle: createSessionLifecycle({ sessions, procs: createAdapterSessionProcesses(adapter, makePtyHost().host) }),
         emitTrackerChange: () => undefined,
         pickDirectory: async () => projDir,
         getCurrentProjectId: () => null,
@@ -1015,11 +1030,14 @@ describe("kanban 通道（#17 spec #15 C 节：全量经 TrackerEngine.process �
     const db2 = openDatabase(dbFile);
     const engine2 = new TrackerEngine(db2);
     const pushed: TrackerChange[] = [];
+    const adapter2 = new FakeAdapter({ clock });
+    const sessions2 = new SessionStore(db2);
     const deps2: IpcDeps = {
-      adapter: new FakeAdapter({ clock }),
+      adapter: adapter2,
       engine: engine2,
       projects: new ProjectStore(db2),
-      sessions: new SessionStore(db2),
+      sessions: sessions2,
+      lifecycle: createSessionLifecycle({ sessions: sessions2, procs: createAdapterSessionProcesses(adapter2, makePtyHost().host) }),
       emitTrackerChange: (c) => pushed.push(c),
       pickDirectory: async () => projDir,
       getCurrentProjectId: () => null,
@@ -1427,15 +1445,18 @@ function makeDeleteRouter(fails?: { interrupt?: boolean; dispose?: boolean }, op
   const spy = spyAdapter(new FakeAdapter({ clock }), fails);
   const db = opts?.dbPath ? openDatabase(opts.dbPath) : openDatabase(":memory:");
   const changes: TrackerChange[] = [];
+  const ptyHost = opts?.ptyHost ?? makePtyHost();
+  const sessions = new SessionStore(db);
   const deps: IpcDeps = {
     adapter: spy.adapter,
     engine: new TrackerEngine(db),
     projects: new ProjectStore(db),
-    sessions: new SessionStore(db),
+    sessions,
+    lifecycle: createSessionLifecycle({ sessions, procs: createAdapterSessionProcesses(spy.adapter, ptyHost.host) }),
     pickDirectory: async () => "C:\\del-repo",
     getCurrentProjectId: () => null,
     setCurrentProjectId: () => undefined,
-    pty: (opts?.ptyHost ?? makePtyHost()).host,
+    pty: ptyHost.host,
     emitTrackerChange: (c) => changes.push(c),
   };
   return { clock, spy, deps, changes, db, handle: (raw: unknown) => handleIpc(deps, raw) };

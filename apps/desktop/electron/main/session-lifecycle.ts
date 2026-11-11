@@ -1,0 +1,102 @@
+// 用途：会话生命周期唯一编排写者（issue #70 C2，spec #57 D 节）—— 归档/取消归档/删除三编排自 ipc.ts 收敛于此，进程能力经 SessionProcesses seam 注入（生产 = adapter/PTY 宿主分派，测试 = fake）；session-store 保持纯数据面（status 流转决策全在此，落库经 store）
+import type { AdoptSessionInput, CliAdapter } from "@kanban/cli-host";
+import type { LogFn } from "./logger";
+import type { PtyHost } from "./pty-host";
+import type { SessionStore } from "./session-store";
+
+/** 进程能力 seam：结构化会话中断/受控终止/收养登记与 PTY 终止（两个 adapter——生产分派与测试 fake，真 seam） */
+export interface SessionProcesses {
+  /** 中断当前 turn（幂等，无活动 turn 自然 no-op） */
+  interrupt(sessionId: string): Promise<void>;
+  /** 受控终止单会话（结构化 = adapter.dispose 单会话形态；PTY = 宿主终端终止） */
+  terminate(rec: { id: string; kind: "structured" | "pty" }): Promise<void>;
+  /** 重新登记可恢复句柄；CLI 不支持收养时 reject（错误消息直达调用方，由 ipc 层既有 catch 映射错误形状） */
+  adopt(input: AdoptSessionInput): Promise<void>;
+}
+
+/** 生产 SessionProcesses 装配（index.ts 装配现场与测试夹具共用同一分派）：structured → adapter.interruptTurn/dispose/adoptSession；pty → 宿主 kill（lifecycle 仅对 structured 调 adopt，pty 无进程恢复能力） */
+export function createAdapterSessionProcesses(adapter: CliAdapter, pty: Pick<PtyHost, "kill">): SessionProcesses {
+  return {
+    interrupt: (sessionId) => adapter.interruptTurn(sessionId),
+    terminate: (rec) => (rec.kind === "pty" ? Promise.resolve(pty.kill(rec.id)) : adapter.dispose({ sessionId: rec.id })),
+    adopt: (input) =>
+      adapter.adoptSession
+        ? adapter.adoptSession(input)
+        : Promise.reject(new Error(`当前 CLI 不支持会话收养，无法取消归档：${input.cli ?? ""}`)),
+  };
+}
+
+export interface SessionLifecycleDeps {
+  sessions: SessionStore;
+  procs: SessionProcesses;
+  /** 时钟注入（测试固定时刻；缺省当前时刻，归档/取消归档时间戳与活跃时间共用） */
+  now?(): string;
+  /** 诊断日志（与 ipc/adapter-events 同 LogFn 形状：best-effort 放行记 warn，收养失败记 info） */
+  log?: LogFn;
+}
+
+export interface SessionLifecycle {
+  /** 单会话归档（#58/#64：中断 → 受控终止 → 写标记；未知/已归档 no-op 幂等；中断/终止失败 best-effort 放行） */
+  archive(id: string): Promise<{ outcome: "archived" | "noop" }>;
+  /** 取消归档（#58：structured 先 adopt 登记成功才清标记刷新活跃时间，失败原地抛错留归档态可重试；PTY 仅清标记回 disconnected；未归档 no-op） */
+  unarchive(id: string): Promise<{ outcome: "restored" | "noop" }>;
+  /** 删除（#62：解关联 hook 抛错即中止（行保留可重试）→ 终止进程（best-effort 放行）→ 删行记墓碑；无行 no-op 幂等） */
+  remove(id: string, hooks?: { beforeDelete?(): Promise<void> }): Promise<void>;
+}
+
+/** 编排内 best-effort 步骤：失败只记 warn 不阻断（进程已死等不应挡住归档/删除）——自 ipc.ts 随迁，日志 scope/文案逐字不变 */
+async function bestEffort(fn: () => Promise<void>, deps: { log?: LogFn }, context: string): Promise<void> {
+  try {
+    await fn();
+  } catch (err) {
+    deps.log?.("warn", "kanban:ipc", `${context}：${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/** 构造会话生命周期唯一写者（ipc 路由壳 / 自动归档引擎 / PTY 事件泵共用同一实例） */
+export function createSessionLifecycle(deps: SessionLifecycleDeps): SessionLifecycle {
+  const now = (): string => deps.now?.() ?? new Date().toISOString();
+  return {
+    async archive(id): Promise<{ outcome: "archived" | "noop" }> {
+      const rec = deps.sessions.get(id);
+      if (!rec || rec.archivedAt != null) return { outcome: "noop" }; // 幂等：未知/已归档不重复编排
+      if (rec.kind === "pty") await deps.procs.terminate(rec);
+      else {
+        await bestEffort(() => deps.procs.interrupt(rec.id), deps, `归档前中断失败（放行）：${rec.id}`);
+        await bestEffort(() => deps.procs.terminate(rec), deps, `归档终止失败（放行）：${rec.id}`);
+      }
+      deps.sessions.archive(rec.id, now());
+      return { outcome: "archived" };
+    },
+
+    async unarchive(id): Promise<{ outcome: "restored" | "noop" }> {
+      const rec = deps.sessions.get(id);
+      if (rec == null || rec.archivedAt == null) return { outcome: "noop" }; // 未归档 no-op（不写活跃时间）
+      // 结构化先重新登记可恢复句柄：adopt 抛错（含 CLI 不支持）原地传播——留在归档态由 ipc 层报错，可重试
+      if (rec.kind === "structured") {
+        await deps.procs.adopt({
+          sessionId: rec.id,
+          nativeSessionId: rec.nativeSessionId ?? "",
+          cwd: rec.cwd ?? "",
+          permMode: rec.permMode ?? undefined,
+          cli: rec.cli,
+        });
+      }
+      deps.sessions.unarchive(rec.id, now());
+      return { outcome: "restored" };
+    },
+
+    async remove(id, hooks): Promise<void> {
+      const rec = deps.sessions.get(id);
+      if (!rec) return; // 幂等：记录不存在（重复删除/从未存在）直接成功
+      // 解关联（引擎落 unlink 事件）经 hook 注入——lifecycle 不依赖 tracker；hook 抛错即中止：行保留、进程未终止
+      if (hooks?.beforeDelete) await hooks.beforeDelete();
+      if (rec.kind === "pty") await deps.procs.terminate(rec);
+      else {
+        await bestEffort(() => deps.procs.interrupt(rec.id), deps, `删除前中断失败（放行）：${rec.id}`);
+        await bestEffort(() => deps.procs.terminate(rec), deps, `删除终止失败（放行）：${rec.id}`);
+      }
+      deps.sessions.delete(rec.id);
+    },
+  };
+}

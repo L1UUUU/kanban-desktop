@@ -40,6 +40,7 @@ import { openMemoryService } from "./memory-service";
 import { createPtyHost } from "./pty-host";
 import { ProjectStore } from "./project-store";
 import { detectResidue, killResidue, type ResidueServiceDeps } from "./residue-service";
+import { createAdapterSessionProcesses, createSessionLifecycle } from "./session-lifecycle";
 import { SessionStore } from "./session-store";
 import { adoptRestoredSessions, createShutdownOrchestrator } from "./shutdown";
 
@@ -302,6 +303,14 @@ app.whenReady().then(async () => {
     },
   );
 
+  // #70 C2：会话生命周期唯一编排写者（archive/unarchive/remove 编排收敛；ipc 路由壳 / 自动归档引擎共用同一实例），
+  // 进程能力经 SessionProcesses seam 分派（structured → adapter；pty → 宿主 kill）
+  const lifecycle = createSessionLifecycle({
+    sessions,
+    procs: createAdapterSessionProcesses(adapter, ptyHost),
+    log: logger.log,
+  });
+
   // 统一退出序列（#13/spec H §6.1）：停新请求（IPC 拒新 + UI 提示）→ 有序取消 → 有限等待（config.shutdown.graceMs）→
   // Session 粒度受控终止 → 全量 dispose（worker shutdown/kill 兜底）→ PTY 全停；Job Object 覆盖强杀残留
   const shutdown = createShutdownOrchestrator({
@@ -334,6 +343,8 @@ app.whenReady().then(async () => {
     pty: ptyHost,
     projects,
     sessions,
+    // #70 C2：归档/取消归档/删除编排唯一写者（路由壳只做未知会话错误形状与解关联 hook 注入）
+    lifecycle,
     // #17：kanban:* 通道经 TrackerEngine 落事件流；变更推送与事件泵共用 sendTrackerChange（tracker:event）
     engine: trackerEngine,
     // #35（spec #27 J 节）：kanban:delete 需求删除级联清理该需求 memory 数据（知识保留、需求级记录清理）
@@ -390,7 +401,7 @@ app.whenReady().then(async () => {
   let lastAutoArchiveScan: AutoArchiveScanSummary | null = null;
   const runAutoArchive = async (): Promise<AutoArchiveScanSummary | null> => {
     if (!appConfig.autoArchive.enabled) return null; // 默认关：零动作（不扫描不缓存，老数据不动）
-    const summary = await runAutoArchiveScan({ adapter, pty: ptyHost, sessions, log: logger.log }, appConfig.autoArchive);
+    const summary = await runAutoArchiveScan({ sessions, pty: ptyHost, lifecycle, log: logger.log }, appConfig.autoArchive);
     lastAutoArchiveScan = summary;
     return summary;
   };

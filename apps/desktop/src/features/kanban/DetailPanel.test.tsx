@@ -12,6 +12,7 @@ import { openDatabase } from "../../../electron/main/db";
 import { createAdapterEventHandler } from "../../../electron/main/adapter-events";
 import { handleIpc, type IpcDeps } from "../../../electron/main/ipc";
 import { createPtyHost, type PtyLike, type PtyProcess } from "../../../electron/main/pty-host";
+import { createAdapterSessionProcesses, createSessionLifecycle } from "../../../electron/main/session-lifecycle";
 import { ProjectStore } from "../../../electron/main/project-store";
 import { SessionStore } from "../../../electron/main/session-store";
 import { AppShell } from "../../App";
@@ -94,9 +95,7 @@ function makeTransport(
       sendChange: emitTracker,
     }),
   );
-  const deps: IpcDeps = {
-    adapter,
-    pty: createPtyHost(
+  const pty = createPtyHost(
       {
         pty: new EchoPty(),
         execFileSync: () => undefined,
@@ -116,7 +115,10 @@ function makeTransport(
         exit: () => undefined,
         error: () => undefined,
       },
-    ),
+  );
+  const deps: IpcDeps = {
+    adapter,
+    pty,
     projects: new ProjectStore(db),
     sessions,
     engine,
@@ -127,6 +129,8 @@ function makeTransport(
       state.currentProjectId = id;
       if (opts?.statePath) writeFileSync(opts.statePath, JSON.stringify(state), "utf-8");
     },
+    // #70 C2：归档/删除编排唯一写者（补齐依赖形状；本测试不触发相关通道）
+    lifecycle: createSessionLifecycle({ sessions, procs: createAdapterSessionProcesses(adapter, pty) }),
   };
   return {
     invoke: (req: IpcRequest) => handleIpc(deps, req),

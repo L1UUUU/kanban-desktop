@@ -6,6 +6,7 @@ import { selectAutoArchiveIds, runAutoArchiveScan, type AutoArchiveCandidate } f
 import { openDatabase } from "./db";
 import type { LogFn, LogLevel } from "./logger";
 import type { PtyHost } from "./pty-host";
+import { createAdapterSessionProcesses, createSessionLifecycle } from "./session-lifecycle";
 import { SessionStore, type SessionRecord } from "./session-store";
 
 // ============ 判定纯函数（Seam A：会话集合 + 配置 + 当前时间 → 待归档 id 列表） ============
@@ -123,18 +124,20 @@ function seed(sessions: SessionStore, over: Partial<SessionRecord> & { id: strin
   });
 }
 
-/** 引擎夹具：内存库 + FakeAdapter + fake PTY + 日志收集（adapterOnly=true 时 sessions 经 adapter.createSession 登记句柄） */
+/** 引擎夹具：内存库 + FakeAdapter + fake PTY + 日志收集（归档编排经 lifecycle 唯一写者，adapter/pty 经 SessionProcesses 分派） */
 function makeEngine() {
   const adapter = new FakeAdapter();
   const sessions = new SessionStore(openDatabase(":memory:"));
   const pty = makePtyHost();
   const logs = makeLog();
+  const lifecycle = createSessionLifecycle({ sessions, procs: createAdapterSessionProcesses(adapter, pty.host) });
   return {
     adapter,
     sessions,
     pty,
     logs,
-    run: (config: AutoArchiveConfig, now: Date = NOW) => runAutoArchiveScan({ adapter, pty: pty.host, sessions, log: logs.log }, config, now),
+    lifecycle,
+    run: (config: AutoArchiveConfig, now: Date = NOW) => runAutoArchiveScan({ sessions, pty: pty.host, lifecycle, log: logs.log }, config, now),
   };
 }
 
@@ -191,7 +194,8 @@ describe("runAutoArchiveScan 执行器", () => {
     const sessions = new FailingStore(openDatabase(":memory:"));
     seed(sessions, { id: "s-bad" });
     seed(sessions, { id: "s-ok" });
-    const summary = await runAutoArchiveScan({ adapter, pty: pty.host, sessions, log: logs.log }, ON, NOW);
+    const lifecycle = createSessionLifecycle({ sessions, procs: createAdapterSessionProcesses(adapter, pty.host) });
+    const summary = await runAutoArchiveScan({ sessions, pty: pty.host, lifecycle, log: logs.log }, ON, NOW);
     expect(summary).toEqual({ archived: 1, failed: 1 });
     expect(sessions.get("s-ok")?.archivedAt).toBeTruthy();
     expect(sessions.get("s-bad")?.archivedAt).toBeNull();

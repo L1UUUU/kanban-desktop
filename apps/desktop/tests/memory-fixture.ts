@@ -12,6 +12,7 @@ import { handleIpc, handleMemoryIpc, TRACKER_CLI_BY_APP, type IpcDeps } from "..
 import { openMemoryService } from "../electron/main/memory-service";
 import type { RunOnceCall, RunOnceOutcome } from "../electron/main/memory-pipeline";
 import { ProjectStore } from "../electron/main/project-store";
+import { createAdapterSessionProcesses, createSessionLifecycle } from "../electron/main/session-lifecycle";
 import { SessionStore } from "../electron/main/session-store";
 import type { PtyHost } from "../electron/main/pty-host";
 
@@ -132,6 +133,7 @@ export function assemble(dbPath: string, dataRoot: string, projectDir: string, o
       }),
     emitMemoryEvent: (event) => over?.events?.push(event),
   });
+  const ptyHost = makeFakePtyHost();
   const deps: IpcDeps = {
     adapter,
     engine,
@@ -139,7 +141,9 @@ export function assemble(dbPath: string, dataRoot: string, projectDir: string, o
     sessions,
     // #35：与 index.ts 生产装配一致注入 memory（kanban:delete 需求删除级联）
     memory: service,
-    pty: makeFakePtyHost(),
+    // #70 C2：归档/删除编排唯一写者（与生产装配同构）
+    lifecycle: createSessionLifecycle({ sessions, procs: createAdapterSessionProcesses(adapter, ptyHost) }),
+    pty: ptyHost,
     pickDirectory: async () => projectDir,
     getCurrentProjectId: () => null,
     setCurrentProjectId: () => undefined,

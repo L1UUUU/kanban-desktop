@@ -1,6 +1,9 @@
-// 用途：自动归档引擎（#64 spec #57）—— 判定为纯函数（会话集合 + 配置 + 当前时间 → 待归档 id 列表，便于密封测试）+ 执行器（逐条容错 allSettled 全部尝试，参照退出序列范式；复用 session:archive 同一归档编排，不另起平行实现）+ 扫描摘要（设置区反馈数据源）
+// 用途：自动归档引擎（#64 spec #57）—— 判定为纯函数（会话集合 + 配置 + 当前时间 → 待归档 id 列表，便于密封测试）+ 执行器（逐条容错 allSettled 全部尝试，参照退出序列范式；归档编排经 session-lifecycle 唯一写者（#70 C2），与 session:archive 通道共用同一实例，不另起平行实现）+ 扫描摘要（设置区反馈数据源）
 import type { AutoArchiveConfig, AutoArchiveScanSummary, SessionStatus } from "@kanban/ipc-schema";
-import { archiveSession, type ArchiveSessionDeps } from "./ipc";
+import type { LogFn } from "./logger";
+import type { PtyHost } from "./pty-host";
+import type { SessionLifecycle } from "./session-lifecycle";
+import type { SessionStore } from "./session-store";
 
 /** 判定输入行：store 全量记录的判定面投影（processAlive 由执行器按 kind 计算，判定本身不依赖宿主） */
 export interface AutoArchiveCandidate {
@@ -39,8 +42,15 @@ export function selectAutoArchiveIds(
   return ids;
 }
 
-/** 执行器依赖 = 单会话归档编排所需子集（index.ts 从装配现场传入，测试纯注入） */
-export type AutoArchiveEngineDeps = ArchiveSessionDeps;
+/** 执行器依赖（#70 C2 起归档编排走 session-lifecycle 唯一写者）：判定所需会话集合与 PTY 存活探测读数据面，终止在 lifecycle.archive 内经 SessionProcesses 分派 */
+export interface AutoArchiveEngineDeps {
+  sessions: SessionStore;
+  /** PTY 存活探测（判定用，权威：DB 状态可能滞后） */
+  pty: Pick<PtyHost, "isRunning">;
+  /** 单会话归档编排（与 session:archive 通道共用同一 lifecycle 实例） */
+  lifecycle: Pick<SessionLifecycle, "archive">;
+  log?: LogFn;
+}
 
 /**
  * 执行一次扫描（触发点 = 应用启动后 + 配置保存成功后，均由 index.ts 调用，无常驻定时器）：
@@ -66,7 +76,7 @@ export async function runAutoArchiveScan(
     }));
     const targets = selectAutoArchiveIds(candidates, config, now);
     // 逐条容错（参照退出序列 allSettled 范式）：busy/存活已被判定排除，无需 interrupt 后的有限等待
-    const results = await Promise.allSettled(targets.map((id) => archiveSession(deps, id)));
+    const results = await Promise.allSettled(targets.map((id) => deps.lifecycle.archive(id)));
     let archived = 0;
     let failed = 0;
     results.forEach((r, i) => {

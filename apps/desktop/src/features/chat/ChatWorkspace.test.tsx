@@ -11,6 +11,7 @@ import { TrackerEngine } from "@kanban/tracker";
 import { openDatabase } from "../../../electron/main/db";
 import { handleIpc, type IpcDeps } from "../../../electron/main/ipc";
 import { createPtyHost, type PtyLike, type PtyProcess } from "../../../electron/main/pty-host";
+import { createAdapterSessionProcesses, createSessionLifecycle } from "../../../electron/main/session-lifecycle";
 import { ProjectStore } from "../../../electron/main/project-store";
 import { SessionStore } from "../../../electron/main/session-store";
 import { ChatWorkspace } from "./ChatWorkspace";
@@ -119,13 +120,16 @@ function makeTransport(
       error: (terminalId, payload) => emitTerminal({ terminalId, type: "error", message: payload.message }),
     },
   );
+  const sessions = new SessionStore(db);
   const deps: IpcDeps = {
     adapter,
     pty,
     // #17：IpcDeps 必挂 TrackerEngine（kanban 通道落事件流；本测试不触发 kanban 通道，仅补齐依赖形状）
     engine: new TrackerEngine(db),
     projects: new ProjectStore(db),
-    sessions: new SessionStore(db),
+    sessions,
+    // #70 C2：归档/删除编排唯一写者（补齐依赖形状；本测试不触发相关通道）
+    lifecycle: createSessionLifecycle({ sessions, procs: createAdapterSessionProcesses(adapter, pty) }),
     pickDirectory: opts?.pick ?? (async () => null),
     getCurrentProjectId: () => state.currentProjectId,
     setCurrentProjectId: (id) => {

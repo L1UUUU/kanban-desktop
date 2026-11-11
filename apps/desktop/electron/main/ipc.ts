@@ -27,6 +27,7 @@ import type { LogFn } from "./logger";
 import { type MemoryService } from "./memory-service";
 import type { PtyHost } from "./pty-host";
 import type { ProjectStore } from "./project-store";
+import type { SessionLifecycle } from "./session-lifecycle";
 import type { SessionStore } from "./session-store";
 
 /** 路由依赖：adapter + PTY 宿主 + 持久化 store + 平台能力（Electron dialog/config 由 index.ts 注入，测试可替换） */
@@ -36,6 +37,8 @@ export interface IpcDeps {
   pty: PtyHost;
   projects: ProjectStore;
   sessions: SessionStore;
+  /** #70 C2：会话生命周期唯一编排写者（archive/unarchive/remove 编排主体；adapter/pty 经其 SessionProcesses seam 分派） */
+  lifecycle: SessionLifecycle;
   /** #17：kanban:* 通道与 session:create+requirementId 全量经 engine 落事件流（事件溯源唯一状态变化路径，spec #15 C 节） */
   engine: TrackerEngine;
   /** #17：tracker 变更推送（index.ts 接 webContents.send("tracker:event")；可选，缺省丢弃供不需要推送的测试） */
@@ -128,54 +131,24 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
       return { ok: true, sessions: deps.sessions.listArchived().map(toSessionRow) };
     }
     case "session:archive": {
-      // #58 归档编排（spec #57 D 节）：与 #64 自动归档引擎共用 archiveSession 单一实现（中断→受控终止→写标记；终止失败不阻断；重复归档幂等）
-      const exists = deps.sessions.get(req.sessionId);
-      if (!exists) return sessionNotFound(req.sessionId);
-      await archiveSession(deps, req.sessionId);
+      // #58 归档编排（spec #57 D 节）：编排主体在 session-lifecycle（#70 C2 唯一写者，与 #64 自动归档引擎共用同一实现）；此处仅未知会话错误形状
+      if (!deps.sessions.get(req.sessionId)) return sessionNotFound(req.sessionId);
+      await deps.lifecycle.archive(req.sessionId);
       return { ok: true };
     }
     case "session:unarchive": {
-      // #58 取消归档编排：先重新登记可恢复句柄（adopt）→ 成功才清标记并刷新活跃时间；失败留在归档态报错（可重试）。
-      // PTY 无进程恢复能力（与重启后行为一致）：仅清标记回列表显示已断开
-      const rec = deps.sessions.get(req.sessionId);
-      if (!rec) return sessionNotFound(req.sessionId);
-      if (rec.archivedAt != null) {
-        if (rec.kind === "structured") {
-          if (!deps.adapter.adoptSession) {
-            return { ok: false, error: { code: "E_INTERNAL", message: `当前 CLI 不支持会话收养，无法取消归档：${rec.cli}` } };
-          }
-          await deps.adapter.adoptSession({
-            sessionId: rec.id,
-            nativeSessionId: rec.nativeSessionId ?? "",
-            cwd: rec.cwd ?? "",
-            permMode: rec.permMode ?? undefined,
-            cli: rec.cli,
-          });
-        }
-        deps.sessions.unarchive(rec.id, nowIso());
-      }
+      // #58 取消归档编排（spec #57 D 节）：先重新登记可恢复句柄（adopt）→ 成功才清标记并刷新活跃时间；失败留在归档态报错（可重试）。
+      // PTY 无进程恢复能力（与重启后行为一致）：仅清标记回列表显示已断开；编排主体在 session-lifecycle
+      if (!deps.sessions.get(req.sessionId)) return sessionNotFound(req.sessionId);
+      await deps.lifecycle.unarchive(req.sessionId);
       return { ok: true };
     }
     case "session:delete": {
       // #62 删除编排（spec #57 D 节）：先解除看板关联（落 unlink 事件，重启重放后映射干净；失败抛错即中止，记录保留可重试）→
-      // 终止 CLI 进程（PTY 用终端终止；终止失败 best-effort 放行——进程已死不应挡删除）→ 删除本地会话记录；
-      // 幂等：记录已不存在（重复删除/从未存在）直接成功；不删 CLI 原生历史文件、不做撤销；历史事件日志永不删除
-      const rec = deps.sessions.get(req.sessionId);
-      if (!rec) return { ok: true };
-      if (deps.engine.tracker.sessionToReq.has(rec.id)) {
-        processAndEmit(deps, guiEvent(`unlink:${rec.id}`, {
-          kind: "unlink",
-          source: "gui",
-          requirementId: null,
-          sessionId: rec.id,
-        }));
-      }
-      if (rec.kind === "pty") deps.pty.kill(rec.id);
-      else {
-        await bestEffort(() => deps.adapter.interruptTurn(rec.id), deps, `删除前中断失败（放行）：${rec.id}`);
-        await bestEffort(() => deps.adapter.dispose({ sessionId: rec.id }), deps, `删除终止失败（放行）：${rec.id}`);
-      }
-      deps.sessions.delete(rec.id);
+      // 终止 CLI 进程（终止失败 best-effort 放行——进程已死不应挡删除）→ 删除本地会话记录；
+      // 幂等：记录已不存在（重复删除/从未存在）直接成功；不删 CLI 原生历史文件、不做撤销；历史事件日志永不删除。
+      // 编排主体在 session-lifecycle（#70 C2）；解关联经 hooks 注入（lifecycle 不依赖 tracker）
+      await deps.lifecycle.remove(req.sessionId, { beforeDelete: () => unlinkForDelete(deps, req.sessionId) });
       return { ok: true };
     }
     case "session:create": {
@@ -433,32 +406,15 @@ function toSessionRow(rec: ReturnType<SessionStore["list"]>[number]): SessionRow
   };
 }
 
-/** #58 归档编排的 best-effort 步骤：失败只记日志不阻断（进程已死等不应挡住归档） */
-async function bestEffort(fn: () => Promise<void>, deps: Pick<IpcDeps, "log">, context: string): Promise<void> {
-  try {
-    await fn();
-  } catch (err) {
-    deps.log?.("warn", "kanban:ipc", `${context}：${err instanceof Error ? err.message : String(err)}`);
-  }
-}
-
-/** #58/#64 单会话归档编排依赖子集（session:archive 通道与自动归档引擎共用同一实现） */
-export type ArchiveSessionDeps = Pick<IpcDeps, "adapter" | "pty" | "sessions" | "log">;
-
-/**
- * 单会话归档编排（#58 session:archive 通道与 #64 自动归档引擎共用，不另起平行实现）：
- * 未知/已归档会话 no-op（幂等，不重复编排）；中断当前 turn（interruptTurn 幂等，无活动 turn 自然 no-op）→
- * 受控终止单会话（结构化 adapter.dispose / PTY 用终端终止）→ 写归档标记；终止/中断失败（进程已死等）best-effort 记 warn 放行
- */
-export async function archiveSession(deps: ArchiveSessionDeps, sessionId: string): Promise<void> {
-  const rec = deps.sessions.get(sessionId);
-  if (!rec || rec.archivedAt != null) return;
-  if (rec.kind === "pty") deps.pty.kill(rec.id);
-  else {
-    await bestEffort(() => deps.adapter.interruptTurn(rec.id), deps, `归档前中断失败（放行）：${rec.id}`);
-    await bestEffort(() => deps.adapter.dispose({ sessionId: rec.id }), deps, `归档终止失败（放行）：${rec.id}`);
-  }
-  deps.sessions.archive(rec.id, nowIso());
+/** #62 删除前解关联（session-lifecycle.remove 的 beforeDelete hook）：已关联时落 unlink 事件并推送变更，抛错即中止删除（行保留可重试） */
+async function unlinkForDelete(deps: IpcDeps, sessionId: string): Promise<void> {
+  if (!deps.engine.tracker.sessionToReq.has(sessionId)) return; // 幂等：本就未关联
+  processAndEmit(deps, guiEvent(`unlink:${sessionId}`, {
+    kind: "unlink",
+    source: "gui",
+    requirementId: null,
+    sessionId,
+  }));
 }
 
 /** #58 未知会话 → E_SESSION_NOT_FOUND（session:archive / session:unarchive 共用） */
