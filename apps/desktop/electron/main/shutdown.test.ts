@@ -1,10 +1,11 @@
-// 用途：统一退出序列与重开恢复编排单测（#13/spec H）—— 状态机顺序（拒新→有序取消→有限等待→Session 粒度 dispose→全量 dispose→PTY 停止）、幂等、有限等待超时放行、异常不阻断退出；启动收养登记与 PTY 断开落库
+// 用途：统一退出序列与启动恢复编排单测（#13/spec H）—— 状态机顺序（拒新→有序取消→有限等待→Session 粒度 dispose→全量 dispose→PTY 停止）、幂等、有限等待超时放行、异常不阻断退出；#70 起启动收养经 session-lifecycle.adoptRestored（唯一写者）断言面不变
 import { describe, expect, it } from "vitest";
 import type { AdoptSessionInput, AdapterEvent, ChatEvent, CliAdapter, DisposeInput } from "@kanban/cli-host";
 import { AdapterError } from "@kanban/cli-host";
 import { openDatabase } from "./db";
 import { SessionStore, type SessionRecord } from "./session-store";
-import { adoptRestoredSessions, createShutdownOrchestrator } from "./shutdown";
+import { createAdapterSessionProcesses, createSessionLifecycle } from "./session-lifecycle";
+import { createShutdownOrchestrator } from "./shutdown";
 import type { PtyHost } from "./pty-host";
 
 /** 记录型 fake adapter：interruptTurn/dispose(含单会话)记录调用；可选钩子模拟事件落库/失败 */
@@ -180,7 +181,7 @@ describe("统一退出序列（spec H §6.1）", () => {
   });
 });
 
-describe("重开恢复编排（#13）", () => {
+describe("重开恢复编排（#13；#70 起经 session-lifecycle.adoptRestored）", () => {
   it("启动收养：全部结构化会话（含上次已断开）adoptSession（DB id/native id/cwd/cli 透传）并落库断开；PTY 不收养但统一断开——二次重启后断开会话仍可恢复", async () => {
     const sessions = makeSessions([
       { id: "s-live", cli: "codex", nativeSessionId: "th-1", status: "running", permMode: "auto" },
@@ -189,7 +190,7 @@ describe("重开恢复编排（#13）", () => {
       { id: "s-pty", kind: "pty", cli: "pty", status: "idle" },
     ]);
     const { adapter, adopted } = makeFakeAdapter();
-    await adoptRestoredSessions({ adapter, sessions });
+    await createSessionLifecycle({ sessions, procs: createAdapterSessionProcesses(adapter, makePty().pty) }).adoptRestored();
     expect(adopted.map((a) => a.sessionId).sort()).toEqual(["s-already", "s-live", "s-null-native"]);
     expect(adopted.find((a) => a.sessionId === "s-live")).toMatchObject({ nativeSessionId: "th-1", cli: "codex", permMode: "auto" });
     expect(adopted.find((a) => a.sessionId === "s-null-native")).toMatchObject({ nativeSessionId: "" });
@@ -207,7 +208,7 @@ describe("重开恢复编排（#13）", () => {
     sessions.archive("s-arch", "2026-11-10T08:00:00.000Z");
     sessions.archive("s-pty-arch", "2026-11-10T08:00:01.000Z");
     const { adapter, adopted } = makeFakeAdapter();
-    await adoptRestoredSessions({ adapter, sessions });
+    await createSessionLifecycle({ sessions, procs: createAdapterSessionProcesses(adapter, makePty().pty) }).adoptRestored();
     expect(adopted.map((a) => a.sessionId)).toEqual(["s-live"]); // 只收养未归档结构化会话
     // 归档行不被退出收养改动（保持归档态，供设置面板/取消归档使用）
     expect(sessions.listArchived().map((r) => r.id).sort()).toEqual(["s-arch", "s-pty-arch"]);
@@ -233,7 +234,11 @@ describe("重开恢复编排（#13）", () => {
       subscribe: (_h: (event: AdapterEvent) => void) => () => {},
     };
     const logs: string[] = [];
-    await adoptRestoredSessions({ adapter: noAdopt, sessions, log: (_k, d) => logs.push(d) });
+    await createSessionLifecycle({
+      sessions,
+      procs: createAdapterSessionProcesses(noAdopt, makePty().pty),
+      log: (_level, _scope, message) => logs.push(message),
+    }).adoptRestored();
     expect(sessions.list().every((r) => r.status === "disconnected")).toBe(true);
     expect(logs.length).toBe(2); // 每会话一条失败日志
   });

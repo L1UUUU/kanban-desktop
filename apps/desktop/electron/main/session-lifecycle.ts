@@ -1,4 +1,4 @@
-// 用途：会话生命周期唯一编排写者（issue #70 C2，spec #57 D 节）—— 归档/取消归档/删除三编排自 ipc.ts、PTY 终端事件落库自 index.ts sink 收敛于此，进程能力经 SessionProcesses seam 注入（生产 = adapter/PTY 宿主分派，测试 = fake）；session-store 保持纯数据面（status 流转决策全在此，落库经 store）
+// 用途：会话生命周期唯一编排写者（issue #70 C2，spec #57 D 节）—— 归档/取消归档/删除三编排自 ipc.ts、PTY 终端事件落库自 index.ts sink、启动收养编排自 shutdown.ts 收敛于此，进程能力经 SessionProcesses seam 注入（生产 = adapter/PTY 宿主分派，测试 = fake）；session-store 保持纯数据面（status 流转决策全在此，落库经 store）
 import type { AdoptSessionInput, CliAdapter } from "@kanban/cli-host";
 import type { LogFn } from "./logger";
 import type { PtyHost } from "./pty-host";
@@ -45,6 +45,9 @@ export interface SessionLifecycle {
   /** PTY 终端事件唯一写入口（#58/#62）：started → idle / exit → disconnected + 活跃时间；data/error 只吃迟到判定零写入；
    *  返回 false = 迟到事件（已归档/已删除终端），调用方不得写库不得转发 renderer */
   onTerminalEvent(terminalId: string, ev: "started" | "data" | "exit" | "error"): boolean;
+  /** 启动恢复编排（spec H/#13，#14 修正，#70 自 shutdown.ts 迁入）：DB 全部未归档结构化会话统一收养登记 disconnected
+   *  （readHistory/resume 可续）；收养失败与无 adoptSession 能力的 CLI、以及全部 PTY 会话落库 disconnected；已归档行跳过（防重复登记） */
+  adoptRestored(): Promise<void>;
 }
 
 /** 编排内 best-effort 步骤：失败只记 warn 不阻断（进程已死等不应挡住归档/删除）——自 ipc.ts 随迁，日志 scope/文案逐字不变 */
@@ -112,6 +115,35 @@ export function createSessionLifecycle(deps: SessionLifecycleDeps): SessionLifec
         deps.sessions.touch(terminalId, now());
       }
       return true;
+    },
+
+    async adoptRestored(): Promise<void> {
+      // #58：启动收养走全量查询但跳过已归档行——各 adapter 对重复 adopt 报「会话已存在」，
+      // 已归档会话留待取消归档时按需 adopt（session:unarchive），避免登记冲突
+      const rows = deps.sessions.listAll().filter((r) => r.kind === "structured" && r.archivedAt == null);
+      for (const r of rows) {
+        const input: AdoptSessionInput = {
+          sessionId: r.id,
+          nativeSessionId: r.nativeSessionId ?? "",
+          cwd: r.cwd ?? "",
+          permMode: r.permMode ?? undefined,
+          cli: r.cli,
+        };
+        try {
+          await deps.procs.adopt(input);
+          // 收养成功：session_status disconnected 经事件流落库；此处兜底直写（事件到达前 renderer 拉列表也拿到终态）
+          deps.sessions.updateStatus(r.id, "disconnected");
+        } catch (e) {
+          // 收养失败（含 CLI 不支持收养，procs.adopt reject）与其余会话互不影响：落库断开，逐条留痕
+          deps.log?.("info", "lifecycle", `会话收养失败（落库断开）：${r.id} ${e instanceof Error ? e.message : String(e)}`);
+          deps.sessions.updateStatus(r.id, "disconnected");
+        }
+      }
+      // PTY 会话：进程已随上次退出终止（before-quit killAll），统一断开态
+      // #58：全量遍历（含已归档行）——updateStatus 的未归档守卫使归档行为自然 no-op，不改动其落库状态
+      for (const r of deps.sessions.listAll()) {
+        if (r.kind === "pty" && r.status !== "disconnected") deps.sessions.updateStatus(r.id, "disconnected");
+      }
     },
   };
 }

@@ -1,6 +1,6 @@
-// 用途：main 侧生命周期编排（spec H §6.1 全表/#13）—— 统一退出序列状态机（停新请求→有序取消→有限等待→Session 粒度受控终止→全量 dispose→PTY 停止）与重开恢复编排（启动收养 DB 断开会话）；纯依赖注入可单测
+// 用途：main 侧统一退出序列编排（spec H §6.1 全表/#13）—— 停新请求→有序取消→有限等待→Session 粒度受控终止→全量 dispose→PTY 停止；纯依赖注入可单测（#70 C2 起启动收养编排迁至 session-lifecycle.adoptRestored，本模块退出序列只读 status 不写）
 import type { LogKind } from "@kanban/ipc-schema";
-import type { CliAdapter, AdoptSessionInput } from "@kanban/cli-host";
+import type { CliAdapter } from "@kanban/cli-host";
 import type { SessionStore } from "./session-store";
 import type { PtyHost } from "./pty-host";
 
@@ -87,45 +87,4 @@ export function createShutdownOrchestrator(deps: ShutdownDeps): ShutdownOrchestr
     },
     isShuttingDown: () => gate,
   };
-}
-
-export interface RestoreDeps {
-  adapter: CliAdapter;
-  sessions: SessionStore;
-  log?(kind: LogKind, detail: string): void;
-}
-
-/**
- * 重开恢复编排（spec H/#13，#14 修正）：启动时对 DB 中全部结构化会话统一收养
- * （adapter.adoptSession 登记断开，readHistory/resume 可续；事件流回 session_status disconnected 落库）。
- * 含上次已断开的会话——否则第二次重启后 adapter 无登记，「读取原生历史并恢复」必报会话不存在；
- * 收养失败与无 adoptSession 能力的 CLI、以及全部 PTY 会话（进程随上次退出终止）落库为 disconnected。
- */
-export async function adoptRestoredSessions(deps: RestoreDeps): Promise<void> {
-  // #58：退出收养走全量查询但跳过已归档行——各 adapter 对重复 adopt 报「会话已存在」，
-  // 已归档会话留待取消归档时按需 adopt（session:unarchive），避免登记冲突
-  const rows = deps.sessions.listAll().filter((r) => r.kind === "structured" && r.archivedAt == null);
-  for (const r of rows) {
-    const input: AdoptSessionInput = {
-      sessionId: r.id,
-      nativeSessionId: r.nativeSessionId ?? "",
-      cwd: r.cwd ?? "",
-      permMode: r.permMode ?? undefined,
-      cli: r.cli,
-    };
-    try {
-      if (!deps.adapter.adoptSession) throw new Error("adapter 不支持会话收养");
-      await deps.adapter.adoptSession(input);
-      // 收养成功：session_status disconnected 经事件流落库；此处兜底直写（事件到达前 renderer 拉列表也拿到终态）
-      deps.sessions.updateStatus(r.id, "disconnected");
-    } catch (e) {
-      deps.log?.("restore", `会话收养失败（落库断开）：${r.id} ${e instanceof Error ? e.message : String(e)}`);
-      deps.sessions.updateStatus(r.id, "disconnected");
-    }
-  }
-  // PTY 会话：进程已随上次退出终止（before-quit killAll），统一断开态
-  // #58：全量遍历（含已归档行）——updateStatus 的未归档守卫使归档行为自然 no-op，不改动其落库状态
-  for (const r of deps.sessions.listAll()) {
-    if (r.kind === "pty" && r.status !== "disconnected") deps.sessions.updateStatus(r.id, "disconnected");
-  }
 }

@@ -42,7 +42,7 @@ import { ProjectStore } from "./project-store";
 import { detectResidue, killResidue, type ResidueServiceDeps } from "./residue-service";
 import { createAdapterSessionProcesses, createSessionLifecycle } from "./session-lifecycle";
 import { SessionStore } from "./session-store";
-import { adoptRestoredSessions, createShutdownOrchestrator } from "./shutdown";
+import { createShutdownOrchestrator } from "./shutdown";
 
 // #53：Main 侧唯一日志深模块实例（whenReady 二实例守卫后创建；模块级因 createHostedAdapter/loadResidueSeed 等闭包引用）
 let logger: Logger;
@@ -253,9 +253,6 @@ app.whenReady().then(async () => {
     }),
   );
 
-  // 重开恢复编排（#13/spec H）：DB 中 status 非 disconnected 的结构化会话收养登记 disconnected（readHistory/resume 可续），PTY 统一断开
-  await adoptRestoredSessions({ adapter, sessions, log: logKind });
-
   // PTY 宿主装配：平台能力注入（shell/CLI exe 覆盖来自 config，不硬编码）；事件出站过 schema 校验并转发 renderer，
   // started/exit 的 sessions 状态落库与 #58/#62 迟到守卫统一经 lifecycle.onTerminalEvent（#70 C2 唯一写入口；
   // 已归档/已删除终端的迟到事件不落库不转发，spec #57 D 节）——四回调退化为「问 lifecycle → 转发」
@@ -307,6 +304,10 @@ app.whenReady().then(async () => {
     procs: createAdapterSessionProcesses(adapter, ptyHost),
     log: logger.log,
   });
+
+  // 重开恢复编排（#13/spec H，#70 起经 lifecycle 唯一写者）：DB 中未归档结构化会话收养登记 disconnected（readHistory/resume 可续），
+  // PTY 统一断开；置于 lifecycle 就绪后（原序为事件泵订阅与 PTY 宿主创建之间，均无 spawn/事件源，顺序等价）
+  await lifecycle.adoptRestored();
 
   // 统一退出序列（#13/spec H §6.1）：停新请求（IPC 拒新 + UI 提示）→ 有序取消 → 有限等待（config.shutdown.graceMs）→
   // Session 粒度受控终止 → 全量 dispose（worker shutdown/kill 兜底）→ PTY 全停；Job Object 覆盖强杀残留
@@ -480,7 +481,7 @@ app.whenReady().then(async () => {
 
   createWindow();
 
-  // #64（spec #57）：启动触发一次自动归档扫描 —— 恢复收养（adoptRestoredSessions）与全部依赖就绪后发起；
+  // #64（spec #57）：启动触发一次自动归档扫描 —— 恢复收养（lifecycle.adoptRestored）与全部依赖就绪后发起；
   // 默认关零动作；不阻塞窗口创建；此后仅配置保存成功时再扫（无常驻定时器）
   void runAutoArchive();
 
