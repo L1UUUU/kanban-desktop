@@ -195,6 +195,26 @@ test("验收 1：四来源汇聚 —— 同一启动文件含 main/worker/render
   }
 });
 
+test("验收回归（Job guard 布防）：真实 utilityProcess 启动后日志无 job-guard 告警", async () => {
+  const { userData, repoDir, repoRoot } = makeFixture();
+  try {
+    const { app } = await launchApp(userData, repoDir);
+    const pid = await mainPid(app);
+    await waitForEntry(userData, pid, (e) => e.message === "启动横幅");
+    // 布防失败告警在启动后 ~1.2s 落盘（实测）；等 3s 稳定覆盖后断言缺席。
+    // 回归锚点：Electron 44 utilityProcess.fork() 返回瞬间 pid 尚未就绪，同 tick 读取曾把
+    // "-MemberPid undefined" 传给 guard → PS 参数绑定失败 exit 1 → Job 布防从未生效（每次启动告警）。
+    // A 类不可达（替身注入时 guard 旁路），force-kill-job B 类用 node 宿主 pid 同步就绪，故本 C 类真实整机为唯一回归位。
+    await new Promise((r) => setTimeout(r, 3000));
+    await app.close();
+    const entries = readRunEntries(userData, pid);
+    expect(entries.some((e) => e.message.includes("Job guard"))).toBe(false);
+  } finally {
+    await rmBestEffort(userData);
+    await rmBestEffort(repoRoot);
+  }
+});
+
 test("验收 2：worker 意外退出留 error（文件含 error 条目，非末条）", async () => {
   const { userData, repoDir, repoRoot } = makeFixture();
   try {

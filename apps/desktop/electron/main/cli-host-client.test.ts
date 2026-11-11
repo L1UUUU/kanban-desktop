@@ -16,19 +16,21 @@ vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
 import { spawn } from "node:child_process";
 import { CliHostClient, type UtilityProcessLike } from "./cli-host-client";
 
-/** 记录型替身 proc：捕获 postMessage/kill 与 message/exit 监听器，供测试按消息协议驱动 */
+/** 记录型替身 proc：捕获 postMessage/kill 与 message/exit/spawn 监听器，供测试按消息协议驱动 */
 class FakeProc implements UtilityProcessLike {
   readonly posted: unknown[] = [];
   readonly messageListeners: Array<(msg: unknown) => void> = [];
   readonly exitListeners: Array<(code: number, signal?: string | null) => void> = [];
+  readonly spawnListeners: Array<() => void> = [];
   killCalls = 0;
   readonly pid = 4321;
   postMessage(message: unknown): void {
     this.posted.push(message);
   }
-  on(event: "message" | "exit", listener: (...args: never[]) => void): void {
+  on(event: "message" | "exit" | "spawn", listener: (...args: never[]) => void): void {
     if (event === "message") this.messageListeners.push(listener as unknown as (msg: unknown) => void);
-    else this.exitListeners.push(listener as unknown as (code: number, signal?: string | null) => void);
+    else if (event === "exit") this.exitListeners.push(listener as unknown as (code: number, signal?: string | null) => void);
+    else this.spawnListeners.push(listener as unknown as () => void);
   }
   kill(): void {
     this.killCalls++;

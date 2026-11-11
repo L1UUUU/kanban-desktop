@@ -34,6 +34,8 @@ export interface UtilityProcessLike {
   on(event: "message", listener: (msg: unknown) => void): unknown;
   /** 真实 utilityProcess 只回 code（electron dts）；signal 位供替身/信号终止场景观察 */
   on(event: "exit", listener: (code: number, signal?: string | null) => void): unknown;
+  /** 进程 spawn 成功事件（pid 自此保证就绪——Electron 44 fork 返回瞬间 pid 尚未赋值） */
+  on(event: "spawn", listener: () => void): unknown;
   kill(): boolean | void;
   readonly pid?: number;
 }
@@ -88,7 +90,12 @@ export class CliHostClient implements CliAdapter {
     this.proc.on("message", (msg: unknown) => this.onMessage(msg));
     this.proc.on("exit", (code, signal) => this.onWorkerExit(code, signal));
     // Job Object 只绑真实 utilityProcess（替身无 OS 进程可绑，亦免测试拉起 powershell）
-    if (process.platform === "win32" && !options.fork) this.attachJobGuard();
+    if (process.platform === "win32" && !options.fork) {
+      // Electron 44 实测：fork() 返回瞬间 pid 尚未就绪（异步 spawn），同 tick 读取会把 "-MemberPid undefined"
+      // 传给 guard → PS 参数绑定失败 exit 1，Job 布防从未生效（每次启动告警）；等 spawn 事件 pid 必就绪后再拉起
+      if (this.proc.pid !== undefined) this.attachJobGuard();
+      else this.proc.on("spawn", () => this.attachJobGuard());
+    }
   }
 
   async createSession(init: CreateSessionInput): Promise<{ sessionId: string; nativeSessionId?: string | null }> {
@@ -255,11 +262,18 @@ export class CliHostClient implements CliAdapter {
           "-JobName",
           `kanban-clihost-${process.pid}`,
         ],
-        { stdio: "ignore", windowsHide: true },
+        { stdio: ["ignore", "ignore", "pipe"], windowsHide: true },
       );
+      let stderrTail = "";
+      guard.stderr?.on("data", (d: Buffer) => {
+        stderrTail = (stderrTail + d.toString("utf8")).slice(-300); // 尾部留档：布防失败时 warn 附 stderr 定位阶段（stdio 全 ignore 曾让 exit 1 无细节可查）
+      });
       guard.on("error", (e) => this.log("job-guard", `Job guard 启动失败（降级无 Job，正常退出链路不受影响）：${e.message}`));
       guard.on("exit", (code) => {
-        if (code !== 0) this.log("job-guard", `Job guard 退出 code=${code}（0=宿主死亡后正常收尾）`);
+        if (code !== 0) {
+          const tail = stderrTail.trim().split(/\r?\n/).pop() ?? "";
+          this.log("job-guard", `Job guard 退出 code=${code}（0=宿主死亡后正常收尾）${tail ? `：${tail}` : ""}`);
+        }
       });
     } catch (e) {
       this.log("job-guard", `Job guard 不可用：${e instanceof Error ? e.message : String(e)}`);
