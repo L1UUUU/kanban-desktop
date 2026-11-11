@@ -102,6 +102,19 @@ function runFileStem(at: Date, pid: number): string {
 
 const RUN_FILE_RE = /^(\d{8}-\d{6}-\d+)\.jsonl(?:\.\d+)?$/;
 
+/** 条目时间戳：本地时间 + 显式时差 YYYY-MM-DDTHH:mm:ss.SSS±HH:MM（用户时区直读，与文件名同口径；固定宽度，同 offset 下字典序=时间序，e2e 到达顺序断言口径不变） */
+function formatLogTs(at: Date): string {
+  const p2 = (n: number): string => String(n).padStart(2, "0");
+  const offsetMin = -at.getTimezoneOffset();
+  const sign = offsetMin >= 0 ? "+" : "-";
+  const abs = Math.abs(offsetMin);
+  return (
+    `${at.getFullYear()}-${p2(at.getMonth() + 1)}-${p2(at.getDate())}` +
+    `T${p2(at.getHours())}:${p2(at.getMinutes())}:${p2(at.getSeconds())}.${String(at.getMilliseconds()).padStart(3, "0")}` +
+    `${sign}${p2(Math.floor(abs / 60))}:${p2(abs % 60)}`
+  );
+}
+
 /** 创建 Logger：建目录（best-effort）、定启动文件名、按 retainRuns 清理旧启动组；文件写入惰性到首条 log（横幅之前异常条目也直接落盘，无就绪前缓冲） */
 export function createLogger(options: LoggerOptions): Logger {
   const fs = options.fs ?? {
@@ -216,7 +229,7 @@ export function createLogger(options: LoggerOptions): Logger {
       if (LEVEL_ORDER[level] > LEVEL_ORDER[logging.level]) return; // 级别过滤（文件与控制台同口径）
       // 单条截断（US11）：message 与 ctx 各字符串值同口径按 maxMessageChars 截断（数值/布尔原样），防大段输出冲爆文件
       const truncate = (s: string): string => (s.length > logging.maxMessageChars ? s.slice(0, logging.maxMessageChars) : s);
-      const entry: LogEntry = { ts: now().toISOString(), level, source: source ?? "main", scope, message: truncate(message) };
+      const entry: LogEntry = { ts: formatLogTs(now()), level, source: source ?? "main", scope, message: truncate(message) };
       if (ctx && Object.keys(ctx).length > 0) {
         const ctxOut: LogCtx = {};
         for (const [k, v] of Object.entries(ctx)) ctxOut[k] = typeof v === "string" ? truncate(v) : v;

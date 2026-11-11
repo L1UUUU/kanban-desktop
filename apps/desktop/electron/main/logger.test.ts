@@ -213,6 +213,22 @@ describe("控制台纯文本双写（验收 4/spec US17）", () => {
   });
 });
 
+describe("时间戳本地时区（用户可读）", () => {
+  it("ts = 本地时间 + 显式时差（YYYY-MM-DDTHH:mm:ss.SSS±HH:MM），控制台行与 JSONL 同源；不再输出 UTC Z 形式", () => {
+    const { fs, con, logger } = bench();
+    logger.log("warn", "cli-host", "时间探针");
+    const [entry] = readEntries(fs, MAIN);
+    // 期望值由 fake clock 同一 Date 的本地 getter 推导（任意时区机器结果确定；固定宽度保证同 offset 字典序=时间序）
+    const at = new Date(2026, 0, 2, 3, 4, 5);
+    const offsetMin = -at.getTimezoneOffset();
+    const sign = offsetMin >= 0 ? "+" : "-";
+    const p2 = (n: number): string => String(Math.abs(n)).padStart(2, "0");
+    const expected = `2026-01-02T03:04:05.000${sign}${p2(Math.floor(Math.abs(offsetMin) / 60))}:${p2(Math.abs(offsetMin) % 60)}`;
+    expect(entry.ts).toBe(expected);
+    expect(con.error.mock.calls[0][0].startsWith(`[${expected}] [warn] (cli-host) 时间探针`)).toBe(true);
+  });
+});
+
 describe("child 派生与启动横幅（验收 4，spec D 节）", () => {
   it("child(scope) 固定 scope 直写", () => {
     const { fs, logger } = bench();
@@ -255,9 +271,9 @@ describe("大小切分（验收 6，spec Q6/US23）", () => {
   const pad = (n: number): string => `m${n}-`.padEnd(60, "x");
 
   it("主文件超 maxFileBytes → 续写 .1，再超 → .2；主文件保留早期内容；currentFilePath 不变；无残留分片时轮转不误报写失败", () => {
-    const { fs, con, logger } = bench({ maxFileBytes: 300 });
+    const { fs, con, logger } = bench({ maxFileBytes: 400 });
     for (let i = 0; i < 5; i++) logger.log("info", "s", pad(i));
-    // 每条约 120B：主文件 3 条后超 300 → 第 4 条起进 .1
+    // 每条约 155B（本地时间戳 ±HH:MM 比 UTC Z 长 5 字符）：主文件 3 条后超 400 → 第 4 条起进 .1
     const mainEntries = readEntries(fs, MAIN);
     expect(mainEntries).toHaveLength(3);
     const slice1 = readEntries(fs, `${MAIN}.1`);
@@ -268,7 +284,7 @@ describe("大小切分（验收 6，spec Q6/US23）", () => {
   });
 
   it(".2 满后滚动：丢最旧分片 .1、.2 升 .1、续写新 .2；主→.1→.2 拼接保持到达顺序（丢弃窗口除外）", () => {
-    const { fs, logger } = bench({ maxFileBytes: 300 });
+    const { fs, logger } = bench({ maxFileBytes: 400 });
     for (let i = 0; i < 9; i++) logger.log("info", "s", pad(i));
     // 主 3 条 + .1 3 条 + .2 3 条后滚动：.1(旧 .2 内容 idx6-8) 保留、新 .2 接 idx9
     logger.log("info", "s", pad(9));
