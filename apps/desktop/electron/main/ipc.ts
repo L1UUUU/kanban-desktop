@@ -1,6 +1,5 @@
 // 用途：Main 入站 IPC 路由 —— 单通道 kanban:ipc 强制 zod 校验 + 分发到 CliAdapter 与 projects/sessions store + PTY 宿主（纯函数无 Electron 依赖：dialog 与 config 经 deps 注入）
 // 行数评估（~730 行，超 500 行阈值）：app:getInfo + 五个 :ipc 通道（kanban/memory/diff/residue/config）的 handler 聚合是既有装配模式（共享单通道校验、deps 注入与 store 装配，拆开只搬文件不减耦合），本次不拆；触发条件：第六个 IPC 通道（或任一通道 handler 独立逻辑显著膨胀）加入时按通道拆分为独立模块。
-import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import {
   configRequestSchema,
@@ -222,28 +221,38 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
       await deps.adapter.resume(req.sessionId);
       return { ok: true };
     // PTY 终端通道（spec E/H：切换/关标签不停止；kill 为用户显式停止的唯一入口）
+    // #60（spec #57 PTY 草稿）：terminalId 由渲染端预生成（uuid 格式经契约校验）；先落库占位 → 启动进程 → 失败回删（无孤儿记录）；firstInput 为草稿缓冲的首输入，启动成功后重放
     case "terminal:create": {
-      const terminalId = randomUUID();
-      const spawned = deps.pty.spawn(terminalId, { cwd: req.cwd, cols: req.cols ?? 80, rows: req.rows ?? 30, command: req.command });
-      if (!spawned.ok) {
-        return { ok: false, error: { code: "E_INTERNAL", message: spawned.message } };
+      const terminalId = req.terminalId;
+      if (deps.sessions.get(terminalId)) {
+        return { ok: false, error: { code: "E_SESSION_EXISTS", message: `终端 id 已存在：${terminalId}（会话 id 空间冲突）` } };
       }
-      const title = req.title ?? `终端 · ${spawned.label}`;
-      const identity = detectDirIdentity(req.cwd);
+      // 先落库占位（占位标题在 spawn 成功后回写为「终端 · shell」；启动失败整行回删）
       deps.sessions.insert({
         id: terminalId,
         kind: "pty",
         cli: "pty",
         nativeSessionId: null,
         projectId: req.projectId ?? null,
-        title,
+        title: req.title ?? "终端",
         cwd: req.cwd,
         permMode: null,
         status: "idle",
         lastActiveAt: null,
         archivedAt: null,
       });
-      // #20（spec #15 C/D 节）：从需求卡片建 PTY 终端——创建成功后原子落 link 事件（与 session:create+requirementId 同语义）
+      const spawned = deps.pty.spawn(terminalId, { cwd: req.cwd, cols: req.cols ?? 80, rows: req.rows ?? 30, command: req.command });
+      if (!spawned.ok) {
+        deps.sessions.delete(terminalId); // 回删占位行：默认列表与重启均无该会话
+        return { ok: false, error: { code: "E_INTERNAL", message: spawned.message } };
+      }
+      const title = req.title ?? `终端 · ${spawned.label}`;
+      if (title !== (req.title ?? "终端")) deps.sessions.updateTitle(terminalId, title);
+      // 草稿首输入重放（含多字符/中文，首输入不丢失；失败路径已提前 return 不会写进未启动的终端）
+      if (req.firstInput) deps.pty.write(terminalId, req.firstInput);
+      const identity = detectDirIdentity(req.cwd);
+      // #20（spec #15 C/D 节）：从需求卡片建 PTY 终端——创建成功后原子落 link 事件（与 session:create+requirementId 同语义；
+      // #60 起关联随首输入触发的创建一并落）
       const linkedResult = req.requirementId
         ? linkAfterCreate(deps, terminalId, req.requirementId, req.projectId ?? null, "pty")
         : undefined;

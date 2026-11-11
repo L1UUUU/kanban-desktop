@@ -106,6 +106,11 @@ export class SessionStore {
   delete(id: string): void {
     this.db.prepare("DELETE FROM sessions WHERE id = ?").run(id);
   }
+
+  /** 标题更新（#60：PTY 草稿先落库占位、spawn 成功后回写「终端 · shell」标题；spawn 失败回删占位行复用上方 #58 delete） */
+  updateTitle(id: string, title: string): void {
+    this.db.prepare("UPDATE sessions SET title = ? WHERE id = ?").run(title, id);
+  }
 }
 
 /** snake_case 行 → camelCase 记录 */

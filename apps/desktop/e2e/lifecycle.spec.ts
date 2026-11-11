@@ -119,6 +119,8 @@ test("正常退出无孤儿（§6.1）：PTY 子进程随退出终止（OS 句�
         if (!api) throw new Error("window.api 不可用");
         return api.invoke({
           channel: "terminal:create",
+          // #60：terminalId 由调用方预生成（uuid 同格式；草稿语义下由渲染端生成，此处直连等价）
+          terminalId: crypto.randomUUID(),
           cwd,
           command: { exe: "powershell.exe", args: ["-NoProfile", "-Command", `Write-Output ${marker}; Start-Sleep -Seconds 120`] },
         });
