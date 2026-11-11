@@ -1,12 +1,14 @@
 // 用途：Main 入站 IPC 路由 —— 单通道 kanban:ipc 强制 zod 校验 + 分发到 CliAdapter 与 projects/sessions store + PTY 宿主（纯函数无 Electron 依赖：dialog 与 config 经 deps 注入）
-// 行数评估（~560 行，超 500 行阈值）：app:getInfo + 四个 :ipc 通道（kanban/memory/diff/residue）的 handler 聚合是既有装配模式（共享单通道校验、deps 注入与 store 装配，拆开只搬文件不减耦合），本次不拆；触发条件：第六个 IPC 通道（或任一通道 handler 独立逻辑显著膨胀）加入时按通道拆分为独立模块。
+// 行数评估（~660 行，超 500 行阈值）：app:getInfo + 五个 :ipc 通道（kanban/memory/diff/residue/config）的 handler 聚合是既有装配模式（共享单通道校验、deps 注入与 store 装配，拆开只搬文件不减耦合），本次不拆；触发条件：第六个 IPC 通道（或任一通道 handler 独立逻辑显著膨胀）加入时按通道拆分为独立模块。
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import {
+  configRequestSchema,
   diffRequestSchema,
   ipcRequestSchema,
   memoryRequestSchema,
   residueRequestSchema,
+  type ConfigResult,
   type DiffResult,
   type IpcRequest,
   type IpcResult,
@@ -18,6 +20,7 @@ import {
 } from "@kanban/ipc-schema";
 import { AdapterError, detectSkillConflicts, resolveUserClaudeDir, type CliAdapter } from "@kanban/cli-host";
 import { TrackerEngine, formatRequirementId, type Cli, type NormalizedEvent, type TrackerChange } from "@kanban/tracker";
+import type { AppConfig } from "./config";
 import { detectDirIdentity } from "./git-identity";
 import type { WorkspaceDiff } from "./git-diff-service";
 import type { LogFn } from "./logger";
@@ -648,5 +651,50 @@ export async function handleDiffIpc(deps: DiffIpcDeps, raw: unknown): Promise<Di
     // #53：记一条 error 后原样 rethrow（既有异常向 ipcMain.handle 传播的行为不变，不吞不造码）
     deps.log?.("error", "diff:ipc", `处理异常：${err instanceof Error ? err.message : String(err)}`);
     throw err;
+  }
+}
+
+// ============ #61 config:ipc 通道（spec #57 配置链路，对齐 diff:ipc 独立单通道先例：读 autoArchive 子集 / 写字段级合并 + 先持久化成功再改内存） ============
+
+/** config:ipc 路由依赖：内存配置对象 + 全量持久化（getConfig/persist 由 index.ts 经闭包注入，测试替换 fixture） */
+export interface ConfigIpcDeps {
+  /** 当前内存配置（Main 闭包对象，恒返回同一引用；写盘成功后由 handler 原地更新其 autoArchive 字段，其余字段一律不触碰） */
+  getConfig(): AppConfig;
+  /** 持久化完整配置（生产 = saveConfig 全量写回；抛错即写盘失败，新值不生效） */
+  persist(config: AppConfig): void;
+  /** 退出序列门闸（true=正在退出，拒绝新请求；缺省恒 false 供测试） */
+  isShuttingDown?(): boolean;
+  /** #53 惯例：safeParse 失败与 persist 抛错记 error；缺省 no-op */
+  log?: LogFn;
+}
+
+/** 处理一条 config:ipc 入站请求：zod 强制校验 → 退出门闸 → 读子集 / 写先持久化成功再改内存（失败明确报错，内存与磁盘不分叉） */
+export async function handleConfigIpc(deps: ConfigIpcDeps, raw: unknown): Promise<ConfigResult> {
+  const parsed = configRequestSchema.safeParse(raw);
+  if (!parsed.success) {
+    deps.log?.("error", "config:ipc", `入站请求不符合契约（E_SCHEMA）：${summarizeIssues(parsed.error.issues)}`);
+    return { ok: false, error: { code: "E_SCHEMA", message: summarizeIssues(parsed.error.issues) } };
+  }
+  if (deps.isShuttingDown?.()) {
+    return { ok: false, error: { code: "E_INTERNAL", message: "应用正在退出，已停止接收新请求" } };
+  }
+  try {
+    switch (parsed.data.channel) {
+      case "config:get":
+        return { ok: true, autoArchive: deps.getConfig().autoArchive };
+      case "config:set": {
+        const current = deps.getConfig();
+        // 先持久化成功再改内存：persist 抛错进 catch（返回明确错误，内存对象未动，新值不生效）；
+        // 写仅开放 autoArchive 子集 —— 持久化对象由内存配置字段级合并而来，项目/CLI 路径等其余字段不受请求影响
+        deps.persist({ ...current, autoArchive: parsed.data.autoArchive });
+        current.autoArchive = parsed.data.autoArchive;
+        return { ok: true, autoArchive: current.autoArchive };
+      }
+    }
+  } catch (err) {
+    // 写盘失败不 rethrow：配置保存是用户可见的可重试动作，返回明确错误直达调用方（新值不生效）
+    const message = err instanceof Error ? err.message : String(err);
+    deps.log?.("error", "config:ipc", `配置保存失败（新值不生效）：${message}`);
+    return { ok: false, error: { code: "E_INTERNAL", message: `配置保存失败，新值未生效：${message}` } };
   }
 }

@@ -61,12 +61,55 @@ describe("saveConfig / loadConfig 往返", () => {
   it("save 后 load 得到等值配置（含父目录自动创建）", () => {
     const dir = newTempDir();
     const path = join(dir, "nested", "config.json");
-    saveConfig(path, { cliExe: { codex: "C:/codex.exe", claude: null, opencode: "C:/oc.exe" }, currentProjectId: "p-9", gitExe: null, diff: { maxBytes: 4096, maxFiles: 5, maxUntrackedLines: 10 }, terminal: { shell: null }, shutdown: { graceMs: 3000 }, logging: { level: "info", maxFileBytes: 5_000_000, retainRuns: 10, maxMessageChars: 2000 } });
+    saveConfig(path, { cliExe: { codex: "C:/codex.exe", claude: null, opencode: "C:/oc.exe" }, currentProjectId: "p-9", gitExe: null, diff: { maxBytes: 4096, maxFiles: 5, maxUntrackedLines: 10 }, terminal: { shell: null }, shutdown: { graceMs: 3000 }, logging: { level: "info", maxFileBytes: 5_000_000, retainRuns: 10, maxMessageChars: 2000 }, autoArchive: { enabled: true, days: 60 } });
     const loaded = loadConfig(path);
     expect(loaded.cliExe).toEqual({ codex: "C:/codex.exe", claude: null, opencode: "C:/oc.exe" });
     expect(loaded.currentProjectId).toBe("p-9");
     expect(loaded.diff).toEqual({ maxBytes: 4096, maxFiles: 5, maxUntrackedLines: 10 });
     expect(loaded.logging).toEqual({ level: "info", maxFileBytes: 5_000_000, retainRuns: 10, maxMessageChars: 2000 });
+    expect(loaded.autoArchive).toEqual({ enabled: true, days: 60 });
+  });
+});
+
+describe("autoArchive 配置（#61 spec #57：开关默认关 + 天数默认 30，读入侧 1–365 边界校验）", () => {
+  it("默认 enabled=false / days=30；合法值往返（重启后经 loadConfig 生效）", () => {
+    expect(defaultConfig().autoArchive).toEqual({ enabled: false, days: 30 });
+    const dir = newTempDir();
+    const path = join(dir, "config.json");
+    writeFileSync(path, JSON.stringify({ autoArchive: { enabled: true, days: 14 } }), "utf8");
+    expect(loadConfig(path).autoArchive).toEqual({ enabled: true, days: 14 });
+    // save 后 load 等值（持久化重启生效的读入侧）
+    const cfg = loadConfig(path);
+    saveConfig(path, cfg);
+    expect(loadConfig(path).autoArchive).toEqual({ enabled: true, days: 14 });
+  });
+
+  it("days 非法值（越界/非整数/非数字/缺字段）回落默认 30；边界值 1 与 365 采纳", () => {
+    const dir = newTempDir();
+    const path = join(dir, "config.json");
+    for (const days of [0, 366, -30, 1.5, "30", null]) {
+      writeFileSync(path, JSON.stringify({ autoArchive: { enabled: true, days } }), "utf8");
+      expect(loadConfig(path).autoArchive).toEqual({ enabled: true, days: 30 });
+    }
+    writeFileSync(path, JSON.stringify({ autoArchive: { enabled: true } }), "utf8");
+    expect(loadConfig(path).autoArchive).toEqual({ enabled: true, days: 30 });
+    writeFileSync(path, JSON.stringify({ autoArchive: { enabled: true, days: 1 } }), "utf8");
+    expect(loadConfig(path).autoArchive.days).toBe(1);
+    writeFileSync(path, JSON.stringify({ autoArchive: { enabled: true, days: 365 } }), "utf8");
+    expect(loadConfig(path).autoArchive.days).toBe(365);
+  });
+
+  it("enabled 非布尔回落默认 false；两字段独立合并（只写 days 不动 enabled、只写 enabled 不动 days）；节损坏/非对象整节保持默认", () => {
+    const dir = newTempDir();
+    const path = join(dir, "config.json");
+    writeFileSync(path, JSON.stringify({ autoArchive: { enabled: "on", days: 14 } }), "utf8");
+    expect(loadConfig(path).autoArchive).toEqual({ enabled: false, days: 14 });
+    writeFileSync(path, JSON.stringify({ autoArchive: { days: 7 } }), "utf8");
+    expect(loadConfig(path).autoArchive).toEqual({ enabled: false, days: 7 });
+    writeFileSync(path, JSON.stringify({ autoArchive: { enabled: true } }), "utf8");
+    expect(loadConfig(path).autoArchive).toEqual({ enabled: true, days: 30 });
+    writeFileSync(path, JSON.stringify({ autoArchive: "nope" }), "utf8");
+    expect(loadConfig(path).autoArchive).toEqual({ enabled: false, days: 30 });
   });
 });
 
