@@ -44,6 +44,8 @@ export const sessionRowSchema = z.object({
   permMode: permModeSchema.nullable(),
   status: sessionStatusSchema.nullable(),
   lastActiveAt: z.string().nullable(),
+  /** #58 归档时间（NULL=未归档；默认列表恒 null，归档视图（session:archivedList）行必带） */
+  archivedAt: z.string().nullable(),
   /** 目录身份（spec I-3）：main=主仓库绿徽标 / worktree=蓝徽标（name 见 worktreeName）/ none=非 git 目录不渲染 */
   dirIdentity: z.enum(["main", "worktree", "none"]),
   worktreeName: z.string().nullable(),
@@ -84,6 +86,12 @@ export const ipcRequestSchema = z.discriminatedUnion("channel", [
   /** 断开会话恢复续连：Adapter.resume 重连原生会话（真实 CLI 由 #8/#10/#11 实现，Fake 复位语义） */
   z.object({ channel: z.literal("session:resume"), sessionId: sessionIdSchema }),
   z.object({ channel: z.literal("session:list"), projectId: z.string().min(1).optional() }),
+  /** #58 归档：中断当前 turn → 受控终止单会话 → 写归档标记（幂等；结果行经 session:list/archivedList 查询） */
+  z.object({ channel: z.literal("session:archive"), sessionId: sessionIdSchema }),
+  /** #58 取消归档：先重新登记可恢复句柄（adopt）→ 成功才清标记并刷新活跃时间；失败留在归档态报错可重试 */
+  z.object({ channel: z.literal("session:unarchive"), sessionId: sessionIdSchema }),
+  /** #58 归档视图查询（设置面板用；wire 行含归档时间） */
+  z.object({ channel: z.literal("session:archivedList") }),
   z.object({ channel: z.literal("project:list") }),
   /** 注册项目：Main 弹原生目录选择对话框，路径归一化与去重在 Main 侧完成 */
   z.object({ channel: z.literal("project:register") }),

@@ -191,6 +191,18 @@ export class ChatStore {
     this.changed();
   }
 
+  /** #58 移除会话行（归档/删除编排的 renderer 侧）：移除的是激活会话时切到排序中的下一条，无则上一条，全无则空态 */
+  removeSession(id: string): void {
+    if (!this.sessions.has(id)) return;
+    const order = [...this.sessions.keys()];
+    const ix = order.indexOf(id);
+    this.sessions.delete(id);
+    if (this.activeId === id) {
+      this.activeId = order[ix + 1] ?? order[ix - 1] ?? null;
+    }
+    this.changed();
+  }
+
   /** 本地会话设置更新（权限档位/模型 chip） */
   updateSession(id: string, patch: Partial<Pick<SessionView, "permMode" | "model">>): void {
     const s = this.sessions.get(id);

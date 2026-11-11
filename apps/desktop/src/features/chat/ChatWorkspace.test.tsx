@@ -460,6 +460,15 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     expect(screen.getAllByText("新会话 · Fake").length).toBeGreaterThanOrEqual(1);
   });
 
+  it("#58 归档：会话行 hover「归档」→ Main 编排（中断+终止+写标记）→ 侧栏行移除", async () => {
+    const t = mount();
+    await t.flush();
+    expect(screen.getByText("演示会话 · Fake")).toBeTruthy();
+    fireEvent.click(screen.getByTitle("归档（移出默认列表，可在设置找回）"));
+    await t.flush();
+    expect(screen.queryByText("演示会话 · Fake")).toBeNull(); // 行移出默认列表（全无则空态）
+  });
+
   it("真实 CLI 无显式 cwd：拒绝创建（不得以任何隐式演示目录创建真实会话，code-review 硬违规回归）", async () => {
     const t = mount();
     await t.flush();

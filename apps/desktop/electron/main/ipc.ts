@@ -120,6 +120,47 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
       const rows = deps.sessions.list(req.projectId).map(toSessionRow);
       return { ok: true, sessions: rows };
     }
+    case "session:archivedList": {
+      // #58 归档视图（设置面板用）：含归档时间等展示字段
+      return { ok: true, sessions: deps.sessions.listArchived().map(toSessionRow) };
+    }
+    case "session:archive": {
+      // #58 归档编排（spec #57 D 节）：中断当前 turn（interruptTurn 幂等，无活动 turn 自然 no-op）→
+      // 受控终止单会话（PTY 用终端终止）→ 写归档标记；终止失败（进程已死等）不阻断归档；重复归档幂等（不重复编排）
+      const rec = deps.sessions.get(req.sessionId);
+      if (!rec) return sessionNotFound(req.sessionId);
+      if (rec.archivedAt == null) {
+        if (rec.kind === "pty") deps.pty.kill(rec.id);
+        else {
+          await bestEffort(() => deps.adapter.interruptTurn(rec.id), deps, `归档前中断失败（放行）：${rec.id}`);
+          await bestEffort(() => deps.adapter.dispose({ sessionId: rec.id }), deps, `归档终止失败（放行）：${rec.id}`);
+        }
+        deps.sessions.archive(rec.id, nowIso());
+      }
+      return { ok: true };
+    }
+    case "session:unarchive": {
+      // #58 取消归档编排：先重新登记可恢复句柄（adopt）→ 成功才清标记并刷新活跃时间；失败留在归档态报错（可重试）。
+      // PTY 无进程恢复能力（与重启后行为一致）：仅清标记回列表显示已断开
+      const rec = deps.sessions.get(req.sessionId);
+      if (!rec) return sessionNotFound(req.sessionId);
+      if (rec.archivedAt != null) {
+        if (rec.kind === "structured") {
+          if (!deps.adapter.adoptSession) {
+            return { ok: false, error: { code: "E_INTERNAL", message: `当前 CLI 不支持会话收养，无法取消归档：${rec.cli}` } };
+          }
+          await deps.adapter.adoptSession({
+            sessionId: rec.id,
+            nativeSessionId: rec.nativeSessionId ?? "",
+            cwd: rec.cwd ?? "",
+            permMode: rec.permMode ?? undefined,
+            cli: rec.cli,
+          });
+        }
+        deps.sessions.unarchive(rec.id, nowIso());
+      }
+      return { ok: true };
+    }
     case "session:create": {
       const { sessionId, nativeSessionId } = await deps.adapter.createSession({
         cwd: req.cwd,
@@ -141,6 +182,7 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
         permMode: req.permMode ?? "auto",
         status: "idle",
         lastActiveAt: null,
+        archivedAt: null,
       });
       // #17（spec #15 C 节）：可选 requirementId —— 创建成功后由 Main 原子落 link 事件（避免 renderer 两步编排竞态）；
       // 会话须与需求同项目，业务拒绝是合法结果不走错误码，原因直达调用方
@@ -203,6 +245,7 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
         permMode: null,
         status: "idle",
         lastActiveAt: null,
+        archivedAt: null,
       });
       // #20（spec #15 C/D 节）：从需求卡片建 PTY 终端——创建成功后原子落 link 事件（与 session:create+requirementId 同语义）
       const linkedResult = req.requirementId
@@ -340,9 +383,24 @@ function toSessionRow(rec: ReturnType<SessionStore["list"]>[number]): SessionRow
     permMode: rec.permMode,
     status: rec.status,
     lastActiveAt: rec.lastActiveAt,
+    archivedAt: rec.archivedAt,
     dirIdentity: identity.kind,
     worktreeName: identity.kind === "worktree" ? identity.name : null,
   };
+}
+
+/** #58 归档编排的 best-effort 步骤：失败只记日志不阻断（进程已死等不应挡住归档） */
+async function bestEffort(fn: () => Promise<void>, deps: IpcDeps, context: string): Promise<void> {
+  try {
+    await fn();
+  } catch (err) {
+    deps.log?.("warn", "kanban:ipc", `${context}：${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/** #58 未知会话 → E_SESSION_NOT_FOUND（session:archive / session:unarchive 共用） */
+function sessionNotFound(sessionId: string): IpcResult {
+  return { ok: false, error: { code: "E_SESSION_NOT_FOUND", message: `会话不存在：${sessionId}` } };
 }
 
 // ============ #17 kanban 通道辅助（spec #15 C 节） ============

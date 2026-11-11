@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { FakeAdapter, VirtualClock, type CliAdapter } from "@kanban/cli-host";
+import { AdapterError, FakeAdapter, VirtualClock, type CliAdapter } from "@kanban/cli-host";
 import { trackerChangeSchema } from "@kanban/ipc-schema";
 import { TrackerEngine, type TrackerChange } from "@kanban/tracker";
 import { openDatabase } from "./db";
@@ -55,7 +55,7 @@ function makeRouter() {
 }
 
 /** 完整 deps：内存 store + 可注入的目录选择与当前项目存取（#17 起挂 TrackerEngine：kanban 通道落事件流） */
-function makeDeps(adapter: CliAdapter, pick: () => Promise<string | null> = async () => null): IpcDeps {
+function makeDeps(adapter: CliAdapter, pick: () => Promise<string | null> = async () => null, ptyHost = makePtyHost()): IpcDeps {
   const db = openDatabase(":memory:");
   let currentProjectId: string | null = null;
   return {
@@ -68,7 +68,7 @@ function makeDeps(adapter: CliAdapter, pick: () => Promise<string | null> = asyn
     setCurrentProjectId: (id) => {
       currentProjectId = id;
     },
-    pty: makePtyHost().host,
+    pty: ptyHost.host,
   };
 }
 
@@ -1038,5 +1038,202 @@ describe("diff:ipc 通道（#43 spec #40 D 节：独立单通道 + 入站 zod + 
     const { handle, project } = makeDiffRouter(async () => ({ ok: false, kind: "not-a-repo", message: "当前项目不是 git 仓库" }));
     const res = await handle({ channel: "diff:get", projectId: project.id });
     expect(res).toEqual({ ok: false, kind: "not-a-repo", message: "当前项目不是 git 仓库" });
+  });
+});
+
+// ========== #58 会话归档通道（spec #57 D 节：归档/取消归档编排闭环） ============
+
+/** 归档编排观察 adapter：interruptTurn/dispose/adoptSession 调用全记录，行为透传底层（可选注入失败模拟「进程已死/登记失败」） */
+function spyAdapter(
+  base: CliAdapter,
+  fails: { interrupt?: boolean; dispose?: boolean; adopt?: boolean } = {},
+): { adapter: CliAdapter; calls: string[] } {
+  const calls: string[] = [];
+  const baseAdopt = base.adoptSession?.bind(base); // 闭包内调用需先收窄并绑定 this（可选成员的窄化不跨闭包保持）
+  const adapter: CliAdapter = {
+    capabilities: base.capabilities,
+    createSession: (i) => base.createSession(i),
+    sendTurn: (i) => base.sendTurn(i),
+    interruptTurn: async (id) => {
+      calls.push(`interrupt:${id}`);
+      if (fails.interrupt) throw new AdapterError("E_SESSION_NOT_FOUND", `会话不存在（模拟进程已死）：${id}`);
+      return base.interruptTurn(id);
+    },
+    resolveApproval: (i) => base.resolveApproval(i),
+    readHistory: (id) => base.readHistory(id),
+    readTranscript: (id) => base.readTranscript(id),
+    resume: (id) => base.resume(id),
+    dispose: async (i) => {
+      calls.push(`dispose:${i?.sessionId ?? "*"}`);
+      if (fails.dispose) throw new AdapterError("E_SESSION_NOT_FOUND", `会话不存在（模拟进程已死）：${i?.sessionId ?? ""}`);
+      return base.dispose(i);
+    },
+    adoptSession: baseAdopt
+      ? async (i) => {
+          calls.push(`adopt:${i.sessionId}`);
+          if (fails.adopt) throw new AdapterError("E_INTERNAL", `登记失败（注入）：${i.sessionId}`);
+          return baseAdopt(i);
+        }
+      : undefined,
+    subscribe: (h) => base.subscribe(h),
+  };
+  return { adapter, calls };
+}
+
+/** 组装归档测试路由：FakeAdapter（VirtualClock）+ spy 包装 + 真库 deps */
+function makeArchiveRouter(fails?: { interrupt?: boolean; dispose?: boolean; adopt?: boolean }) {
+  const clock = new VirtualClock();
+  const spy = spyAdapter(new FakeAdapter({ clock }), fails);
+  const deps = makeDeps(spy.adapter);
+  return { clock, spy, handle: (raw: unknown) => handleIpc(deps, raw) };
+}
+
+describe("会话归档通道（#58 spec #57）", () => {
+  it("session:archive 结构化：在跑先中断 → 受控终止单会话（dispose）→ 写归档标记；session:list 不再返回该行，archivedList 含归档时间", async () => {
+    const { clock, spy, handle } = makeArchiveRouter();
+    const created = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p", title: "调研" });
+    const sessionId = created.ok ? created.sessionId! : "";
+    await handle({ channel: "session:send", sessionId, text: "拆类型" }); // turn 进行中
+    const res = await handle({ channel: "session:archive", sessionId });
+    expect(res.ok).toBe(true);
+    expect(spy.calls[0]).toBe(`interrupt:${sessionId}`); // 顺序：先中断当前 turn
+    expect(spy.calls[1]).toBe(`dispose:${sessionId}`); // 再受控终止单会话
+    // 默认列表排除；归档视图含展示字段与归档时间
+    const listed = await handle({ channel: "session:list" });
+    expect(listed.ok && listed.sessions).toEqual([]);
+    const archived = await handle({ channel: "session:archivedList" });
+    expect(archived.ok && archived.sessions).toEqual([
+      expect.objectContaining({ id: sessionId, cli: "fake", title: "调研", archivedAt: expect.any(String) }),
+    ]);
+    // 终止后 adapter 无该会话（readHistory 报 SESSION_NOT_FOUND）
+    const read = await handle({ channel: "session:readHistory", sessionId });
+    expect(read.ok).toBe(false);
+    clock.runToIdle();
+  });
+
+  it("archive 终止失败（进程已死）不阻断归档；中断失败同样放行", async () => {
+    const { spy, handle } = makeArchiveRouter({ interrupt: true, dispose: true });
+    const created = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p" });
+    const sessionId = created.ok ? created.sessionId! : "";
+    const res = await handle({ channel: "session:archive", sessionId });
+    expect(res.ok).toBe(true);
+    expect(spy.calls).toEqual([`interrupt:${sessionId}`, `dispose:${sessionId}`]);
+    const archived = await handle({ channel: "session:archivedList" });
+    expect(archived.ok && archived.sessions).toHaveLength(1);
+  });
+
+  it("archive 未知会话 → E_SESSION_NOT_FOUND；重复归档幂等（返回成功、单条归档记录不重复）", async () => {
+    const { handle } = makeArchiveRouter();
+    const ghost = await handle({ channel: "session:archive", sessionId: "ghost" });
+    expect(ghost.ok).toBe(false);
+    if (!ghost.ok) expect(ghost.error.code).toBe("E_SESSION_NOT_FOUND");
+
+    const created = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p" });
+    const sessionId = created.ok ? created.sessionId! : "";
+    expect((await handle({ channel: "session:archive", sessionId })).ok).toBe(true);
+    expect((await handle({ channel: "session:archive", sessionId })).ok).toBe(true); // 幂等
+    const archived = await handle({ channel: "session:archivedList" });
+    expect(archived.ok && archived.sessions).toHaveLength(1);
+  });
+
+  it("archive PTY 会话：用终端终止（pty.kill），不触碰 adapter；行移出默认列表", async () => {
+    const spy = spyAdapter(new FakeAdapter({ clock: new VirtualClock() }));
+    const ptyRec = makePtyHost();
+    const deps = makeDeps(spy.adapter, async () => null, ptyRec);
+    const handle = (raw: unknown) => handleIpc(deps, raw);
+    const created = await handle({ channel: "terminal:create", cwd: "C:\\p" });
+    const terminalId = created.ok ? created.sessionId! : "";
+    const res = await handle({ channel: "session:archive", sessionId: terminalId });
+    expect(res.ok).toBe(true);
+    expect(ptyRec.killed).toEqual([terminalId]); // PTY 用终端终止
+    expect(spy.calls).toEqual([]); // 不经 adapter dispose/interrupt
+    const listed = await handle({ channel: "session:list" });
+    expect(listed.ok && listed.sessions).toEqual([]);
+  });
+
+  it("session:unarchive 结构化：先 adopt 登记可恢复句柄 → 清标记刷新活跃时间；回默认列表（disconnected）、readHistory/resume 仍可用", async () => {
+    const { spy, handle } = makeArchiveRouter();
+    const created = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p", permMode: "auto" });
+    const sessionId = created.ok ? created.sessionId! : "";
+    await handle({ channel: "session:archive", sessionId });
+    const res = await handle({ channel: "session:unarchive", sessionId });
+    expect(res.ok).toBe(true);
+    expect(spy.calls).toContain(`adopt:${sessionId}`); // 取消归档先重新登记
+    const listed = await handle({ channel: "session:list" });
+    expect(listed.ok && listed.sessions).toEqual([
+      expect.objectContaining({ id: sessionId, status: "disconnected", archivedAt: null, lastActiveAt: expect.any(String) }),
+    ]);
+    const read = await handle({ channel: "session:readHistory", sessionId }); // adopt 后句柄可达
+    expect(read.ok).toBe(true);
+    const resume = await handle({ channel: "session:resume", sessionId });
+    expect(resume.ok).toBe(true);
+  });
+
+  it("unarchive 登记失败：留在归档态并明确报错（可重试），不写活跃时间", async () => {
+    const { spy, handle } = makeArchiveRouter({ adopt: true });
+    const created = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p" });
+    const sessionId = created.ok ? created.sessionId! : "";
+    await handle({ channel: "session:archive", sessionId });
+    const res = await handle({ channel: "session:unarchive", sessionId });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.message).toContain("登记失败");
+    expect(spy.calls).toContain(`adopt:${sessionId}`);
+    // 留在归档态：归档视图仍含该行、默认列表仍排除
+    const archived = await handle({ channel: "session:archivedList" });
+    expect(archived.ok && archived.sessions).toEqual([
+      expect.objectContaining({ id: sessionId, lastActiveAt: null }),
+    ]);
+    const listed = await handle({ channel: "session:list" });
+    expect(listed.ok && listed.sessions).toEqual([]);
+  });
+
+  it("unarchive PTY：无进程恢复（不走 adapter adopt），回列表显示已断开", async () => {
+    const spy = spyAdapter(new FakeAdapter({ clock: new VirtualClock() }));
+    const deps = makeDeps(spy.adapter);
+    const handle = (raw: unknown) => handleIpc(deps, raw);
+    const created = await handle({ channel: "terminal:create", cwd: "C:\\p" });
+    const terminalId = created.ok ? created.sessionId! : "";
+    await handle({ channel: "session:archive", sessionId: terminalId });
+    const res = await handle({ channel: "session:unarchive", sessionId: terminalId });
+    expect(res.ok).toBe(true);
+    expect(spy.calls).toEqual([]); // PTY 无 adopt
+    const listed = await handle({ channel: "session:list" });
+    expect(listed.ok && listed.sessions).toEqual([
+      expect.objectContaining({ id: terminalId, kind: "pty", status: "disconnected" }),
+    ]);
+  });
+
+  it("unarchive 未知会话 → E_SESSION_NOT_FOUND；重复取消归档幂等（活跃时间不重置）", async () => {
+    const { handle } = makeArchiveRouter();
+    const ghost = await handle({ channel: "session:unarchive", sessionId: "ghost" });
+    expect(ghost.ok).toBe(false);
+    if (!ghost.ok) expect(ghost.error.code).toBe("E_SESSION_NOT_FOUND");
+
+    const created = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p" });
+    const sessionId = created.ok ? created.sessionId! : "";
+    const again = await handle({ channel: "session:unarchive", sessionId }); // 本就未归档：no-op 成功
+    expect(again.ok).toBe(true);
+    const listed = await handle({ channel: "session:list" });
+    // 创建时 lastActiveAt=null，no-op 取消归档不得凭空写入活跃时间
+    expect(listed.ok && listed.sessions).toEqual([expect.objectContaining({ id: sessionId, lastActiveAt: null })]);
+  });
+
+  it("archivedList：跨项目全部已归档行（含 PTY），按归档时间倒序，wire 行带展示字段", async () => {
+    const spy = spyAdapter(new FakeAdapter({ clock: new VirtualClock() }));
+    const ptyRec = makePtyHost();
+    const deps = makeDeps(spy.adapter, async () => null, ptyRec);
+    const handle = (raw: unknown) => handleIpc(deps, raw);
+    const s1 = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p", title: "A" });
+    const tty = await handle({ channel: "terminal:create", cwd: "C:\\p" });
+    await handle({ channel: "session:archive", sessionId: s1.ok ? s1.sessionId! : "" });
+    await handle({ channel: "session:archive", sessionId: tty.ok ? tty.sessionId! : "" });
+    const archived = await handle({ channel: "session:archivedList" });
+    const rows = archived.ok ? archived.sessions! : [];
+    expect(rows.map((r) => r.kind)).toEqual(["pty", "structured"]); // 后归档在前
+    for (const r of rows) {
+      expect(r.archivedAt).toBeTruthy();
+      expect(r.title !== undefined).toBe(true);
+      expect(r.cli.length).toBeGreaterThan(0);
+    }
   });
 });

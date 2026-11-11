@@ -106,6 +106,7 @@ export function ChatWorkspace({
           void terminals.create({ projectId, cwd });
         }}
         onKillTerminal={terminals.kill}
+        onArchiveSession={(sessionId) => void controller.archiveSession(sessionId)}
         sessionToReq={kanban?.sessionToReq ?? {}}
         onOpenRequirement={(requirementId) => {
           // #20 原型一致项 6：会话行 REQ 徽标点击 → 进入看板并选中该需求（详情面板打开）

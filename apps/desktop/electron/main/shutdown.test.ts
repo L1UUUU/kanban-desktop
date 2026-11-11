@@ -71,6 +71,7 @@ function makeSessions(rows: Partial<SessionRecord>[]): SessionStore {
       permMode: r.permMode ?? null,
       status: r.status ?? "idle",
       lastActiveAt: null,
+    archivedAt: null,
     });
   }
   return store;
@@ -195,6 +196,21 @@ describe("重开恢复编排（#13）", () => {
     for (const id of ["s-live", "s-null-native", "s-already", "s-pty"]) {
       expect(sessions.list().find((r) => r.id === id)?.status).toBe("disconnected");
     }
+  });
+
+  it("#58 已归档会话不参与启动收养（取消归档时按需 adopt，避免重复登记「会话已存在」冲突）；归档行保持归档态", async () => {
+    const sessions = makeSessions([
+      { id: "s-live", cli: "codex", nativeSessionId: "th-1", status: "running" },
+      { id: "s-arch", cli: "codex", nativeSessionId: "th-2", status: "idle" },
+      { id: "s-pty-arch", kind: "pty", cli: "pty", status: "idle" },
+    ]);
+    sessions.archive("s-arch", "2026-11-10T08:00:00.000Z");
+    sessions.archive("s-pty-arch", "2026-11-10T08:00:01.000Z");
+    const { adapter, adopted } = makeFakeAdapter();
+    await adoptRestoredSessions({ adapter, sessions });
+    expect(adopted.map((a) => a.sessionId)).toEqual(["s-live"]); // 只收养未归档结构化会话
+    // 归档行不被退出收养改动（保持归档态，供设置面板/取消归档使用）
+    expect(sessions.listArchived().map((r) => r.id).sort()).toEqual(["s-arch", "s-pty-arch"]);
   });
 
   it("adapter 无 adoptSession 能力或收养抛错：落库断开不中断其余会话收养", async () => {

@@ -140,6 +140,7 @@ export function seedMemoryFixture(): MemorySeed {
     permMode: "auto",
     status: "idle",
     lastActiveAt: null,
+    archivedAt: null,
   });
   engine.process(guiEvent(`seed-link-${sessionId}`, eventAt(), {
     kind: "link",

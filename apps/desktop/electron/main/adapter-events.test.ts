@@ -63,6 +63,39 @@ function insertSession(db: SqliteDb, id: string, projectId: string | null): void
   ).run(id, projectId);
 }
 
+// ========== #58 已归档会话的迟到事件守卫（spec #57 D 节：不写库、不转发渲染端——杜绝幽灵行） ==========
+describe("已归档会话迟到事件守卫（#58）", () => {
+  it("ChatEvent（session_status/turn_started）：不写库、不转发 renderer（不复活归档行）", () => {
+    const { db, sessions, handler, forwarded } = makeWiring(":memory:");
+    insertSession(db, "s-arch", "p-1");
+    sessions.archive("s-arch", "2026-11-10T08:00:00.000Z");
+    handler({ sessionId: "s-arch", seq: 1, at: "2026-11-10T09:00:00.000Z", type: "session_status", status: "running" });
+    handler({ sessionId: "s-arch", seq: 2, at: "2026-11-10T09:00:01.000Z", type: "turn_started", turnId: "t-late" });
+    const row = db.prepare("SELECT status, last_active_at FROM sessions WHERE id = 's-arch'").get() as { status: string | null; last_active_at: string | null };
+    expect(row).toEqual({ status: "idle", last_active_at: null }); // 迟到事件零写入
+    expect(forwarded).toEqual([]); // 不转发（renderer ensureView 不因迟到事件建幽灵行）
+  });
+
+  it("SkillObservation：不进 tracker（不自动建卡/不落 stage_events）、不转发", () => {
+    const { db, sessions, engine, handler, forwarded } = makeWiring(":memory:");
+    insertSession(db, "s-arch-2", "p-1");
+    sessions.archive("s-arch-2", "2026-11-10T08:00:00.000Z");
+    handler(verifiedDesignFeature("s-arch-2", "2026-11-10T09:00:00.000Z", "sk-late") as unknown as AdapterEvent);
+    expect(engine.snapshot()).toEqual([]); // 不驱动状态机
+    expect(db.prepare("SELECT count(*) AS n FROM stage_events").get()).toEqual({ n: 0 }); // 不落事件流
+    expect(forwarded).toEqual([]);
+  });
+
+  it("未归档会话事件不受影响（守卫只拦已归档行）", () => {
+    const { db, handler, forwarded } = makeWiring(":memory:");
+    insertSession(db, "s-live", "p-1");
+    handler({ sessionId: "s-live", seq: 1, at: "2026-11-10T09:00:00.000Z", type: "session_status", status: "running" });
+    const row = db.prepare("SELECT status FROM sessions WHERE id = 's-live'").get() as { status: string | null };
+    expect(row.status).toBe("running");
+    expect(forwarded).toHaveLength(1);
+  });
+});
+
 describe("SkillObservation → Engine 落库（#9 接线）", () => {
   it("verified design-feature（会话已挂项目）→ 自动建卡 REQ-001 归属项目 + 关联 session + stage_events 落库；事件仍转发 renderer", () => {
     const { db, engine, handler, forwarded } = makeWiring(":memory:");

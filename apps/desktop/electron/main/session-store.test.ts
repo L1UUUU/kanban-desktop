@@ -1,4 +1,4 @@
-// 用途：sessions 表 store 测试 —— 落库/列表过滤/状态与活跃时间更新/重启恢复（工单 #7 验收第 4/5 条）
+// 用途：sessions 表 store 测试 —— 落库/列表过滤/状态与活跃时间更新/重启恢复（工单 #7 验收第 4/5 条）；#58 起归档/取消归档/删除与未归档守卫（spec #57 D 节）
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -43,6 +43,7 @@ function makeRecord(partial: Partial<SessionRecord> = {}): SessionRecord {
     permMode: "auto",
     status: "idle",
     lastActiveAt: null,
+    archivedAt: null,
     ...partial,
   };
 }
@@ -77,6 +78,81 @@ describe("SessionStore", () => {
     const byId = new Map(reopened.list().map((s) => [s.id, s]));
     expect(byId.get("s-1")).toMatchObject({ nativeSessionId: "thread-abc", status: "waiting" });
     expect(byId.get("s-pty")).toMatchObject({ kind: "pty", nativeSessionId: null, projectId: null, permMode: null });
+    reopenedDb.close();
+  });
+});
+
+describe("SessionStore 归档/取消归档/删除（#58 spec #57 D 节）", () => {
+  it("archive：默认列表排除已归档；listArchived 返回归档时间；listAll 全量可见", () => {
+    const store = makeStore();
+    store.insert(makeRecord({ id: "s-1" }));
+    store.insert(makeRecord({ id: "s-2", projectId: "p-2" }));
+    store.archive("s-1", "2026-11-10T08:00:00.000Z");
+    // 默认列表：只剩未归档行（projectId 过滤同样排除已归档）
+    expect(store.list().map((r) => r.id)).toEqual(["s-2"]);
+    expect(store.list("p-1")).toEqual([]);
+    // 归档视图（设置面板）：含归档时间与展示字段
+    expect(store.listArchived()).toEqual([
+      expect.objectContaining({ id: "s-1", archivedAt: "2026-11-10T08:00:00.000Z", nativeSessionId: null, projectId: "p-1" }),
+    ]);
+    // 全量查询（退出收养/残留治理内部用）：归档行仍在
+    expect(store.listAll().map((r) => r.id).sort()).toEqual(["s-1", "s-2"]);
+  });
+
+  it("重复归档幂等：首次归档时间保留，不产生重复副作用", () => {
+    const store = makeStore();
+    store.insert(makeRecord());
+    store.archive("s-1", "2026-11-10T08:00:00.000Z");
+    store.archive("s-1", "2026-11-11T09:00:00.000Z"); // 重复归档：返回成功、时间不覆盖
+    expect(store.listArchived()[0].archivedAt).toBe("2026-11-10T08:00:00.000Z");
+    // 未知 id 归档同样安全（无行可写）
+    expect(() => store.archive("ghost", "2026-11-10T08:00:00.000Z")).not.toThrow();
+  });
+
+  it("unarchive：清归档标记、状态置 disconnected、刷新活跃时间、回默认列表", () => {
+    const store = makeStore();
+    store.insert(makeRecord({ status: "running" }));
+    store.archive("s-1", "2026-11-10T08:00:00.000Z");
+    store.unarchive("s-1", "2026-11-11T10:00:00.000Z");
+    const rec = store.list()[0];
+    expect(rec).toMatchObject({ id: "s-1", archivedAt: null, status: "disconnected", lastActiveAt: "2026-11-11T10:00:00.000Z" });
+    expect(store.listArchived()).toEqual([]);
+  });
+
+  it("重复取消归档幂等：未归档行不再改动（活跃时间不重置）", () => {
+    const store = makeStore();
+    store.insert(makeRecord({ lastActiveAt: "2026-11-01T00:00:00.000Z" }));
+    store.unarchive("s-1", "2026-11-11T10:00:00.000Z"); // 本就未归档：no-op
+    expect(store.list()[0]).toMatchObject({ archivedAt: null, status: "idle", lastActiveAt: "2026-11-01T00:00:00.000Z" });
+  });
+
+  it("守卫：已归档行的 updateStatus/touch 不写库（迟到事件不得复活归档行）", () => {
+    const store = makeStore();
+    store.insert(makeRecord({ status: "idle" }));
+    store.archive("s-1", "2026-11-10T08:00:00.000Z");
+    store.updateStatus("s-1", "running"); // 迟到 session_status
+    store.touch("s-1", "2026-11-12T00:00:00.000Z"); // 迟到 turn_started
+    expect(store.listArchived()[0]).toMatchObject({ status: "idle", lastActiveAt: null });
+  });
+
+  it("delete：删除行（全量与归档视图均不可见）；重复删除幂等；数据与 native_session_id 一并移除", () => {
+    const store = makeStore();
+    store.insert(makeRecord({ id: "s-1", nativeSessionId: "thread-abc" }));
+    store.archive("s-1", "2026-11-10T08:00:00.000Z");
+    store.delete("s-1");
+    expect(store.listAll()).toEqual([]);
+    expect(store.listArchived()).toEqual([]);
+    expect(() => store.delete("s-1")).not.toThrow(); // 幂等
+  });
+
+  it("重启读回：archived_at 随库文件往返（默认列表排除、归档视图可见）", () => {
+    const store = makeStore();
+    store.insert(makeRecord({ id: "s-1" }));
+    store.archive("s-1", "2026-11-10T08:00:00.000Z");
+    const reopenedDb = openDatabase(dbPath);
+    const reopened = new SessionStore(reopenedDb);
+    expect(reopened.list()).toEqual([]);
+    expect(reopened.listArchived()[0]).toMatchObject({ id: "s-1", archivedAt: "2026-11-10T08:00:00.000Z" });
     reopenedDb.close();
   });
 });
