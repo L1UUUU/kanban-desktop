@@ -1265,14 +1265,14 @@ describe("config:ipc 通道（#61 spec #57 配置链路：读 autoArchive 子集
   it("config:get 返回 autoArchive 子集（默认关/30；不携带项目/CLI 路径等其余配置字段）", async () => {
     const { handle, config } = makeConfigRouter();
     const res = await handle({ channel: "config:get" });
-    expect(res).toEqual({ ok: true, autoArchive: { enabled: false, days: 30 } });
+    expect(res).toEqual({ ok: true, autoArchive: { enabled: false, days: 30 }, lastScan: null });
     expect(config.autoArchive).toEqual({ enabled: false, days: 30 }); // 只读不写
   });
 
   it("config:set 合法值：先持久化再改内存 —— persist 收到完整配置（autoArchive 新值生效、currentProjectId 等其余字段原样保留）", async () => {
     const { handle, config, persisted } = makeConfigRouter();
     const res = await handle({ channel: "config:set", autoArchive: { enabled: true, days: 14 } });
-    expect(res).toEqual({ ok: true, autoArchive: { enabled: true, days: 14 } });
+    expect(res).toEqual({ ok: true, autoArchive: { enabled: true, days: 14 }, lastScan: null }); // 未注入扫描 → null
     expect(persisted.length).toBe(1);
     // persist 收到的是含新 autoArchive 的完整配置：与项目切换的写入互不覆盖（currentProjectId 不被清/不被越权值替换）
     expect(persisted[0]).toMatchObject({ currentProjectId: "p-1", autoArchive: { enabled: true, days: 14 } });
@@ -1316,6 +1316,87 @@ describe("config:ipc 通道（#61 spec #57 配置链路：读 autoArchive 子集
     const reloaded = loadConfig(configPath);
     expect(reloaded.autoArchive).toEqual({ enabled: true, days: 90 });
     expect(reloaded.currentProjectId).toBe("p-2");
+  });
+});
+
+describe("config:ipc × 自动归档引擎接线（#64 spec #57：保存成功后扫描 + 摘要反馈）", () => {
+  it("config:get 应答携带上次扫描摘要（getLastScan 注入的缓存；未扫描为 null）", async () => {
+    const config: AppConfig = { ...defaultConfig() };
+    let cached: { archived: number; failed: number } | null = { archived: 3, failed: 1 };
+    const handle = (raw: unknown) =>
+      handleConfigIpc({ getConfig: () => config, persist: () => undefined, getLastScan: () => cached }, raw);
+    expect(await handle({ channel: "config:get" })).toEqual({
+      ok: true,
+      autoArchive: { enabled: false, days: 30 },
+      lastScan: { archived: 3, failed: 1 },
+    });
+    cached = null;
+    expect(await handle({ channel: "config:get" })).toEqual({ ok: true, autoArchive: { enabled: false, days: 30 }, lastScan: null });
+  });
+
+  it("config:set 保存成功后触发扫描且读到更新后的新值：应答携带扫描摘要", async () => {
+    const config: AppConfig = { ...defaultConfig() };
+    const scans: AppConfig[] = [];
+    const handle = (raw: unknown) =>
+      handleConfigIpc(
+        {
+          getConfig: () => config,
+          persist: () => undefined,
+          onAutoArchiveSaved: async (c) => {
+            scans.push({ ...c });
+            return { archived: 2, failed: 0 };
+          },
+        },
+        raw,
+      );
+    const res = await handle({ channel: "config:set", autoArchive: { enabled: true, days: 14 } });
+    expect(res).toEqual({ ok: true, autoArchive: { enabled: true, days: 14 }, lastScan: { archived: 2, failed: 0 } });
+    expect(scans.length).toBe(1);
+    // 扫描时机在内存更新之后：读到的已是新 autoArchive（fault：若先扫后存则此断言红）
+    expect(scans[0]?.autoArchive).toEqual({ enabled: true, days: 14 });
+  });
+
+  it("写盘失败不触发扫描（保存未成功，无扫描副作用）", async () => {
+    const config: AppConfig = { ...defaultConfig() };
+    let scanCalls = 0;
+    const handle = (raw: unknown) =>
+      handleConfigIpc(
+        {
+          getConfig: () => config,
+          persist: () => {
+            throw new Error("EACCES");
+          },
+          onAutoArchiveSaved: async () => {
+            scanCalls += 1;
+            return { archived: 0, failed: 0 };
+          },
+        },
+        raw,
+      );
+    const res = await handle({ channel: "config:set", autoArchive: { enabled: true, days: 7 } });
+    expect(res.ok).toBe(false);
+    expect(scanCalls).toBe(0);
+  });
+
+  it("扫描抛错不改变保存成功的事实：应答仍 ok 且摘要 null、日志可查", async () => {
+    const config: AppConfig = { ...defaultConfig() };
+    const entries: Array<{ level: string; message: string }> = [];
+    const handle = (raw: unknown) =>
+      handleConfigIpc(
+        {
+          getConfig: () => config,
+          persist: () => undefined,
+          onAutoArchiveSaved: async () => {
+            throw new Error("扫描炸了");
+          },
+          log: (level, _scope, message) => entries.push({ level, message }),
+        },
+        raw,
+      );
+    const res = await handle({ channel: "config:set", autoArchive: { enabled: true, days: 7 } });
+    expect(res).toEqual({ ok: true, autoArchive: { enabled: true, days: 7 }, lastScan: null });
+    expect(config.autoArchive).toEqual({ enabled: true, days: 7 }); // 保存仍生效
+    expect(entries.some((e) => e.level === "error" && e.message.includes("扫描炸了"))).toBe(true);
   });
 });
 

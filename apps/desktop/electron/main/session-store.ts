@@ -16,19 +16,25 @@ export interface SessionRecord {
   lastActiveAt: string | null;
   /** #58 归档时间（NULL=未归档；spec #57 D 节） */
   archivedAt: string | null;
+  /** #64：创建时间（DB 默认生成，SELECT 读出携带；INSERT 可省略走默认。自动归档基准 COALESCE(last_active_at, created_at) 的回落数据源） */
+  createdAt?: string | null;
 }
 
+/** INSERT 列（created_at 走 DB 默认值不显式写入） */
 const COLS = "id, kind, cli, native_session_id, project_id, title, cwd, perm_mode, status, last_active_at, archived_at";
+/** SELECT 列（INSERT 列 + created_at） */
+const SELECT_COLS = `${COLS}, created_at`;
 
 /** sessions 表读写（INSERT 后状态流转经 updateStatus/touch 落库） */
 export class SessionStore {
   constructor(private readonly db: SqliteDb) {}
 
-  /** 新会话入库（id 为应用侧 uuid，由 Main 从 adapter.createSession 拿到后传入；新建恒未归档） */
+  /** 新会话入库（id 为应用侧 uuid，由 Main 从 adapter.createSession 拿到后传入；新建恒未归档；createdAt 可省略走 DB 默认当前时刻） */
   insert(rec: SessionRecord): void {
     this.db
       .prepare(
-        `INSERT INTO sessions (${COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        // created_at：显式值优先（测试/回填），缺省回落 DB 同款默认表达式（保持新库直建与老路径时间格式一致）
+        `INSERT INTO sessions (${SELECT_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))`,
       )
       .run(
         rec.id,
@@ -42,34 +48,35 @@ export class SessionStore {
         rec.status,
         rec.lastActiveAt,
         rec.archivedAt ?? null,
+        rec.createdAt ?? null,
       );
   }
 
   /** 默认列表（projectId 省略=全部，按 created_at 倒序：新会话在前；#58 起排除已归档行） */
   list(projectId?: string): SessionRecord[] {
     const filter = projectId ? "project_id = ?" : "1 = 1";
-    const sql = `SELECT ${COLS} FROM sessions WHERE archived_at IS NULL AND ${filter} ORDER BY created_at DESC, id`;
+    const sql = `SELECT ${SELECT_COLS} FROM sessions WHERE archived_at IS NULL AND ${filter} ORDER BY created_at DESC, id`;
     const rows = (projectId ? this.db.prepare(sql).all(projectId) : this.db.prepare(sql).all()) as unknown as Array<Record<string, unknown>>;
     return rows.map(rowToRecord);
   }
 
   /** 全量列表（含已归档；仅退出收养/残留治理等内部路径用，spec #57 D 节） */
   listAll(): SessionRecord[] {
-    const rows = this.db.prepare(`SELECT ${COLS} FROM sessions ORDER BY created_at DESC, id`).all() as unknown as Array<Record<string, unknown>>;
+    const rows = this.db.prepare(`SELECT ${SELECT_COLS} FROM sessions ORDER BY created_at DESC, id`).all() as unknown as Array<Record<string, unknown>>;
     return rows.map(rowToRecord);
   }
 
   /** 归档视图（设置面板用；按归档时间倒序，含归档时间展示字段） */
   listArchived(): SessionRecord[] {
     const rows = this.db
-      .prepare(`SELECT ${COLS} FROM sessions WHERE archived_at IS NOT NULL ORDER BY archived_at DESC, id`)
+      .prepare(`SELECT ${SELECT_COLS} FROM sessions WHERE archived_at IS NOT NULL ORDER BY archived_at DESC, id`)
       .all() as unknown as Array<Record<string, unknown>>;
     return rows.map(rowToRecord);
   }
 
   /** 单行查询（#16：事件泵按 sessionId 注入会话项目用；不存在返回 null） */
   get(id: string): SessionRecord | null {
-    const row = this.db.prepare(`SELECT ${COLS} FROM sessions WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
+    const row = this.db.prepare(`SELECT ${SELECT_COLS} FROM sessions WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
     return row ? rowToRecord(row) : null;
   }
 
@@ -115,5 +122,6 @@ function rowToRecord(r: Record<string, unknown>): SessionRecord {
     status: (r.status as SessionStatus | null) ?? null,
     lastActiveAt: (r.last_active_at as string | null) ?? null,
     archivedAt: (r.archived_at as string | null) ?? null,
+    createdAt: (r.created_at as string | null) ?? null,
   };
 }

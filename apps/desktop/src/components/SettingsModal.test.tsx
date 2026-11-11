@@ -19,11 +19,15 @@ function stubClipboard(): string[] {
   return writes;
 }
 
-/** config:set 应答：成功（生效值）或失败（写盘错误 message） */
-type SetReply = { ok: true; autoArchive: { enabled: boolean; days: number } } | { ok: false; message: string };
+/** config:set 应答：成功（生效值 + 可选扫描摘要）或失败（写盘错误 message） */
+type SetReply =
+  | { ok: true; autoArchive: { enabled: boolean; days: number }; lastScan?: { archived: number; failed: number } | null }
+  | { ok: false; message: string };
 
-/** fake 桥：invokeConfig 按 get 初始值 / setResults 队列应答，并记录全部请求（用例可随时向队列 push 追加应答） */
-function stubConfigApi(opts: { initial?: { enabled: boolean; days: number }; setResults?: SetReply[] } = {}): {
+/** fake 桥：invokeConfig 按 get 初始值（含可选 lastScan）/ setResults 队列应答，并记录全部请求（用例可随时向队列 push 追加应答） */
+function stubConfigApi(
+  opts: { initial?: { enabled: boolean; days: number }; lastScan?: { archived: number; failed: number } | null; setResults?: SetReply[] } = {},
+): {
   requests: unknown[];
   setResults: SetReply[];
 } {
@@ -34,11 +38,11 @@ function stubConfigApi(opts: { initial?: { enabled: boolean; days: number }; set
       requests.push(req);
       const channel = (req as { channel: string }).channel;
       if (channel === "config:get") {
-        return { ok: true, autoArchive: opts.initial ?? { enabled: false, days: 30 } };
+        return { ok: true, autoArchive: opts.initial ?? { enabled: false, days: 30 }, lastScan: opts.lastScan ?? null };
       }
       const r = setResults.shift();
       if (!r) throw new Error("未预置的 config:set 应答");
-      return r.ok ? { ok: true, autoArchive: r.autoArchive } : { ok: false, error: { code: "E_INTERNAL", message: r.message } };
+      return r.ok ? { ok: true, autoArchive: r.autoArchive, lastScan: r.lastScan ?? null } : { ok: false, error: { code: "E_INTERNAL", message: r.message } };
     },
   } as unknown as typeof window.api;
   return { requests, setResults };
@@ -124,13 +128,26 @@ describe("autoArchive 写（config:set）", () => {
     expect(screen.getByTestId("auto-archive-switch").getAttribute("aria-checked")).toBe("false");
   });
 
-  it("扫描反馈位：开关开启后显示占位说明（如实声明引擎未接入、暂不执行扫描——不误导）", async () => {
+  it("扫描反馈位（#64 接通）：开启后显示上次扫描结果（归档 N 条，失败另计）；无摘要时如实显示尚未扫描", async () => {
+    // 1) 打开即有缓存摘要（config:get 携带 lastScan）→ 显示归档条数与失败数
+    stubConfigApi({ initial: { enabled: true, days: 30 }, lastScan: { archived: 3, failed: 1 } });
+    render(<SettingsModal onClose={() => undefined} />);
+    await waitFor(() => expect(screen.getByTestId("auto-archive-feedback")).toBeTruthy());
+    expect(screen.getByTestId("auto-archive-feedback").textContent).toContain("归档 3 条");
+    expect(screen.getByTestId("auto-archive-feedback").textContent).toContain("1 条失败");
+    cleanup();
+    // 2) 保存成功应答携带新摘要 → 反馈即时更新（fault：若不接 set 载荷则保持旧值，断言红）
     const { setResults } = await openAndReady({ enabled: false, days: 30 });
     expect(screen.queryByTestId("auto-archive-feedback")).toBeNull(); // 关闭时不显示
-    setResults.push({ ok: true, autoArchive: { enabled: true, days: 30 } });
+    setResults.push({ ok: true, autoArchive: { enabled: true, days: 30 }, lastScan: { archived: 2, failed: 0 } });
     fireEvent.click(screen.getByTestId("auto-archive-switch"));
-    await waitFor(() => expect(screen.getByTestId("auto-archive-feedback")).toBeTruthy());
-    expect(screen.getByTestId("auto-archive-feedback").textContent).toContain("尚未接入");
+    await waitFor(() => expect(screen.getByTestId("auto-archive-feedback").textContent).toContain("归档 2 条"));
+    expect(screen.getByTestId("auto-archive-feedback").textContent).not.toContain("失败");
+    // 3) 开启但尚无摘要（主进程未扫描完成/未注入）→ 如实显示尚未扫描，不伪造数字
+    cleanup();
+    stubConfigApi({ initial: { enabled: true, days: 30 }, lastScan: null });
+    render(<SettingsModal onClose={() => undefined} />);
+    await waitFor(() => expect(screen.getByTestId("auto-archive-feedback").textContent).toContain("尚未扫描"));
   });
 });
 

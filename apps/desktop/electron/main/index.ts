@@ -1,4 +1,4 @@
-// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc/memory:ipc/diff:ipc/residue:ipc/config:ipc 路由）、CliHost 托管（utilityProcess 优先，进程内回退）与事件转发/状态落库、TrackerEngine（SkillObservation 落库 + 重启恢复）、PTY 终端宿主（node-pty，main 进程直接使用，t0-03 实证）、有序退出与残留进程检测一次性通知（#49 app:event）、#51 单实例锁（二次启动转发聚焦 + 持锁失败立即退出）、#53 日志地基（Logger 二实例守卫后创建 + 启动横幅 + 崩溃兜底 + 9 处 console 迁移 + log:getPath/log:openDir）、#54 worker {log} 消息与 CLI stderr 汇聚（onWorkerLog→worker source；进程内回退同目标）；初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
+// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc/memory:ipc/diff:ipc/residue:ipc/config:ipc 路由）、CliHost 托管（utilityProcess 优先，进程内回退）与事件转发/状态落库、TrackerEngine（SkillObservation 落库 + 重启恢复）、PTY 终端宿主（node-pty，main 进程直接使用，t0-03 实证）、有序退出与残留进程检测一次性通知（#49 app:event）、#51 单实例锁（二次启动转发聚焦 + 持锁失败立即退出）、#53 日志地基（Logger 二实例守卫后创建 + 启动横幅 + 崩溃兜底 + 9 处 console 迁移 + log:getPath/log:openDir）、#54 worker {log} 消息与 CLI stderr 汇聚（onWorkerLog→worker source；进程内回退同目标）；#64 自动归档引擎接线（启动后一次 + config:set 成功后经 onAutoArchiveSaved 触发，摘要缓存供设置区反馈）；初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -14,6 +14,7 @@ import {
   terminalEventSchema,
   trackerChangeSchema,
   type AppEventWire,
+  type AutoArchiveScanSummary,
   type MemoryEventWire,
   type ResidueProcess,
 } from "@kanban/ipc-schema";
@@ -27,6 +28,7 @@ import {
 } from "@kanban/cli-host";
 import { TrackerEngine, type TrackerChange } from "@kanban/tracker";
 import { defaultConfig, loadConfig, resolveEffectiveLevel, saveConfig, type AppConfig } from "./config";
+import { runAutoArchiveScan } from "./auto-archive";
 import { createAdapterEventHandler } from "./adapter-events";
 import { CliHostClient } from "./cli-host-client";
 import { SQLITE_ENTRY, openDatabase } from "./db";
@@ -384,11 +386,21 @@ app.whenReady().then(async () => {
 
   // #61（spec #57 配置链路）：config:ipc 单通道 —— 读 autoArchive 子集 / 写仅接受该子集并字段级合并进 appConfig 闭包对象
   //（先持久化成功再改内存；与 setCurrentProjectId 的全量写回共享同一对象，项目切换与设置保存互不覆盖）
+  // #64（spec #57）：保存成功后经 onAutoArchiveSaved 触发一次自动归档扫描（handler 不直接耦合引擎）；getLastScan 缓存跨打开周期反馈
+  let lastAutoArchiveScan: AutoArchiveScanSummary | null = null;
+  const runAutoArchive = async (): Promise<AutoArchiveScanSummary | null> => {
+    if (!appConfig.autoArchive.enabled) return null; // 默认关：零动作（不扫描不缓存，老数据不动）
+    const summary = await runAutoArchiveScan({ adapter, pty: ptyHost, sessions, log: logger.log }, appConfig.autoArchive);
+    lastAutoArchiveScan = summary;
+    return summary;
+  };
   ipcMain.handle("config:ipc", (_event, raw: unknown) =>
     handleConfigIpc(
       {
         getConfig: () => appConfig,
         persist: (config) => saveConfig(configPath, config),
+        onAutoArchiveSaved: runAutoArchive,
+        getLastScan: () => lastAutoArchiveScan,
         isShuttingDown: () => shutdown.isShuttingDown(),
         log: logger.log,
       },
@@ -459,6 +471,10 @@ app.whenReady().then(async () => {
   ipcMain.on("log:write", (_event, raw: unknown) => handleLogWrite(logger, raw));
 
   createWindow();
+
+  // #64（spec #57）：启动触发一次自动归档扫描 —— 恢复收养（adoptRestoredSessions）与全部依赖就绪后发起；
+  // 默认关零动作；不阻塞窗口创建；此后仅配置保存成功时再扫（无常驻定时器）
+  void runAutoArchive();
 
   // 残留检测一次性触发（窗口就绪后推送；无结果不推送任何事件 = 不打扰；renderer 挂载时的 residue:detect 拉取兜底覆盖窗口时序）
   mainWindow?.once("ready-to-show", () => {

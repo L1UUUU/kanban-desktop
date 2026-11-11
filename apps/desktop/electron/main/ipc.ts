@@ -1,5 +1,5 @@
 // 用途：Main 入站 IPC 路由 —— 单通道 kanban:ipc 强制 zod 校验 + 分发到 CliAdapter 与 projects/sessions store + PTY 宿主（纯函数无 Electron 依赖：dialog 与 config 经 deps 注入）
-// 行数评估（~660 行，超 500 行阈值）：app:getInfo + 五个 :ipc 通道（kanban/memory/diff/residue/config）的 handler 聚合是既有装配模式（共享单通道校验、deps 注入与 store 装配，拆开只搬文件不减耦合），本次不拆；触发条件：第六个 IPC 通道（或任一通道 handler 独立逻辑显著膨胀）加入时按通道拆分为独立模块。
+// 行数评估（~730 行，超 500 行阈值）：app:getInfo + 五个 :ipc 通道（kanban/memory/diff/residue/config）的 handler 聚合是既有装配模式（共享单通道校验、deps 注入与 store 装配，拆开只搬文件不减耦合），本次不拆；触发条件：第六个 IPC 通道（或任一通道 handler 独立逻辑显著膨胀）加入时按通道拆分为独立模块。
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import {
@@ -8,6 +8,7 @@ import {
   ipcRequestSchema,
   memoryRequestSchema,
   residueRequestSchema,
+  type AutoArchiveScanSummary,
   type ConfigResult,
   type DiffResult,
   type IpcRequest,
@@ -128,18 +129,10 @@ async function route(deps: IpcDeps, req: IpcRequest): Promise<IpcResult> {
       return { ok: true, sessions: deps.sessions.listArchived().map(toSessionRow) };
     }
     case "session:archive": {
-      // #58 归档编排（spec #57 D 节）：中断当前 turn（interruptTurn 幂等，无活动 turn 自然 no-op）→
-      // 受控终止单会话（PTY 用终端终止）→ 写归档标记；终止失败（进程已死等）不阻断归档；重复归档幂等（不重复编排）
-      const rec = deps.sessions.get(req.sessionId);
-      if (!rec) return sessionNotFound(req.sessionId);
-      if (rec.archivedAt == null) {
-        if (rec.kind === "pty") deps.pty.kill(rec.id);
-        else {
-          await bestEffort(() => deps.adapter.interruptTurn(rec.id), deps, `归档前中断失败（放行）：${rec.id}`);
-          await bestEffort(() => deps.adapter.dispose({ sessionId: rec.id }), deps, `归档终止失败（放行）：${rec.id}`);
-        }
-        deps.sessions.archive(rec.id, nowIso());
-      }
+      // #58 归档编排（spec #57 D 节）：与 #64 自动归档引擎共用 archiveSession 单一实现（中断→受控终止→写标记；终止失败不阻断；重复归档幂等）
+      const exists = deps.sessions.get(req.sessionId);
+      if (!exists) return sessionNotFound(req.sessionId);
+      await archiveSession(deps, req.sessionId);
       return { ok: true };
     }
     case "session:unarchive": {
@@ -393,12 +386,31 @@ function toSessionRow(rec: ReturnType<SessionStore["list"]>[number]): SessionRow
 }
 
 /** #58 归档编排的 best-effort 步骤：失败只记日志不阻断（进程已死等不应挡住归档） */
-async function bestEffort(fn: () => Promise<void>, deps: IpcDeps, context: string): Promise<void> {
+async function bestEffort(fn: () => Promise<void>, deps: Pick<IpcDeps, "log">, context: string): Promise<void> {
   try {
     await fn();
   } catch (err) {
     deps.log?.("warn", "kanban:ipc", `${context}：${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+/** #58/#64 单会话归档编排依赖子集（session:archive 通道与自动归档引擎共用同一实现） */
+export type ArchiveSessionDeps = Pick<IpcDeps, "adapter" | "pty" | "sessions" | "log">;
+
+/**
+ * 单会话归档编排（#58 session:archive 通道与 #64 自动归档引擎共用，不另起平行实现）：
+ * 未知/已归档会话 no-op（幂等，不重复编排）；中断当前 turn（interruptTurn 幂等，无活动 turn 自然 no-op）→
+ * 受控终止单会话（结构化 adapter.dispose / PTY 用终端终止）→ 写归档标记；终止/中断失败（进程已死等）best-effort 记 warn 放行
+ */
+export async function archiveSession(deps: ArchiveSessionDeps, sessionId: string): Promise<void> {
+  const rec = deps.sessions.get(sessionId);
+  if (!rec || rec.archivedAt != null) return;
+  if (rec.kind === "pty") deps.pty.kill(rec.id);
+  else {
+    await bestEffort(() => deps.adapter.interruptTurn(rec.id), deps, `归档前中断失败（放行）：${rec.id}`);
+    await bestEffort(() => deps.adapter.dispose({ sessionId: rec.id }), deps, `归档终止失败（放行）：${rec.id}`);
+  }
+  deps.sessions.archive(rec.id, nowIso());
 }
 
 /** #58 未知会话 → E_SESSION_NOT_FOUND（session:archive / session:unarchive 共用） */
@@ -662,6 +674,11 @@ export interface ConfigIpcDeps {
   getConfig(): AppConfig;
   /** 持久化完整配置（生产 = saveConfig 全量写回；抛错即写盘失败，新值不生效） */
   persist(config: AppConfig): void;
+  /** #64（spec #57）：配置保存成功后触发一次自动归档扫描（引擎由 index.ts 注入，handler 不直接耦合引擎；缺省不扫描供旧测试）。
+   *  在内存配置更新之后调用（扫描读到新值）；应答携带返回的摘要供设置区即时反馈 */
+  onAutoArchiveSaved?(config: AppConfig): Promise<AutoArchiveScanSummary | null>;
+  /** #64：上次扫描摘要缓存（index.ts 闭包；config:get 应答携带，跨打开周期保留；缺省 null=尚未扫描） */
+  getLastScan?(): AutoArchiveScanSummary | null;
   /** 退出序列门闸（true=正在退出，拒绝新请求；缺省恒 false 供测试） */
   isShuttingDown?(): boolean;
   /** #53 惯例：safeParse 失败与 persist 抛错记 error；缺省 no-op */
@@ -681,14 +698,24 @@ export async function handleConfigIpc(deps: ConfigIpcDeps, raw: unknown): Promis
   try {
     switch (parsed.data.channel) {
       case "config:get":
-        return { ok: true, autoArchive: deps.getConfig().autoArchive };
+        return { ok: true, autoArchive: deps.getConfig().autoArchive, lastScan: deps.getLastScan?.() ?? null };
       case "config:set": {
         const current = deps.getConfig();
         // 先持久化成功再改内存：persist 抛错进 catch（返回明确错误，内存对象未动，新值不生效）；
         // 写仅开放 autoArchive 子集 —— 持久化对象由内存配置字段级合并而来，项目/CLI 路径等其余字段不受请求影响
         deps.persist({ ...current, autoArchive: parsed.data.autoArchive });
         current.autoArchive = parsed.data.autoArchive;
-        return { ok: true, autoArchive: current.autoArchive };
+        // #64：保存成功后触发自动归档扫描（读到的已是新值）。扫描异常不改变「保存已成功」的事实——
+        // 记日志、摘要置 null，不落入下方 catch 谎报「保存失败」
+        let lastScan: AutoArchiveScanSummary | null = null;
+        if (deps.onAutoArchiveSaved) {
+          try {
+            lastScan = await deps.onAutoArchiveSaved(current);
+          } catch (err) {
+            deps.log?.("error", "config:ipc", `保存后自动归档扫描失败（配置已保存生效）：${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        return { ok: true, autoArchive: current.autoArchive, lastScan };
       }
     }
   } catch (err) {

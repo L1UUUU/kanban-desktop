@@ -1,6 +1,6 @@
-// 用途：设置面板 modal（#61 spec #57 / 原型 stage5 演示③）—— 日志区（两项动作平移自旧顶栏浮层）+ 会话自动归档区（开关/天数经 config:ipc 读写、扫描反馈占位）+ 已归档会话分区骨架（列表由 #63 填充，占位不渲染假数据）
+// 用途：设置面板 modal（#61 spec #57 / 原型 stage5 演示③）—— 日志区（两项动作平移自旧顶栏浮层）+ 会话自动归档区（开关/天数经 config:ipc 读写、#64 扫描结果反馈）+ 已归档会话分区骨架（列表由 #63 填充，占位不渲染假数据）
 import { useEffect, useState } from "react";
-import { AUTO_ARCHIVE_DAYS_BOUNDS, type AutoArchiveConfig } from "@kanban/ipc-schema";
+import { AUTO_ARCHIVE_DAYS_BOUNDS, type AutoArchiveConfig, type AutoArchiveScanSummary } from "@kanban/ipc-schema";
 import { copyText } from "../lib/copy-text";
 
 /** 「打开日志文件」：资源管理器中定位当前启动主日志文件（Main 侧 shell.showItemInFolder 主文件）；jsdom 无桥可选链降级 */
@@ -20,6 +20,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   // autoArchive=null = 初始值未加载（或桥不可用降级）；daysDraft 为天数输入框本地草稿（blur 时校验提交）；
   // unavailable 初始即按桥存在性判定（render 期同步可知，不在 effect 内同步 setState）
   const [autoArchive, setAutoArchive] = useState<AutoArchiveConfig | null>(null);
+  // #64：上次扫描摘要（config:get 缓存值 / config:set 成功应答即时更新；null=尚未扫描）
+  const [lastScan, setLastScan] = useState<AutoArchiveScanSummary | null>(null);
   const [daysDraft, setDaysDraft] = useState("30");
   const [unavailable, setUnavailable] = useState(() => !window.api);
   const [error, setError] = useState<string | null>(null);
@@ -36,6 +38,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         if (r.ok) {
           setAutoArchive(r.autoArchive);
           setDaysDraft(String(r.autoArchive.days));
+          setLastScan(r.lastScan ?? null);
         } else {
           setUnavailable(true);
           setError(`读取设置失败：${r.error.message}`);
@@ -47,7 +50,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
     };
   }, []);
 
-  /** 保存 autoArchive（config:set）：按应答更新生效态 —— 失败时旧值保持（新值不生效，UI 与主进程不分叉） */
+  /** 保存 autoArchive（config:set）：按应答更新生效态与扫描反馈 —— 失败时旧值保持（新值不生效，UI 与主进程不分叉） */
   const save = async (next: AutoArchiveConfig): Promise<void> => {
     if (busy) return;
     setBusy(true);
@@ -57,6 +60,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
     if (r?.ok) {
       setAutoArchive(r.autoArchive);
       setDaysDraft(String(r.autoArchive.days));
+      setLastScan(r.lastScan ?? null);
     } else {
       setError(r && !r.ok ? r.error.message : "保存失败：设置服务不可用");
     }
@@ -155,10 +159,12 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                 <div className="py-1 text-[11px] leading-relaxed text-fg-faint">
                   默认关闭；启动时与修改设置时扫描。跳过正在运行 / 等待审批 / 进程仍存活的会话（含空闲终端）；已归档会话不计入。取消归档会重置活跃时间。
                 </div>
-                {/* 扫描结果反馈位：#64 接入自动归档引擎后在此显示真实扫描结果；当前如实声明未接入，不伪造「已扫描」 */}
+                {/* #64 扫描结果反馈位：显示上次扫描摘要（get 缓存跨打开周期保留 / set 应答即时更新）；无摘要如实声明，不伪造数字 */}
                 {autoArchive.enabled ? (
                   <div data-testid="auto-archive-feedback" className="py-1 text-[11px] text-fg-faint">
-                    自动归档引擎尚未接入：设置已保存，当前版本暂不会执行扫描；接入后扫描结果将显示于此。
+                    {lastScan
+                      ? `上次扫描：归档 ${lastScan.archived} 条会话${lastScan.failed > 0 ? `，${lastScan.failed} 条失败（详见日志）` : ""}。`
+                      : "尚未扫描：应用启动或保存设置时将执行一次扫描。"}
                   </div>
                 ) : null}
               </>

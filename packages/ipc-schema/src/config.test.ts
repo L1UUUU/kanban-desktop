@@ -35,10 +35,26 @@ describe("configRequestSchema（config:ipc 二请求联合）", () => {
   });
 });
 
-describe("configResultSchema（结果只携带 autoArchive 子集）", () => {
-  it("成功形态：ok:true + autoArchive（get/set 共用；读写均只回该子集，不暴露项目/CLI 路径等其余配置字段）", () => {
-    const ok = configResultSchema.parse({ ok: true, autoArchive: { enabled: true, days: 7 } });
-    expect(ok).toEqual({ ok: true, autoArchive: { enabled: true, days: 7 } });
+describe("configResultSchema（结果只携带 autoArchive 子集 + 扫描摘要）", () => {
+  it("成功形态：ok:true + autoArchive + lastScan（get/set 共用；读写均只回该子集，不暴露项目/CLI 路径等其余配置字段）", () => {
+    const ok = configResultSchema.parse({ ok: true, autoArchive: { enabled: true, days: 7 }, lastScan: null });
+    expect(ok).toEqual({ ok: true, autoArchive: { enabled: true, days: 7 }, lastScan: null });
+    const scanned = configResultSchema.parse({
+      ok: true,
+      autoArchive: { enabled: true, days: 7 },
+      lastScan: { archived: 2, failed: 1 },
+    });
+    expect(scanned).toEqual({ ok: true, autoArchive: { enabled: true, days: 7 }, lastScan: { archived: 2, failed: 1 } });
+  });
+
+  it("lastScan 缺失或形状非法（负数/非整数）被拒绝（#64 摘要为必携字段）", () => {
+    expect(() => configResultSchema.parse({ ok: true, autoArchive: { enabled: true, days: 7 } })).toThrow();
+    expect(() =>
+      configResultSchema.parse({ ok: true, autoArchive: { enabled: true, days: 7 }, lastScan: { archived: -1, failed: 0 } }),
+    ).toThrow();
+    expect(() =>
+      configResultSchema.parse({ ok: true, autoArchive: { enabled: true, days: 7 }, lastScan: { archived: 1.5, failed: 0 } }),
+    ).toThrow();
   });
 
   it("失败形态：ok:false + error（code/message，写盘失败与入站非法共用 IPC 错误信封）", () => {

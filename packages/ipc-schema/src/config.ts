@@ -12,6 +12,15 @@ export const autoArchiveConfigSchema = z.object({
 });
 export type AutoArchiveConfig = z.infer<typeof autoArchiveConfigSchema>;
 
+/** #64：上次自动归档扫描摘要（主进程缓存；config:get/成功 set 应答携带，设置区反馈位数据源） */
+export const autoArchiveScanSummarySchema = z.object({
+  /** 本次扫描实际归档条数 */
+  archived: z.number().int().min(0),
+  /** 归档失败条数（单条失败不影响其余，日志可查） */
+  failed: z.number().int().min(0),
+});
+export type AutoArchiveScanSummary = z.infer<typeof autoArchiveScanSummarySchema>;
+
 // config:ipc 请求单通道联合（读 = 全量 autoArchive 子集；写 = 仅接受该子集，多余字段被剥离不落 config）
 export const configRequestSchema = z.discriminatedUnion("channel", [
   /** 读取当前 autoArchive 配置（设置面板打开时拉取初始值） */
@@ -27,9 +36,9 @@ const configIpcErrorSchema = z.object({
   error: z.object({ code: errorCodeSchema, message: z.string() }),
 });
 
-// config:ipc 结果：成功（autoArchive 生效子集，get/set 共用）∪ IPC 错误信封（写盘失败新值不生效时 set 亦回此形态）
+// config:ipc 结果：成功（autoArchive 生效子集 + lastScan 上次扫描摘要，get/set 共用；null=尚未扫描）∪ IPC 错误信封（写盘失败新值不生效时 set 亦回此形态）
 export const configResultSchema = z.union([
-  z.object({ ok: z.literal(true), autoArchive: autoArchiveConfigSchema }),
+  z.object({ ok: z.literal(true), autoArchive: autoArchiveConfigSchema, lastScan: autoArchiveScanSummarySchema.nullable() }),
   configIpcErrorSchema,
 ]);
 export type ConfigResult = z.infer<typeof configResultSchema>;

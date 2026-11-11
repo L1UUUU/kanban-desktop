@@ -1,0 +1,89 @@
+// 用途：自动归档引擎（#64 spec #57）—— 判定为纯函数（会话集合 + 配置 + 当前时间 → 待归档 id 列表，便于密封测试）+ 执行器（逐条容错 allSettled 全部尝试，参照退出序列范式；复用 session:archive 同一归档编排，不另起平行实现）+ 扫描摘要（设置区反馈数据源）
+import type { AutoArchiveConfig, AutoArchiveScanSummary, SessionStatus } from "@kanban/ipc-schema";
+import { archiveSession, type ArchiveSessionDeps } from "./ipc";
+
+/** 判定输入行：store 全量记录的判定面投影（processAlive 由执行器按 kind 计算，判定本身不依赖宿主） */
+export interface AutoArchiveCandidate {
+  id: string;
+  kind: "structured" | "pty";
+  status: SessionStatus | null;
+  lastActiveAt: string | null;
+  createdAt: string | null;
+  archivedAt: string | null;
+  /** 底层进程存活（PTY=宿主 isRunning；结构化=本运行内句柄仍在即 status≠disconnected）——正开着的空闲终端亦为 true */
+  processAlive: boolean;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * 判定纯函数（spec #57 D 节）：默认关恒空；跳过 已归档 / 运行中 / 等待审批 / 底层进程存活；
+ * 超期基准 COALESCE(last_active_at, created_at)，距基准满 N 天（含整点）即待归档；基准不可解析保守跳过
+ */
+export function selectAutoArchiveIds(
+  sessions: readonly AutoArchiveCandidate[],
+  config: AutoArchiveConfig,
+  now: Date,
+): string[] {
+  if (!config.enabled) return [];
+  const cutoffMs = config.days * DAY_MS;
+  const ids: string[] = [];
+  for (const s of sessions) {
+    if (s.archivedAt != null) continue;
+    if (s.status === "running" || s.status === "waiting") continue;
+    if (s.processAlive) continue;
+    const basis = Date.parse(s.lastActiveAt ?? s.createdAt ?? "");
+    if (Number.isNaN(basis)) continue;
+    if (now.getTime() - basis >= cutoffMs) ids.push(s.id);
+  }
+  return ids;
+}
+
+/** 执行器依赖 = 单会话归档编排所需子集（index.ts 从装配现场传入，测试纯注入） */
+export type AutoArchiveEngineDeps = ArchiveSessionDeps;
+
+/**
+ * 执行一次扫描（触发点 = 应用启动后 + 配置保存成功后，均由 index.ts 调用，无常驻定时器）：
+ * 默认关零动作（不读库、老数据不动）；判定 → 逐条归档（allSettled 单条失败不影响其余，失败记 error 日志）
+ * → 命中时记完成摘要日志；引擎自身不抛错（意外异常记 error 返回零摘要，不打断启动/保存链路）
+ */
+export async function runAutoArchiveScan(
+  deps: AutoArchiveEngineDeps,
+  config: AutoArchiveConfig,
+  now: Date = new Date(),
+): Promise<AutoArchiveScanSummary> {
+  if (!config.enabled) return { archived: 0, failed: 0 };
+  try {
+    const candidates: AutoArchiveCandidate[] = deps.sessions.listAll().map((r) => ({
+      id: r.id,
+      kind: r.kind,
+      status: r.status,
+      lastActiveAt: r.lastActiveAt,
+      createdAt: r.createdAt ?? null,
+      archivedAt: r.archivedAt,
+      // 底层进程存活判定：PTY 用宿主 isRunning（权威，DB 状态可能滞后）；结构化以 DB 状态投影（disconnected=进程不在，其余=本运行内句柄仍在=使用中）
+      processAlive: r.kind === "pty" ? deps.pty.isRunning(r.id) : r.status != null && r.status !== "disconnected",
+    }));
+    const targets = selectAutoArchiveIds(candidates, config, now);
+    // 逐条容错（参照退出序列 allSettled 范式）：busy/存活已被判定排除，无需 interrupt 后的有限等待
+    const results = await Promise.allSettled(targets.map((id) => archiveSession(deps, id)));
+    let archived = 0;
+    let failed = 0;
+    results.forEach((r, i) => {
+      if (r.status === "fulfilled") {
+        archived += 1;
+      } else {
+        failed += 1;
+        deps.log?.("error", "auto-archive", `归档失败（其余继续）：${targets[i]} ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`);
+      }
+    });
+    if (targets.length > 0) {
+      deps.log?.("info", "auto-archive", `自动归档扫描完成：命中 ${targets.length} 条，归档 ${archived} 条，失败 ${failed} 条`);
+    }
+    return { archived, failed };
+  } catch (err) {
+    // 意外异常（如 DB 读失败）：不抛错（触发点在启动/保存链路上），记 error 返回零摘要
+    deps.log?.("error", "auto-archive", `自动归档扫描异常：${err instanceof Error ? err.message : String(err)}`);
+    return { archived: 0, failed: 0 };
+  }
+}
