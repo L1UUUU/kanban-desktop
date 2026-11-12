@@ -17,12 +17,16 @@ export interface ComposerTextareaProps {
   cwd: string | null;
   disabled?: boolean;
   rows?: number;
+  /** #85 高度控制：内联高度透传到 textarea */
+  style?: React.CSSProperties;
+  /** 覆盖缺省类名（#85 高度控制态传入自身类名；缺省含 min-h-[46px]） */
+  className?: string;
   /** 选中命令回调（#92 执行接线数据面） */
   onAcceptCommand?(cmd: MenuCommand): void;
 }
 
 /** composer 输入框 + 斜杠补全菜单（菜单绝对定位于输入框上方；焦点永不离输入框） */
-export function ComposerTextarea({ value, onChange, commands, cli, cwd, disabled = false, rows = 2, onAcceptCommand }: ComposerTextareaProps) {
+export function ComposerTextarea({ value, onChange, commands, cli, cwd, disabled = false, rows = 2, style, className, onAcceptCommand }: ComposerTextareaProps) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const slash = useSlashMenu({ value, onChange, source: commands, cli, cwd, disabled, onAcceptCommand, textareaRef });
   return (
@@ -38,7 +42,8 @@ export function ComposerTextarea({ value, onChange, commands, cli, cwd, disabled
         onCompositionStart={slash.onCompositionStart}
         onCompositionEnd={slash.onCompositionEnd}
         onSelect={slash.onSelect}
-        className="min-h-[46px] w-full resize-none bg-transparent text-[13px] outline-none placeholder:text-fg-faint disabled:text-muted-foreground"
+        style={style}
+        className={className ?? "min-h-[46px] w-full resize-none bg-transparent text-[13px] outline-none placeholder:text-fg-faint disabled:text-muted-foreground"}
       />
       {slash.menu.open ? (
         <SlashMenu items={slash.menu.items} highlight={slash.menu.highlight} onHover={slash.menu.onHover} onAccept={slash.menu.onAccept} />

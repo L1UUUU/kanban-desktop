@@ -1,9 +1,10 @@
-// 用途：composer 输入区 —— 统一容器聚焦高亮、权限档位 chip（三档带说明）+ 模型 combobox（真实目录/恢复会话派生显示）、发送 ↔ 停止态切换（原型一致项 6/7；文案硬约束；#59 起权限/模型控件与草稿面板共享 ComposerControls；#90 输入框带斜杠补全菜单）
+// 用途：composer 输入区 —— 统一容器聚焦高亮、权限档位 chip（三档带说明）+ 模型 combobox（真实目录/恢复会话派生显示）、发送 ↔ 停止态切换（原型一致项 6/7；文案硬约束；#59 起权限/模型控件与草稿面板共享 ComposerControls；#85 起上缘可拖拽调高（与 DraftPane 共享同一持久化偏好）；#90 输入框带斜杠补全菜单）
 import { useState } from "react";
 import type { CliKind, PermMode } from "@kanban/ipc-schema";
 import type { SessionView } from "../chat-store";
 import type { ModelCatalog } from "../model-catalog";
 import type { ComposerCommandSource } from "../composer-command-source";
+import { useComposerPanelHeight } from "../../../lib/use-panel-size";
 import { PermChip } from "./ComposerControls";
 import { ComposerTextarea } from "./ComposerTextarea";
 import { ModelCombobox } from "./ModelCombobox";
@@ -28,6 +29,8 @@ export function Composer({
   actions: ComposerActions;
 }) {
   const [text, setText] = useState("");
+  // #85 输入框高度（与草稿 DraftPane 共享 key：两态联动为预期行为）
+  const composer = useComposerPanelHeight();
   const running = session.status === "running";
   // #79：模型切换在 turn 进行中（含审批待决 waiting）被禁用——main 侧同语义校验拒绝
   const busy = running || session.status === "waiting";
@@ -39,7 +42,15 @@ export function Composer({
   };
 
   return (
-    <footer className="border-t border-border bg-card px-6 pb-4 pt-3">
+    <footer className="relative border-t border-border bg-card px-6 pb-4 pt-3">
+      {/* #85 输入框上缘拖拽把手（footer 顶边全宽命中区） */}
+      <div
+        data-testid="composer-resize-handle"
+        className={`absolute inset-x-0 top-0 z-10 h-1.5 cursor-row-resize select-none hover:bg-primary/25 focus-visible:bg-primary/40 ${
+          composer.dragging ? "bg-primary/40" : ""
+        }`}
+        {...composer.handleProps}
+      />
       <div className="mx-auto max-w-[860px] rounded-[14px] border border-border bg-muted px-3.5 pb-2 pt-2.5 transition-colors focus-within:border-primary">
         <ComposerTextarea
           value={text}
@@ -48,6 +59,8 @@ export function Composer({
           cli={session.cli as CliKind}
           cwd={session.cwd}
           disabled={running}
+          style={{ height: Math.round(composer.size) }}
+          className="w-full resize-none bg-transparent text-[13px] outline-none placeholder:text-fg-faint disabled:text-muted-foreground"
         />
         <div className="mt-2 flex items-center gap-2">
           {/* 权限档位 chip + 下拉菜单（三档带说明） */}

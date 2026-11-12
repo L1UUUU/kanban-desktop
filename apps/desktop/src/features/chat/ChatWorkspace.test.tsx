@@ -1,7 +1,7 @@
 // 用途：聊天区组件测试（spec Testing seam 4）—— FakeAdapter 事件流直连驱动真实组件：流式/工具卡/审批三键/取消/权限切换/切会话不中断/项目注册与重启恢复（对照原型一致项 2/3/5/6/7）
 /// <reference types="node" /> <!-- 本文件用 node:fs/os/path 建持久化 fixture（重启恢复用例） -->
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -2102,5 +2102,95 @@ describe("斜杠补全菜单（#90：草稿态/会话态输入框接菜单，命
     fireEvent.change(box, { target: { value: "/", selectionStart: 1 } });
     await waitFor(() => expect(screen.getByTestId("slash-menu")).toBeTruthy());
     expect(screen.getAllByTestId("slash-menu-item").some((el) => (el.textContent ?? "").includes("/fake-skill"))).toBe(true);
+  });
+});
+
+describe("面板拖拽接线（#85：侧栏宽度/输入框高度）", () => {
+  // rAF 帧队列（确定性驱动帧合并；仅本套桩，afterEach 还原）
+  let frames: FrameRequestCallback[] = [];
+  const flushFrame = (): void => {
+    const cb = frames.shift();
+    if (cb) act(() => cb(0));
+  };
+
+  beforeEach(() => {
+    frames = [];
+    window.localStorage.clear();
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      frames.push(cb);
+      return frames.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (handle: number) => void handle);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    cleanup();
+    for (const db of openDbs.splice(0)) db.close();
+  });
+
+  it("侧栏把手拖拽：grid 首列宽随提交变化并持久化；拖拽中 Esc 回滚", async () => {
+    const t = mount();
+    await t.flush();
+    const handle = screen.getByTestId("sidebar-resize-handle");
+    expect(handle.getAttribute("role")).toBe("separator");
+    expect(handle.getAttribute("aria-label")).toBe("拖拽调整侧栏宽度");
+    const grid = document.querySelector("aside")!.parentElement!;
+    expect(grid.style.gridTemplateColumns).toContain("240px"); // 既有 240px 锚点经变量驱动
+
+    // 向右拖 100px → 340（提交 + 持久化）
+    act(() => {
+      fireEvent.pointerDown(handle, { button: 0, pointerId: 7, clientX: 240 });
+      fireEvent.pointerMove(handle, { pointerId: 7, clientX: 340 });
+    });
+    flushFrame();
+    expect(grid.style.gridTemplateColumns).toContain("340px"); // 预览即时跟随
+    act(() => {
+      fireEvent.pointerUp(handle, { pointerId: 7, clientX: 340 });
+    });
+    expect(grid.style.gridTemplateColumns).toContain("340px");
+    expect(window.localStorage.getItem("kanban.panel.sidebarWidth")).toBe("340");
+
+    // 拖拽中 Esc：回到拖拽前尺寸且不写存储
+    act(() => {
+      fireEvent.pointerDown(handle, { button: 0, pointerId: 8, clientX: 340 });
+      fireEvent.pointerMove(handle, { pointerId: 8, clientX: 500 });
+    });
+    flushFrame();
+    act(() => {
+      fireEvent.keyDown(handle, { key: "Escape" });
+    });
+    expect(grid.style.gridTemplateColumns).toContain("340px");
+    expect(window.localStorage.getItem("kanban.panel.sidebarWidth")).toBe("340");
+  });
+
+  it("输入框高度：草稿态拖拽增高持久化；发首条消息后会话 Composer 读同一偏好（两态联动）", async () => {
+    const t = mount();
+    await t.flush();
+    await screen.findByTestId("draft-hint"); // boot 演示草稿（Fake 链路）
+    const handle = screen.getByTestId("composer-resize-handle");
+    expect(handle.getAttribute("role")).toBe("separator");
+    const draftBox = screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…") as HTMLTextAreaElement;
+    expect(draftBox.style.height).toBe("46px"); // 默认高与既有 rows=2 视觉一致
+
+    // 向上拖 54px → 100（sign=-1：上拖增高）
+    act(() => {
+      fireEvent.pointerDown(handle, { button: 0, pointerId: 3, clientY: 500 });
+      fireEvent.pointerMove(handle, { pointerId: 3, clientY: 446 });
+    });
+    flushFrame();
+    expect(draftBox.style.height).toBe("100px");
+    act(() => {
+      fireEvent.pointerUp(handle, { pointerId: 3, clientY: 446 });
+    });
+    expect(window.localStorage.getItem("kanban.panel.composerHeight")).toBe("100");
+
+    // 草稿发首条 → 会话态 Composer 挂载，输入框高从同一持久化偏好恢复
+    send("首条消息（驱动草稿转会话）");
+    await waitFor(() => {
+      const sessionBox = screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…") as HTMLTextAreaElement;
+      expect(sessionBox.style.height).toBe("100px");
+    });
+    await t.flush();
   });
 });

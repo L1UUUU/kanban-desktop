@@ -5,6 +5,8 @@ import { Sidebar } from "../../components/Sidebar";
 import type { ProjectsController } from "../projects/use-projects";
 import type { ChatTransport } from "../../lib/kanban-api";
 import type { AppView } from "../../lib/app-view";
+import { PANEL_SIZE_KEYS, SIDEBAR_DEFAULT_WIDTH, sidebarWidthBounds } from "../../lib/panel-resize";
+import { usePanelSize, useViewportSize } from "../../lib/use-panel-size";
 import { ChatPane } from "./ChatPane";
 import { DraftPane } from "./components/DraftPane";
 import { detectMainRepoConflict } from "./conflict";
@@ -90,8 +92,19 @@ export function ChatWorkspace({
     if (r.ok) onSetView?.("chat"); // 草稿在中央区：从看板/记忆等视图发起时带回
   };
 
+  // #85 侧栏宽度拖拽：视口联动上限（min(固定上限, 视口宽 − 中央区最小宽)），偏好持久化到 renderer localStorage
+  const viewport = useViewportSize();
+  const sidebar = usePanelSize({
+    storageKey: PANEL_SIZE_KEYS.sidebarWidth,
+    axis: "x",
+    sign: 1, // 向右拖加宽
+    bounds: sidebarWidthBounds(viewport.width),
+    defaultSize: SIDEBAR_DEFAULT_WIDTH,
+    ariaLabel: "拖拽调整侧栏宽度",
+  });
+
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-[240px_1fr]">
+    <div className="grid min-h-0 flex-1" style={{ gridTemplateColumns: `${Math.round(sidebar.size)}px 6px 1fr` }}>
       <Sidebar
         projects={projects.projects}
         currentProjectId={projects.currentProjectId}
@@ -130,6 +143,14 @@ export function ChatWorkspace({
             {sidebarFooter}
           </>
         }
+      />
+      {/* #85 侧栏宽度拖拽把手（grid 中列，指针捕获/rAF/Esc 回滚/双击复位/键盘步进见 use-panel-size） */}
+      <div
+        data-testid="sidebar-resize-handle"
+        className={`h-full w-1.5 cursor-col-resize select-none hover:bg-primary/25 focus-visible:bg-primary/40 ${
+          sidebar.dragging ? "bg-primary/40" : ""
+        }`}
+        {...sidebar.handleProps}
       />
       {view === "kanban" ? (
         <KanbanWorkspace
