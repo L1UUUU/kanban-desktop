@@ -31,8 +31,19 @@ export function createDesktopAdapterFactory(options: DesktopAdapterFactoryOption
   const fakeFailResumeFirst = Number(process.env.KANBAN_FAKE_RESUME_FAIL_FIRST ?? "") || 0;
   // #46 e2e 支撑：前 N 次创建抛 E_SPAWN_NOT_FOUND（整机 Playwright 驱动侧栏 spawn 失败卡；env 逐级继承到 worker，生产不设即关闭）
   const fakeFailCreateFirst = Number(process.env.KANBAN_FAKE_CREATE_FAIL_FIRST ?? "") || 0;
+  // #81 e2e 支撑（spec #75）：模型链路注入——listModels 延迟（观察 combobox 加载阻塞）/ 前 N 次拉取失败（失败态手输兜底）/ 前 N 次切换失败（回滚）
+  const fakeModelsDelayMs = Number(process.env.KANBAN_FAKE_MODELS_DELAY_MS ?? "") || 0;
+  const fakeFailModelsFirst = Number(process.env.KANBAN_FAKE_MODELS_FAIL_FIRST ?? "") || 0;
+  const fakeFailSetModelFirst = Number(process.env.KANBAN_FAKE_SETMODEL_FAIL_FIRST ?? "") || 0;
   const makeFake = (): FakeAdapter =>
-    new FakeAdapter({ resumeDelayMs: fakeResumeDelayMs, failResumeFirst: fakeFailResumeFirst, failCreateFirst: fakeFailCreateFirst });
+    new FakeAdapter({
+      resumeDelayMs: fakeResumeDelayMs,
+      failResumeFirst: fakeFailResumeFirst,
+      failCreateFirst: fakeFailCreateFirst,
+      modelsDelayMs: fakeModelsDelayMs,
+      failModelsFirst: fakeFailModelsFirst,
+      failSetModelFirst: fakeFailSetModelFirst,
+    });
   return (cli: string): CliAdapter => {
     if (cli === "codex") {
       if (disableCodex) return makeFake();

@@ -340,3 +340,27 @@ describe("FakeAdapter：setModel no-op 存储（issue #79 / spec #75）", () => 
     await expect(adapter.setModel({ sessionId: "s-nope", model: "x" })).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
   });
 });
+
+describe("FakeAdapter：模型链路 e2e 注入钩子（issue #81 / spec #75 整机 Playwright 支撑）", () => {
+  it("failModelsFirst=N：前 N 次 listModels 抛 E_SPAWN_NOT_FOUND（驱动 combobox 拉取失败态），此后正常返回", async () => {
+    const adapter = new FakeAdapter({ clock: new VirtualClock(), failModelsFirst: 1 });
+    await expect(adapter.listModels({ cwd: "C:\\demo" })).rejects.toMatchObject({ code: "E_SPAWN_NOT_FOUND" });
+    await expect(adapter.listModels({ cwd: "C:\\demo" })).resolves.toHaveLength(2);
+  });
+
+  it("failSetModelFirst=N：前 N 次 setModel 抛 AdapterError 且消息含模型名（驱动切换失败回滚），此后成功", async () => {
+    const adapter = new FakeAdapter({ clock: new VirtualClock(), failSetModelFirst: 1 });
+    const { sessionId } = await adapter.createSession({ cwd: "C:\\demo", model: "fake-standard" });
+    const fail = await adapter.setModel({ sessionId, model: "fake-lite" }).catch((e: unknown) => e);
+    expect(fail).toMatchObject({ code: "E_INTERNAL" });
+    expect(fail instanceof Error && fail.message.includes("fake-lite")).toBe(true); // 消息含模型名（错误卡原文展示）
+    await expect(adapter.setModel({ sessionId, model: "fake-lite" })).resolves.toEqual({ model: "fake-lite" });
+  });
+
+  it("failCreateFirst 注入消息携带收到的 model（整机 e2e「默认选中真实下发」见证：失败卡原文含模型 id）", async () => {
+    const adapter = new FakeAdapter({ clock: new VirtualClock(), failCreateFirst: 1 });
+    const fail = await adapter.createSession({ cwd: "C:\\demo", model: "fake-standard" }).catch((e: unknown) => e);
+    expect(fail).toMatchObject({ code: "E_SPAWN_NOT_FOUND" });
+    expect(fail instanceof Error && fail.message.includes("fake-standard")).toBe(true); // 收到的 model 出现在消息里
+  });
+});

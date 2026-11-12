@@ -55,6 +55,12 @@ export interface FakeAdapterOptions {
   failResumeFirst?: number;
   /** #46 e2e 支撑：前 N 次 createSession 抛 E_SPAWN_NOT_FOUND（整机 Playwright 驱动侧栏 spawn 失败卡；缺省 0 不注入） */
   failCreateFirst?: number;
+  /** #81 e2e 支撑：listModels 前置注入延迟毫秒（整机 Playwright 观察 combobox 加载阻塞态；缺省 0） */
+  modelsDelayMs?: number;
+  /** #81 e2e 支撑：前 N 次 listModels 抛 E_SPAWN_NOT_FOUND（整机 Playwright 驱动 combobox 拉取失败态；缺省 0 不注入） */
+  failModelsFirst?: number;
+  /** #81 e2e 支撑：前 N 次 setModel 抛 AdapterError（整机 Playwright 驱动中途切换失败回滚；缺省 0 不注入） */
+  failSetModelFirst?: number;
 }
 
 /** 全能力 Fake：UI 不隐藏任何控件（spec B capabilities 语义） */
@@ -80,8 +86,13 @@ export class FakeAdapter implements CliAdapter {
   private readonly resumeDelayMs: number;
   private readonly failResumeFirst: number;
   private readonly failCreateFirst: number;
+  private readonly modelsDelayMs: number;
+  private readonly failModelsFirst: number;
+  private readonly failSetModelFirst: number;
   private resumeCalls = 0;
   private createCalls = 0;
+  private listModelsCalls = 0;
+  private setModelCalls = 0;
   private readonly sessions = new Map<string, SessionState>();
   private readonly handlers = new Set<(event: AdapterEvent) => void>();
 
@@ -92,13 +103,20 @@ export class FakeAdapter implements CliAdapter {
     this.resumeDelayMs = options.resumeDelayMs ?? 0;
     this.failResumeFirst = options.failResumeFirst ?? 0;
     this.failCreateFirst = options.failCreateFirst ?? 0;
+    this.modelsDelayMs = options.modelsDelayMs ?? 0;
+    this.failModelsFirst = options.failModelsFirst ?? 0;
+    this.failSetModelFirst = options.failSetModelFirst ?? 0;
   }
 
   async createSession(init: CreateSessionInput): Promise<{ sessionId: string; model?: string | null }> {
     // #46 e2e 注入：前 N 次创建抛 spawn 失败（协议级 E_SPAWN_NOT_FOUND，与真实 exe 解析失败同码）
     this.createCalls += 1;
     if (this.createCalls <= this.failCreateFirst) {
-      throw new AdapterError("E_SPAWN_NOT_FOUND", `未找到 CLI 可执行文件（FakeAdapter 注入：failCreateFirst=${this.failCreateFirst}，演示 spawn 失败）`);
+      // 消息携带收到的 model（#81 整机 e2e「默认选中真实下发」见证：失败卡原文含模型 id）
+      throw new AdapterError(
+        "E_SPAWN_NOT_FOUND",
+        `未找到 CLI 可执行文件（FakeAdapter 注入：failCreateFirst=${this.failCreateFirst}，演示 spawn 失败；已收到 model=${init.model ?? "未指定"}）`,
+      );
     }
     const sessionId = randomId("s");
     const s: SessionState = {
@@ -124,14 +142,23 @@ export class FakeAdapter implements CliAdapter {
     return { sessionId, model: init.model }; // model 透传（issue #76：fake 会话实际采用即请求值）
   }
 
-  /** 模型目录（issue #76）：返回两条假模型（拷贝防调用方改写常量），第一条默认 */
+  /** 模型目录（issue #76）：返回两条假模型（拷贝防调用方改写常量），第一条默认；#81 注入：延迟/前 N 次失败（整机 e2e 驱动加载/失败态） */
   async listModels(_input?: ListModelsInput): Promise<ModelEntry[]> {
+    this.listModelsCalls += 1;
+    if (this.modelsDelayMs > 0) await new Promise((r) => setTimeout(r, this.modelsDelayMs));
+    if (this.listModelsCalls <= this.failModelsFirst) {
+      throw new AdapterError("E_SPAWN_NOT_FOUND", `未找到 CLI 可执行文件（FakeAdapter 注入：failModelsFirst=${this.failModelsFirst}，驱动模型列表拉取失败态）`);
+    }
     return FAKE_MODELS.map((m) => ({ ...m }));
   }
 
-  /** 会话中途切换模型（issue #79）：存储 no-op——记录所选值并回显，不报错、不影响演示脚本 */
+  /** 会话中途切换模型（issue #79）：存储 no-op——记录所选值并回显，不报错、不影响演示脚本；#81 注入：前 N 次失败（整机 e2e 驱动回滚） */
   async setModel(input: SetModelInput): Promise<{ model: string }> {
     const s = this.requireSession(input.sessionId);
+    this.setModelCalls += 1;
+    if (this.setModelCalls <= this.failSetModelFirst) {
+      throw new AdapterError("E_INTERNAL", `注入的模型切换失败（failSetModelFirst=${this.failSetModelFirst}，FakeAdapter 测试钩子）：模型 ${input.model} 不可用`);
+    }
     s.model = input.model;
     return { model: input.model };
   }
