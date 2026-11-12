@@ -143,7 +143,7 @@ export class FakeAdapter implements CliAdapter {
   }
 
   /** 模型目录（issue #76）：返回两条假模型（拷贝防调用方改写常量），第一条默认；#81 注入：延迟/前 N 次失败（整机 e2e 驱动加载/失败态） */
-  async listModels(_input?: ListModelsInput): Promise<ModelEntry[]> {
+  async listModels(_input: ListModelsInput): Promise<ModelEntry[]> {
     this.listModelsCalls += 1;
     if (this.modelsDelayMs > 0) await new Promise((r) => setTimeout(r, this.modelsDelayMs));
     if (this.listModelsCalls <= this.failModelsFirst) {

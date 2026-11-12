@@ -32,5 +32,7 @@ export function useCliInstallStatus(active: boolean): CliInstalledMap | null {
 /** 禁用判定：仅三真实 CLI 的显式 false 才灰置（fake/pty 无探测恒可选；结果未回不拦） */
 export function isCliUnavailable(installed: CliInstalledMap | null, cli: CliKind): boolean {
   if (!installed) return false;
-  return (installed as Record<string, boolean | undefined>)[cli] === false;
+  // fake 恒可用先行返回：CliKind 含 fake 而 CliInstalledMap 仅三真实 CLI，显式收窄替代宽化 cast
+  if (cli === "fake") return false;
+  return installed[cli] === false;
 }
