@@ -39,6 +39,22 @@ describe("FakeAdapter 专属场景", () => {
     }
   });
 
+  it("listCommands 返回固定命令集且每次为拷贝（#89：整机 e2e 补全菜单的前提）", async () => {
+    const adapter = new FakeAdapter({ clock: new VirtualClock() });
+    const first = await adapter.listCommands({ cwd: "C:\\demo" });
+    expect(first.length).toBeGreaterThanOrEqual(2); // 固定集非空且可驱动菜单演示
+    for (const c of first) {
+      expect(c.cli).toBe("fake");
+      expect(c.name.startsWith("/")).toBe(false); // 名称不带斜杠前缀（插入时统一补 /）
+    }
+    // 字段多样性：固定集覆盖 userOnly / argsHint 两形态（菜单徽标与参数提示演示）
+    expect(first.some((c) => c.userOnly)).toBe(true);
+    expect(first.some((c) => c.argsHint !== null)).toBe(true);
+    first[0].description = "被调用方改写";
+    const second = await adapter.listCommands({ cwd: "C:\\demo" });
+    expect(second[0].description).not.toBe("被调用方改写"); // 拷贝防改写常量
+  });
+
   it("createSession 透传请求 model；未指定为 undefined（issue #76）", async () => {
     const adapter = new FakeAdapter({ clock: new VirtualClock() });
     const a = await adapter.createSession({ cwd: "C:\\demo", model: "fake-lite" });

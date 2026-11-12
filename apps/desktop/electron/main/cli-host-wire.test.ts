@@ -32,6 +32,7 @@ const allKinds = [
   "runOnce",
   "cancelRunOnce",
   "listModels",
+  "listCommands",
   "setModel",
 ] as const satisfies readonly HostCommand["kind"][];
 

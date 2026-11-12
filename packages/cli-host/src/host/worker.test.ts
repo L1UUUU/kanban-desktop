@@ -19,6 +19,7 @@ function makeStubAdapter(): CliAdapter {
     capabilities: { approval: false, interrupt: false, resume: false, readHistory: false, skillSignal: false },
     createSession: async () => ({ sessionId: "stub", nativeSessionId: null }),
     listModels: async () => [],
+    listCommands: async () => [],
     setModel: async () => ({ model: "" }),
     sendTurn: async () => {},
     interruptTurn: async () => {},

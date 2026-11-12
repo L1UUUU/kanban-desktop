@@ -2052,3 +2052,17 @@ describe("启动自动选中（issue #86：回到当前项目最近会话，只�
     expect(t2.ctl().draft).toBeNull(); // 已有会话：不开演示草稿
   });
 });
+
+describe("composer:listCommands 通道（#89：renderer 经 transport 调通道拿命令目录）", () => {
+  it("fake 环境：transport.invoke 走真实 Main 路由拿到 fake 固定命令集（含仅用户调用标记与参数提示形态）", async () => {
+    const adapter = new FakeAdapter({ clock: new VirtualClock() });
+    const transport = makeTransport(adapter);
+    const res = await transport.invoke({ channel: "composer:listCommands", cli: "fake", cwd: DEMO_CWD });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.commands!.length).toBeGreaterThanOrEqual(2);
+    expect(res.commands!.every((c) => c.cli === "fake")).toBe(true);
+    expect(res.commands!.some((c) => c.userOnly)).toBe(true);
+    expect(res.commands!.some((c) => c.argsHint !== null)).toBe(true);
+  });
+});

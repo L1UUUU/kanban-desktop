@@ -1,7 +1,7 @@
 // 用途：CodexAdapter 协议映射单测 —— FakeRpc 手动注入通知/服务端请求，断言 C1 事件映射、审批三态、终文自愈、忙态排队、interrupt 幂等、进程退出报错（不依赖真实 codex）
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { CodexAdapter, type CodexRpcClientLike } from "./codex-adapter";
 import { ExeNotFoundError } from "./adapter";
@@ -732,5 +732,44 @@ describe("CodexAdapter：spawn 失败协议级映射（#46）", () => {
       code: "E_SPAWN_NOT_FOUND",
       message: expect.stringContaining("未找到 codex 可执行文件"),
     });
+  });
+});
+
+describe("CodexAdapter：listCommands（issue #89：用户级+项目级 prompts 目录扫描，不依赖 app-server）", () => {
+  /** 命令源 fixture：用户级 <home>/.codex/prompts 与项目级 <cwd>/.codex/prompts 两棵树（行为细节断言在 codex/prompt-commands.test.ts，此处验证 adapter 接线与目录注入）；返回清理函数 */
+  function makeCommandFixture(): { home: string; projectCwd: string; cleanup: () => void } {
+    const root = path.join(tmpdir(), `kb-codex-cmd-${process.pid}-${Date.now() % 10000}`);
+    const home = path.join(root, "home");
+    const projectCwd = path.join(root, "proj");
+    mkdirSync(path.join(home, ".codex", "prompts"), { recursive: true });
+    writeFileSync(path.join(home, ".codex", "prompts", "commit.md"), "---\ndescription: 按规范提交\nargument-hint: [说明]\n---\n正文", "utf8");
+    mkdirSync(path.join(projectCwd, ".codex", "prompts"), { recursive: true });
+    writeFileSync(path.join(projectCwd, ".codex", "prompts", "review.md"), "无 frontmatter 的提示词", "utf8");
+    return { home, projectCwd, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  }
+
+  it("注入 homeDir 时按 <home>/.codex/prompts + 项目 cwd 扫描；条目字段完整；不触 rpc 进程（clientFactory 不被调用）", async () => {
+    const { home, projectCwd, cleanup } = makeCommandFixture();
+    let factoryCalls = 0;
+    const adapter = new CodexAdapter({
+      homeDir: home,
+      clientFactory: () => {
+        factoryCalls += 1;
+        return new FakeRpc();
+      },
+    });
+    const commands = await adapter.listCommands({ cwd: projectCwd });
+    cleanup();
+    expect(commands.map((c) => c.name)).toEqual(["commit", "review"]);
+    expect(commands.find((c) => c.name === "commit")).toMatchObject({ source: "user", argsHint: "[说明]", cli: "codex", userOnly: false });
+    expect(commands.find((c) => c.name === "review")!.source).toBe("project");
+    expect(factoryCalls).toBe(0);
+  });
+
+  it("目录全缺失 → 空集不报错", async () => {
+    const root = path.join(tmpdir(), `kb-codex-cmd-empty-${process.pid}-${Date.now() % 10000}`);
+    const adapter = new CodexAdapter({ homeDir: path.join(root, "none"), clientFactory: () => new FakeRpc() });
+    expect(await adapter.listCommands({ cwd: path.join(root, "no-proj") })).toEqual([]);
+    rmSync(root, { recursive: true, force: true });
   });
 });

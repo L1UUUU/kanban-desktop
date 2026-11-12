@@ -1,6 +1,6 @@
 // 用途：Adapter 契约测试套（spec Testing seam 1）—— 同一组行为断言对 FakeAdapter 与后续三真实 Adapter 复用；调用方提供 adapter 与「推进到空闲」驱动器
 import { expect, it } from "vitest";
-import { transcriptEventSchema, type AdapterEvent, type ChatEvent } from "@kanban/ipc-schema";
+import { commandEntrySchema, transcriptEventSchema, type AdapterEvent, type ChatEvent } from "@kanban/ipc-schema";
 import type { CliAdapter } from "./adapter";
 
 /** 契约套件上下文：adapter 被测实例；driveIdle 推进到无待处理活动（Fake=虚拟时钟 runToIdle，真实 CLI=轮询等待） */
@@ -69,6 +69,8 @@ export interface ContractOptions {
   once?: { outputContains?: string[]; expectSecondAsk?: boolean; verify?: () => Promise<void> };
   /** allow-always 分支断言 */
   always?: { outputContains?: string[]; finalContains?: string[]; expectNoSecondAsk?: boolean; verify?: () => Promise<void> };
+  /** listCommands（#89）条数下限：缺省 1（Fake 固定集非空）；真实 CLI 命令集随机器安装目录/版本不定时传 0 放宽为纯形状校验 */
+  listCommands?: { atLeast?: number };
 }
 
 export function defineAdapterContractTests(
@@ -352,6 +354,18 @@ export function defineAdapterContractTests(
     // GUI 聊天流零改动：历史快照不含任何 user 视角条目，事件仍全部为 ChatEvent 13 成员
     expect(history.every((e) => chatTypes.has(e.type))).toBe(true);
     expect(history.some((e) => e.type === "message_delta")).toBe(true);
+  });
+
+  it("listCommands（#89）：目录级命令列举 —— 条目全部过 commandEntrySchema 且名称唯一（同名项目级覆盖用户级）", async () => {
+    const { adapter } = await make();
+    const commands = await adapter.listCommands({ cwd: contractCwd });
+    expect(commands.length).toBeGreaterThanOrEqual(opts?.listCommands?.atLeast ?? 1);
+    const names = new Set(commands.map((c) => c.name));
+    expect(names.size).toBe(commands.length);
+    for (const c of commands) {
+      expect(() => commandEntrySchema.parse(c)).not.toThrow();
+      expect(c.description).toBeDefined();
+    }
   });
 
   it("非法时序：对已决/过期审批响应 → E_APPROVAL_EXPIRED；未知会话 → E_SESSION_NOT_FOUND", async () => {

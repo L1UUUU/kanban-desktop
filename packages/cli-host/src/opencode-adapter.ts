@@ -2,8 +2,8 @@
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { LogKind, AdapterEvent, ApprovalDecision, ApprovalSuggestion, ChatEvent, ChatEventSeed, ModelEntry, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
-import { AdapterError, ExeNotFoundError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
+import type { LogKind, AdapterEvent, ApprovalDecision, ApprovalSuggestion, ChatEvent, ChatEventSeed, CommandEntry, ModelEntry, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
+import { AdapterError, ExeNotFoundError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListCommandsInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
 import type { OpenCodeSseEvent, OpenCodeServerClientLike } from "./opencode/client";
 import { OpenCodeServerHost, type OpenCodeServerHostLike, type OpenCodeServerHostOptions } from "./opencode/server-host";
 import { isAuthFailureStatus, isAuthFailureText, isProtocolDisconnectText } from "./session-error";
@@ -204,6 +204,48 @@ export class OpenCodeAdapter implements CliAdapter {
       return entries;
     } catch (e) {
       throw new AdapterError("E_INTERNAL", `拉取 OpenCode 模型目录失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      await this.host.release(input.cwd, ownerKey).catch(() => {});
+    }
+  }
+
+  /** 命令列举（issue #89 / spec #82 E 块）：acquire server → GET /command 映射统一条目（原生 API 已聚合用户级+项目级，source=native 不区分层级；无来源文件）→ try/finally release（防引用计数泄漏） */
+  async listCommands(input: ListCommandsInput): Promise<CommandEntry[]> {
+    const ownerKey = `commands-${randomUUID().slice(0, 8)}`; // 独立引用键（同 listModels 模式）
+    let client: OpenCodeServerClientLike;
+    try {
+      client = await this.host.acquire(input.cwd, "auto", ownerKey);
+    } catch (e) {
+      // #46 对齐 createSession/listModels：exe 解析失败协议级映射；其余包装目录拉取失败
+      if (e instanceof ExeNotFoundError) throw new AdapterError("E_SPAWN_NOT_FOUND", e.message);
+      if (e instanceof AdapterError) throw e;
+      throw new AdapterError("E_INTERNAL", e instanceof Error ? e.message : String(e));
+    }
+    try {
+      const r = await client.api("GET", "/command");
+      if (!r.ok) throw new Error(`HTTP ${r.status} ${r.text.slice(0, 160)}`);
+      const items = Array.isArray((r.json as { items?: unknown[] } | null)?.items)
+        ? (r.json as { items: Array<Record<string, unknown> | null> }).items
+        : Array.isArray(r.json)
+          ? (r.json as Array<Record<string, unknown> | null>)
+          : [];
+      const commands: CommandEntry[] = [];
+      for (const c of items) {
+        const name = typeof c?.name === "string" ? c.name : "";
+        if (!name) continue;
+        commands.push({
+          name,
+          description: typeof c?.description === "string" ? c.description : "",
+          argsHint: null,
+          source: "native",
+          cli: "opencode",
+          sourcePath: null,
+          userOnly: false,
+        });
+      }
+      return commands;
+    } catch (e) {
+      throw new AdapterError("E_INTERNAL", `拉取 OpenCode 命令目录失败：${e instanceof Error ? e.message : String(e)}`);
     } finally {
       await this.host.release(input.cwd, ownerKey).catch(() => {});
     }

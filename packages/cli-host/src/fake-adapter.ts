@@ -1,6 +1,6 @@
-// 用途：FakeAdapter —— C1 契约的脚本化 mock 实现：事件溯源日志（readHistory=重放，天然满足不变量 4）、可注入时钟、演示脚本驱动（原型行为规格）+ readTranscript 双视角剧本（#28，独立于 ChatEvent 日志维护）+ listModels 假模型目录（#76：演示 UI 形态与真实 CLI 一致）
-import type { AdapterEvent, ChatEvent, ChatEventSeed, ModelEntry, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
-import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
+// 用途：FakeAdapter —— C1 契约的脚本化 mock 实现：事件溯源日志（readHistory=重放，天然满足不变量 4）、可注入时钟、演示脚本驱动（原型行为规格）+ readTranscript 双视角剧本（#28，独立于 ChatEvent 日志维护）+ listModels 假模型目录（#76：演示 UI 形态与真实 CLI 一致）+ listCommands 固定命令集（#89：整机 e2e 补全菜单前提）
+import type { AdapterEvent, ChatEvent, ChatEventSeed, CommandEntry, ModelEntry, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
+import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListCommandsInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
 import { SystemClock, type FakeClock } from "./clock";
 import { pickScript, type ScriptStep } from "./fake-scripts";
 
@@ -78,6 +78,13 @@ const FAKE_MODELS: ModelEntry[] = [
   { id: "fake-lite", displayName: "Fake 轻量模型", description: "演示用假模型（轻量输出）", isDefault: false },
 ];
 
+/** Fake 固定命令集（issue #89）：覆盖 userOnly / argsHint 两形态驱动补全菜单演示；source=native（脚本化 mock 无目录可扫） */
+const FAKE_COMMANDS: CommandEntry[] = [
+  { name: "fake-plan", description: "演示命令：请求一份轻量计划", argsHint: null, source: "native", cli: "fake", sourcePath: null, userOnly: false },
+  { name: "fake-skill", description: "演示 Skill：模拟技能观察信号", argsHint: "$ARGUMENTS", source: "native", cli: "fake", sourcePath: null, userOnly: false },
+  { name: "fake-user-only", description: "演示仅用户调用标记（disable-model-invocation）", argsHint: null, source: "native", cli: "fake", sourcePath: null, userOnly: true },
+];
+
 export class FakeAdapter implements CliAdapter {
   readonly capabilities = FAKE_CAPABILITIES;
   private readonly clock: FakeClock;
@@ -150,6 +157,11 @@ export class FakeAdapter implements CliAdapter {
       throw new AdapterError("E_SPAWN_NOT_FOUND", `未找到 CLI 可执行文件（FakeAdapter 注入：failModelsFirst=${this.failModelsFirst}，驱动模型列表拉取失败态）`);
     }
     return FAKE_MODELS.map((m) => ({ ...m }));
+  }
+
+  /** 命令列举（issue #89）：返回固定演示集（拷贝防调用方改写常量）；无注入开关——菜单链路稳定可断言 */
+  async listCommands(_input: ListCommandsInput): Promise<CommandEntry[]> {
+    return FAKE_COMMANDS.map((c) => ({ ...c }));
   }
 
   /** 会话中途切换模型（issue #79）：存储 no-op——记录所选值并回显，不报错、不影响演示脚本；#81 注入：前 N 次失败（整机 e2e 驱动回滚） */

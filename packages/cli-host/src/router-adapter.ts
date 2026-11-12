@@ -1,7 +1,7 @@
 // 用途：AdapterRouter —— 多 CLI 分发门面：createSession/listModels 按 init.cli 分发到对应 Adapter 并登记路由，其余 C1 方法按 sessionId 路由（ipc 单 adapter 注入位不变）
 import { randomUUID } from "node:crypto";
-import type { AdapterEvent, ChatEvent, ModelEntry, TranscriptEvent } from "@kanban/ipc-schema";
-import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
+import type { AdapterEvent, ChatEvent, CommandEntry, ModelEntry, TranscriptEvent } from "@kanban/ipc-schema";
+import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListCommandsInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
 
 /** Router 构造工厂：cli → adapter（不支持该 CLI 时抛 AdapterError） */
 export type AdapterFactory = (cli: string) => CliAdapter;
@@ -51,6 +51,12 @@ export class AdapterRouter implements CliAdapter {
   async listModels(input: ListModelsInput): Promise<ModelEntry[]> {
     const cli = input.cli ?? "fake";
     return this.adapterForCli(cli).listModels({ ...input, cli });
+  }
+
+  /** 命令列举（issue #89 / spec #82 E 块）：按 cli 分发的目录级命令（同 listModels 模式；命令源知识在各 adapter/扫描模块内） */
+  async listCommands(input: ListCommandsInput): Promise<CommandEntry[]> {
+    const cli = input.cli ?? "fake";
+    return this.adapterForCli(cli).listCommands({ ...input, cli });
   }
 
   /** 会话收养（#13 恢复编排）：按 cli 分发到目标 Adapter 并登记路由（readHistory/resume/interruptTurn 由此可达） */
