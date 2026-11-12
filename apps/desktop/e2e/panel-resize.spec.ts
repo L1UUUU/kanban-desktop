@@ -1,21 +1,9 @@
 // 用途：面板拖拽整机 E2E（#85）—— 侧栏宽度拖拽（Esc 回滚/键盘步进/Home-End/双击复位）+ 输入框高度拖拽（草稿/会话两态共享偏好）+ 两尺寸重启恢复（renderer localStorage 持久化）；Fake 演示链路 + userData 隔离
 import { test, expect, _electron, type ElectronApplication, type Page } from "@playwright/test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-
-/** 尽力删除目录：Windows 下 electron/Crashpad 子进程退出有延迟，重试后仍锁则告警放行 */
-async function rmBestEffort(target: string): Promise<void> {
-  for (let i = 0; i < 20; i += 1) {
-    try {
-      rmSync(target, { recursive: true, force: true });
-      return;
-    } catch {
-      await new Promise((r) => setTimeout(r, 500));
-    }
-  }
-  console.warn(`[e2e] 临时目录仍被占用，跳过清理：${target}`);
-}
+import { rmBestEffort } from "./helpers/rm-best-effort";
 
 /** 启动应用（Fake 演示链路；userData 隔离；重启恢复用例复用同一 userData） */
 async function launchApp(userData: string): Promise<{ app: ElectronApplication; win: Page }> {

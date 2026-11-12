@@ -1,5 +1,5 @@
 // 用途：renderer 斜杠命令源小控制器（issue #90 / spec #82 E 块）—— composer:listCommands 的 renderer 侧 TTL 缓存：挂载/触发预热（首次输入 / 不等冷启动）、在途去重、失败保持冷可重试；Main 侧另有 CommandCatalog 短缓存，本层只省 IPC 往返；实例由 useChatController 持有（App 生命周期），不写会话 store
-import type { CliKind, CommandEntry, IpcRequest, IpcResult } from "@kanban/ipc-schema";
+import { COMMAND_LIST_CACHE_TTL_MS, commandListCacheKey, type CliKind, type CommandEntry, type IpcRequest, type IpcResult } from "@kanban/ipc-schema";
 
 /** 单键 (cli, cwd) 的命令源状态（useSyncExternalStore 快照：引用在变化前保持稳定） */
 export type CommandsState =
@@ -11,11 +11,8 @@ export type CommandsState =
 // idle 常量单例：getState 对未预取键必须返回同一引用（useSyncExternalStore 快照稳定性）
 export const COMMANDS_IDLE: CommandsState = { status: "idle" };
 
-/** renderer 缓存 TTL（与 Main CommandCatalog 同值 10s：菜单连打不重复往返，新装 skill 最多 10s 后可见） */
-export const COMMAND_SOURCE_TTL_MS = 10_000;
-
 export interface ComposerCommandSourceOptions {
-  /** 缓存 TTL 毫秒（缺省 COMMAND_SOURCE_TTL_MS；测试注入小值） */
+  /** 缓存 TTL 毫秒（缺省 COMMAND_LIST_CACHE_TTL_MS 单源，与 Main CommandCatalog 同值；测试注入小值） */
   ttlMs?: number;
   /** 时钟注入（缺省 Date.now；测试手动推进驱动过期） */
   now?: () => number;
@@ -39,12 +36,12 @@ export class ComposerCommandSource {
 
   constructor(fetch: (req: ComposerListRequest) => Promise<IpcResult>, options: ComposerCommandSourceOptions = {}) {
     this.fetch = fetch;
-    this.ttlMs = options.ttlMs ?? COMMAND_SOURCE_TTL_MS;
+    this.ttlMs = options.ttlMs ?? COMMAND_LIST_CACHE_TTL_MS;
     this.now = options.now ?? Date.now;
   }
 
   private key(cli: CliKind, cwd: string): string {
-    return `${cli}\n${cwd}`;
+    return commandListCacheKey(cli, cwd);
   }
 
   /** 当前状态（未预热键返回 idle 单例；返回存储的稳定引用——useSyncExternalStore 快照要求） */

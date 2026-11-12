@@ -57,6 +57,8 @@ export interface IpcDeps extends EnvelopeDeps {
   resolveUserClaudeDir?(): string;
   /** #89（spec #82 E 块）：斜杠命令目录（短 TTL 缓存；缺省由 composer handler 按 adapter 惰性构建——生产单 adapter 生命周期内共享；测试注入显式实例控时钟/计扫描次数） */
   commandCatalog?: CommandCatalog;
+  /** #92（spec #82 E 块）：用户级 codex 基准目录（composer:expandCommand 安全边界 <home>/.codex/prompts 的 home 解析，与 codex prompts 扫描口径一致）；缺省 os.homedir()，测试注入 fixture */
+  codexHomeDir?: string;
   /** #35（spec #27 J 节）：memory 面（kanban:delete 需求删除级联清理）；index.ts 经 openMemoryService 装配注入，缺省无 memory 数据可清理（旧测试/降级装配） */
   memory?: MemoryService;
 }

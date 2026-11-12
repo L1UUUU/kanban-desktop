@@ -140,11 +140,13 @@ export const ipcRequestSchema = z.discriminatedUnion("channel", [
     cli: cliKindSchema,
     cwd: z.string().min(1),
   }),
-  /** codex 斜杠命令客户端展开（issue #92 / spec #82 E 块派发）：读来源文件替换参数占位符返回普通文本（app-server 不解析 / 前缀；文件不可读 → E_INTERNAL fail-closed） */
+  /** codex 斜杠命令客户端展开（issue #92 / spec #82 E 块派发）：读来源文件替换参数占位符返回普通文本（app-server 不解析 / 前缀；sourcePath 越出 prompts 目录或文件不可读 → E_INTERNAL fail-closed） */
   z.object({
     channel: z.literal("composer:expandCommand"),
     sourcePath: z.string().min(1),
     args: z.string(),
+    /** 请求方 cwd（项目级 .codex/prompts 安全边界；Main 校验 sourcePath 必须位于用户级或该项目级 prompts 目录之下） */
+    cwd: z.string().min(1),
   }),
 ]);
 export type IpcRequest = z.infer<typeof ipcRequestSchema>;

@@ -1,5 +1,5 @@
 // 用途：三 CLI 真实命令触发验证 B 类 e2e（issue #91 / spec #82 E 块 T10）—— claude 透传形态真实触发 skill（PoC C1 结论：CLI 自行展开 /name 原文）、codex 经 #92 expandCodexPromptCommand 展开链路送达真实 wire（占位符替换进载荷）、opencode 原生 /command 触发（command API 非普通文本）；KANBAN_E2E === "1" 门控（docs/testing.md B 类协议），真实 codex 必须 KANBAN_CODEX_MODEL luna 白名单成本口径
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -8,6 +8,7 @@ import type { AdapterEvent, ChatEvent, LogKind, SkillObservation } from "@kanban
 import { resolveSlashDispatch } from "../../src/features/chat/slash-dispatch";
 import { composerHandlers } from "../../electron/main/ipc/composer";
 import type { IpcDeps } from "../../electron/main/ipc";
+import { rmBestEffort } from "../../e2e/helpers/rm-best-effort";
 
 const E2E = process.env.KANBAN_E2E === "1";
 
@@ -48,18 +49,6 @@ async function driveIdle(events: AdapterEvent[], timeoutMs: number): Promise<voi
       stableSince = 0;
     }
     await new Promise((r) => setTimeout(r, 400));
-  }
-}
-
-/** 尽力清理（Windows 句柄延迟重试；残留 %TEMP% 不判失败，三套件同款） */
-function rmBestEffort(target: string): void {
-  for (let i = 0; i < 10; i += 1) {
-    try {
-      rmSync(target, { recursive: true, force: true });
-      return;
-    } catch {
-      /* 重试 */
-    }
   }
 }
 
@@ -124,9 +113,9 @@ describe.skipIf(!E2E)("三 CLI 真实命令触发验证（issue #91，KANBAN_E2E
 
     afterAll(async () => {
       await adapter.dispose(); // 等进程退出后再清理（workdir 是 claude 子进程 cwd）
-      rmBestEffort(workdir);
-      rmBestEffort(userClaudeDir);
-      rmBestEffort(hookDir);
+      await rmBestEffort(workdir);
+      await rmBestEffort(userClaudeDir);
+      await rmBestEffort(hookDir);
     });
 
     it("透传原文经真实 claude：终文含 skill 固定标记 KB-POC-NORMAL-EXECUTED（skill 语义执行，非普通文本回复）", async () => {
@@ -176,8 +165,8 @@ describe.skipIf(!E2E)("三 CLI 真实命令触发验证（issue #91，KANBAN_E2E
 
     afterAll(async () => {
       await adapter.dispose();
-      rmBestEffort(homeDir);
-      rmBestEffort(workdir);
+      await rmBestEffort(homeDir);
+      await rmBestEffort(workdir);
     });
 
     it("带参命令经 #92 展开链路（判定 → composer:expandCommand）→ 真实 wire 载荷含替换后文本", async () => {
@@ -192,10 +181,10 @@ describe.skipIf(!E2E)("三 CLI 真实命令触发验证（issue #91，KANBAN_E2E
       const action = resolveSlashDispatch({ text: `/kb-t91-args ${args}`, cli: "codex", commands });
       expect(action).toMatchObject({ action: "expand", name: "kb-t91-args", args });
       if (action.action !== "expand") throw new Error(`派发动作非 expand：${JSON.stringify(action)}`); // 上面断言的运行时兜底
-      // #92 展开路径：生产同款 Main 子通道（composer:expandCommand 读来源文件 + expandCodexPromptCommand；deps 不消费）
+      // #92 展开路径：生产同款 Main 子通道（composer:expandCommand 读来源文件 + expandCodexPromptCommand；cwd 与 codexHomeDir 注入 = 该请求的 prompts 目录安全边界）
       const res = await composerHandlers["composer:expandCommand"](
-        { channel: "composer:expandCommand", sourcePath: action.sourcePath, args: action.args },
-        undefined as unknown as IpcDeps,
+        { channel: "composer:expandCommand", sourcePath: action.sourcePath, args: action.args, cwd: workdir },
+        { codexHomeDir: homeDir } as IpcDeps,
       );
       if (!res.ok || typeof res.text !== "string") throw new Error(`展开失败：${JSON.stringify(res)}`);
       const expanded = res.text;
@@ -273,7 +262,7 @@ describe.skipIf(!E2E)("三 CLI 真实命令触发验证（issue #91，KANBAN_E2E
 
     afterAll(async () => {
       await adapter.dispose(); // 停 server（XDG 数据随 ocRoot 清理）
-      rmBestEffort(ocRoot);
+      await rmBestEffort(ocRoot);
     });
 
     it("透传 /kb-t91 → 适配器 command API 路由执行：self_reported 观察 + command 模板固定标记回复", async () => {
