@@ -1844,3 +1844,17 @@ describe("模型目录全链（#77：combobox 就绪态/阻塞/手输/恢复派�
     expect(t.ctl().activeSession?.model).toBeUndefined(); // 派生显示不写入 store
   });
 });
+
+describe("composer:listCommands 通道（#89：renderer 经 transport 调通道拿命令目录）", () => {
+  it("fake 环境：transport.invoke 走真实 Main 路由拿到 fake 固定命令集（含仅用户调用标记与参数提示形态）", async () => {
+    const adapter = new FakeAdapter({ clock: new VirtualClock() });
+    const transport = makeTransport(adapter);
+    const res = await transport.invoke({ channel: "composer:listCommands", cli: "fake", cwd: DEMO_CWD });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.commands!.length).toBeGreaterThanOrEqual(2);
+    expect(res.commands!.every((c) => c.cli === "fake")).toBe(true);
+    expect(res.commands!.some((c) => c.userOnly)).toBe(true);
+    expect(res.commands!.some((c) => c.argsHint !== null)).toBe(true);
+  });
+});

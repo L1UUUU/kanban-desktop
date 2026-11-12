@@ -184,6 +184,7 @@ describe.skipIf(!E2E)("OpenCodeAdapter 真实集成（env-gated）", () => {
     },
     sendTurn: (i) => adapter.sendTurn(i),
     listModels: (i) => adapter.listModels(i),
+    listCommands: (i) => adapter.listCommands(i),
     setModel: (i) => adapter.setModel(i),
     interruptTurn: (id) => adapter.interruptTurn(id),
     resolveApproval: (i) => adapter.resolveApproval(i),
@@ -207,6 +208,8 @@ describe.skipIf(!E2E)("OpenCodeAdapter 真实集成（env-gated）", () => {
       approvalPermMode: "ask",
       cwd: workdir, // 占位（契约 wrapper 已按会话改写为独立 cwd）
       assistantMessages: { atLeast: 1 },
+      // #89：真实 server 的自定义命令集随机器/版本不定（用户级 command 目录非本套 fixture）→ 放宽为纯形状校验
+      listCommands: { atLeast: 0 },
       firstAssistantText: null,
       suggestionsRequired: true,
       deny: { contains: [], notContains: [], verify: async () => { expect(existsSync(f1)).toBe(false); } },

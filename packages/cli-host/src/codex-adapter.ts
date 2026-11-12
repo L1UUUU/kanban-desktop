@@ -1,9 +1,11 @@
 // 用途：CodexAdapter —— C1 契约的真实 Codex 实现：spawn 直连 vendored codex.exe app-server（JSON-RPC/stdio，单进程多 thread），通知流映射 ChatEvent（poc-1/t0-01 实证 wire 行为）+ readTranscript rollout 落盘双视角（#28）+ listModels 常驻 app-server 目录查询（#76）
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import type { LogKind, AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, ModelEntry, PermMode, SessionStatus, TranscriptEvent } from "@kanban/ipc-schema";
-import { AdapterError, ExeNotFoundError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
+import { homedir } from "node:os";
+import type { LogKind, AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, CommandEntry, ModelEntry, PermMode, SessionStatus, TranscriptEvent } from "@kanban/ipc-schema";
+import { AdapterError, ExeNotFoundError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListCommandsInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
 import { resolveCodexExe } from "./codex/exe";
+import { listCodexPromptCommands } from "./codex/prompt-commands";
 import { CodexRpcClient } from "./codex/rpc";
 import { parseRolloutTranscript } from "./codex/rollout";
 import { createDefaultModelResolver, type ModelResolver } from "./codex/model-probe";
@@ -32,6 +34,8 @@ export interface CodexAdapterOptions {
   resolveModel?: ModelResolver;
   /** 测试注入 rpc 客户端工厂 */
   clientFactory?: () => CodexRpcClientLike;
+  /** 用户主目录覆盖（listCommands #89：~/.codex/prompts 解析基准；缺省 os.homedir()；测试注入 fixture） */
+  homeDir?: string;
   /** 诊断日志 */
   log?: (kind: LogKind, detail: string) => void;
 }
@@ -112,11 +116,13 @@ export class CodexAdapter implements CliAdapter {
   private readonly effort?: string;
   private readonly modelResolver: ModelResolver;
   private readonly clientFactory: () => CodexRpcClientLike;
+  private readonly homeDir: string | null;
   private readonly log: (kind: LogKind, detail: string) => void;
 
   constructor(options: CodexAdapterOptions = {}) {
     this.effort = options.effort;
     this.log = options.log ?? (() => {});
+    this.homeDir = options.homeDir ?? null;
     this.modelResolver = options.resolveModel ?? createDefaultModelResolver(options);
     const factory = options.clientFactory;
     if (factory) {
@@ -202,6 +208,11 @@ export class CodexAdapter implements CliAdapter {
       throw new AdapterError("E_INTERNAL", `拉取 Codex 模型目录失败：${e instanceof Error ? e.message : String(e)}`);
     }
     return entries;
+  }
+
+  /** 命令列举（issue #89 / spec #82 E 块）：扫描用户级+项目级 prompts 目录（纯目录读取不触 app-server；任何读取失败在扫描模块内安全降级） */
+  async listCommands(input: ListCommandsInput): Promise<CommandEntry[]> {
+    return listCodexPromptCommands(input.cwd, this.homeDir ?? homedir());
   }
 
   /** 会话中途切换模型（issue #79 / spec #75）：更新会话态——此后每次 turn/start 携带 model 覆盖参数（协议语义「本 turn 及后续 turn 生效」，幂等） */

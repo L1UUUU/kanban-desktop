@@ -4,6 +4,7 @@ import type {
   ApprovalSuggestion,
   AdapterEvent,
   ChatEvent,
+  CommandEntry,
   ErrorCode,
   ModelEntry,
   PermMode,
@@ -46,6 +47,13 @@ export interface DisposeInput {
 
 /** listModels 输入（issue #76 / spec #75）：cwd 供 server-per-project CLI（opencode）拉起 server；cli 供 AdapterRouter 分发，单实现忽略 */
 export interface ListModelsInput {
+  cwd: string;
+  /** 目标 CLI（AdapterRouter 按 CLI 分发；单 Adapter 实现忽略） */
+  cli?: string;
+}
+
+/** listCommands 输入（issue #89 / spec #82 E 块）：cwd 供项目级目录扫描与 server-per-project CLI（opencode）拉起 server；cli 供 AdapterRouter 分发，单实现忽略 */
+export interface ListCommandsInput {
   cwd: string;
   /** 目标 CLI（AdapterRouter 按 CLI 分发；单 Adapter 实现忽略） */
   cli?: string;
@@ -143,6 +151,13 @@ export interface CliAdapter {
    */
   listModels(input: ListModelsInput): Promise<ModelEntry[]>;
   /**
+   * 斜杠命令列举（issue #89 / spec #82 E 块）：返回该 CLI 当前可用的统一命令目录（CommandEntry：名称/描述/参数提示/来源/所属 CLI/来源文件路径/仅用户调用标记）。
+   * 目录级命令（无会话上下文）：claude/codex 扫描用户级+项目级目录（任何读取失败安全降级，目录缺失为空集不报错）；
+   * opencode 经原生 /command API（server-per-project 按 cwd 拉起，不可用抛 AdapterError）；fake 返回固定演示集。
+   * 列举不解析命令正文（sourcePath 供后续派发按需读取）；发送/派发判定不经此面。
+   */
+  listCommands(input: ListCommandsInput): Promise<CommandEntry[]>;
+  /**
    * 会话中途切换模型（issue #79 / spec #75）：统一语义 idle 可切、下一轮生效——codex 更新会话态（此后每次
    * turn/start 携带 model 覆盖参数，幂等）；claude 向活进程发 set_model 控制请求并以响应实际模型名回写会话态；
    * opencode 仅更新会话态（prompt 请求已带 model）；fake 存储 no-op。返回下一轮实际生效的模型名；失败抛 AdapterError。
@@ -152,4 +167,4 @@ export interface CliAdapter {
   subscribe(handler: (event: AdapterEvent) => void): () => void;
 }
 
-export type { ApprovalDecision, ApprovalSuggestion, AdapterEvent, ChatEvent, ModelEntry, PermMode, TranscriptEvent };
+export type { ApprovalDecision, ApprovalSuggestion, AdapterEvent, ChatEvent, CommandEntry, ModelEntry, PermMode, TranscriptEvent };

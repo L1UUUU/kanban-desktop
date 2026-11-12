@@ -10,6 +10,7 @@ import { TrackerEngine, type TrackerChange } from "@kanban/tracker";
 import { openDatabase } from "./db";
 import { defaultConfig, loadConfig, saveConfig, type AppConfig } from "./config";
 import { handleCliStatusIpc, handleConfigIpc, handleDiffIpc, handleIpc, handleModelsIpc, type ConfigIpcDeps, type DiffIpcDeps, type IpcDeps, type ModelsIpcDeps } from "./ipc";
+import { CommandCatalog } from "./command-catalog";
 import { openMemoryService } from "./memory-service";
 import type { LogFn, LogLevel } from "./logger";
 import type { PtyHost } from "./pty-host";
@@ -1294,6 +1295,7 @@ function spyAdapter(
     capabilities: base.capabilities,
     createSession: (i) => base.createSession(i),
     listModels: (i) => base.listModels(i),
+    listCommands: (i) => base.listCommands(i),
     setModel: (i) => base.setModel(i),
     sendTurn: (i) => base.sendTurn(i),
     interruptTurn: async (id) => {
@@ -1868,3 +1870,52 @@ describe("models:ipc 通道（#76 spec #75：models:list 按 cli 经 adapter 分
   });
 });
 
+
+describe("composer:listCommands 通道（#89 斜杠命令列举）", () => {
+  it("fake 环境：renderer 经 kanban:ipc 通道拿到 fake 固定命令集（统一条目字段完整）", async () => {
+    const deps = makeDeps(new FakeAdapter({ clock: new VirtualClock() }));
+    const res = await handleIpc(deps, { channel: "composer:listCommands", cli: "fake", cwd: "C:\\demo" });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.commands!.length).toBeGreaterThanOrEqual(2);
+    for (const c of res.commands!) {
+      expect(c.cli).toBe("fake");
+      expect(c.name.length).toBeGreaterThan(0);
+      expect(["user", "project", "native"]).toContain(c.source);
+    }
+    // 固定集形态：名称不含斜杠、覆盖 userOnly/argsHint 两形态（菜单演示前提）
+    expect(res.commands!.every((c) => !c.name.startsWith("/"))).toBe(true);
+    expect(res.commands!.some((c) => c.userOnly)).toBe(true);
+  });
+
+  it("短 TTL 缓存：注入 commandCatalog 时重复调用不重复扫描（适配器只被调用一次）", async () => {
+    const counting = new (class extends FakeAdapter {
+      listCommandsCalls = 0;
+      override async listCommands(): Promise<import("@kanban/ipc-schema").CommandEntry[]> {
+        this.listCommandsCalls += 1;
+        return super.listCommands({ cwd: "C:\\demo" });
+      }
+    })();
+    const deps: IpcDeps = { ...makeDeps(counting), commandCatalog: new CommandCatalog({ adapter: counting, now: () => 0 }) };
+    const req = { channel: "composer:listCommands", cli: "fake", cwd: "C:\\demo" } as const;
+    const first = await handleIpc(deps, req);
+    const second = await handleIpc(deps, req);
+    expect(first.ok && second.ok).toBe(true);
+    expect(counting.listCommandsCalls).toBe(1); // TTL 内命中缓存，未重复扫描
+  });
+
+  it("非法载荷 E_SCHEMA（cli 枚举外 / 空 cwd）；AdapterError 原码透传", async () => {
+    const deps = makeDeps(new FakeAdapter({ clock: new VirtualClock() }));
+    const bad1 = await handleIpc(deps, { channel: "composer:listCommands", cli: "grok", cwd: "C:\\p" });
+    expect(bad1).toMatchObject({ ok: false, error: { code: "E_SCHEMA" } });
+    const bad2 = await handleIpc(deps, { channel: "composer:listCommands", cli: "fake", cwd: "" });
+    expect(bad2).toMatchObject({ ok: false, error: { code: "E_SCHEMA" } });
+    const failAdapter = new (class extends FakeAdapter {
+      override async listCommands(): Promise<never[]> {
+        throw new AdapterError("E_SPAWN_NOT_FOUND", "未找到 CLI 可执行文件");
+      }
+    })();
+    const res = await handleIpc({ ...makeDeps(failAdapter), commandCatalog: new CommandCatalog({ adapter: failAdapter, now: () => 0 }) }, { channel: "composer:listCommands", cli: "opencode", cwd: "C:\\p" });
+    expect(res).toMatchObject({ ok: false, error: { code: "E_SPAWN_NOT_FOUND" } });
+  });
+});

@@ -1,6 +1,8 @@
 // 用途：IPC 请求/结果/错误码契约 —— 单通道 kanban:ipc + channel 判别（spec E/C4；错误码形状由 ipc-schema 定义，不变量 6；#17 起 kanban:* 七通道，spec #15 C 节）
 import { z } from "zod";
 import { approvalDecisionSchema, chatEventSchema, permModeSchema, sessionIdSchema, sessionStatusSchema } from "./chat";
+import { cliKindSchema } from "./cli-kind";
+import { commandEntrySchema } from "./commands";
 import { kanbanStageInputSchema, requirementCardRowSchema } from "./kanban";
 import { terminalCreatePayloadSchema, terminalIdSchema } from "./terminal";
 
@@ -20,9 +22,8 @@ export const ERROR_CODES = [
 export const errorCodeSchema = z.enum(ERROR_CODES);
 export type ErrorCode = z.infer<typeof errorCodeSchema>;
 
-// 会话 CLI 枚举（#7 起放开三 CLI；fake 为 #6 演示链路；pty 会话不经 session:create 建）
-export const cliKindSchema = z.enum(["fake", "codex", "claude", "opencode"]);
-export type CliKind = z.infer<typeof cliKindSchema>;
+// 会话 CLI 枚举（#7 起放开三 CLI；fake 为 #6 演示链路；pty 会话不经 session:create 建）——定义已拆至 cli-kind.ts（跨域共用单源），此处 re-export 保持既有 import 面不变
+export { cliKindSchema, type CliKind } from "./cli-kind";
 
 // projects 表 wire 行（C3：id/name/canonical_path/status/created_at）
 export const projectRowSchema = z.object({
@@ -131,6 +132,12 @@ export const ipcRequestSchema = z.discriminatedUnion("channel", [
   z.object({ channel: z.literal("kanban:link"), sessionId: sessionIdSchema, requirementId: z.string().min(1) }),
   z.object({ channel: z.literal("kanban:unlink"), sessionId: sessionIdSchema }),
   z.object({ channel: z.literal("kanban:delete"), requirementId: z.string().min(1) }),
+  /** 斜杠命令列举（issue #89 / spec #82 E 块）：按 CLI 返回统一命令目录（claude skills / codex prompts 目录扫描 + opencode 原生 API；Main 侧短 TTL 缓存） */
+  z.object({
+    channel: z.literal("composer:listCommands"),
+    cli: cliKindSchema,
+    cwd: z.string().min(1),
+  }),
 ]);
 export type IpcRequest = z.infer<typeof ipcRequestSchema>;
 
@@ -173,6 +180,8 @@ export const ipcOkSchema = z.object({
   requirementId: z.string().optional(),
   /** session:create（cli=claude）附带：项目级/用户级同名 skill 冲突名（#21 真实检测：项目 .claude/skills ∩ 用户级 skills；Codex/OpenCode 不带该字段） */
   skillConflicts: z.array(z.string()).optional(),
+  /** composer:listCommands 附带（issue #89 / spec #82 E 块）：该 CLI 的统一命令目录（名称/描述/参数提示/来源/所属 CLI/来源文件路径/仅用户调用标记） */
+  commands: z.array(commandEntrySchema).optional(),
 });
 export type IpcOk = z.infer<typeof ipcOkSchema>;
 

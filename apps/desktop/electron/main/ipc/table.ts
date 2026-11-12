@@ -1,6 +1,7 @@
 // 用途：kanban:ipc 子通道查表 —— 类型驱动的路由表（编译期穷尽：schema 加成员/删 handler 即编译失败，#72 C1 Step2 替代 25 case switch）+ 四 feature 子表合并总表
 import type { IpcRequest, IpcResult } from "@kanban/ipc-schema";
 import type { IpcDeps } from "../ipc";
+import { composerHandlers } from "./composer";
 import { kanbanBoardHandlers } from "./kanban-board";
 import { projectHandlers } from "./project";
 import { sessionHandlers } from "./sessions";
@@ -22,10 +23,11 @@ export function routeByTable<Req extends { channel: string }, Res, D>(
   return handler(req, deps);
 }
 
-/** kanban:ipc 总表 = 四个 feature 子表合并（26 子通道：project 3 + session 12 + terminal 4 + kanban 7；漏任一即此处编译失败） */
+/** kanban:ipc 总表 = 五个 feature 子表合并（27 子通道：project 3 + session 12 + terminal 4 + kanban 7 + composer 1；漏任一即此处编译失败） */
 export const allKanbanHandlers: SubChannelHandlers<IpcRequest, IpcResult, IpcDeps> = {
   ...projectHandlers,
   ...sessionHandlers,
   ...terminalHandlers,
   ...kanbanBoardHandlers,
+  ...composerHandlers,
 };

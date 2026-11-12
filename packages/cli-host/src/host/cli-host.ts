@@ -80,6 +80,9 @@ export class CliHost {
       case "listModels":
         // issue #76：模型目录查询（按 cli 分发的目录级命令，不路由会话）
         return this.router.listModels(cmd.payload);
+      case "listCommands":
+        // issue #89：斜杠命令列举（按 cli 分发的目录级命令，不路由会话）
+        return this.router.listCommands(cmd.payload);
       case "runOnce":
         return this.runOnceRunner.run(cmd.payload);
       case "cancelRunOnce":

@@ -1,15 +1,17 @@
 // 用途：ClaudeAdapter —— C1 契约的真实 Claude 实现：stream-json 行协议直连（每会话一进程，poc-7 client 演进）、stdio 审批（can_use_tool 控制请求）、interrupt 归类已取消、--resume 跨重启恢复、--settings 会话级 hook 注入产生 verified SkillObservation（t0-02 裁决：无 SDK 备选路径）、listModels spawn 临时进程 initialize 握手读 models 数组（#78）、setModel 活进程 set_model 控制请求 + 实际模型名回写会话态（#79）
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
-import type { LogKind, AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, ModelEntry, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
+import type { LogKind, AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, CommandEntry, ModelEntry, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
 import { transformHookEvents } from "@kanban/tracker";
-import { AdapterError, ExeNotFoundError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
+import { AdapterError, ExeNotFoundError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListCommandsInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
 import { resolveClaudeExe } from "./claude/exe";
+import { listClaudeSkillCommands } from "./claude/skill-commands";
 import { ClaudeSetModelError, ClaudeStreamClient, type ClaudeStreamOptions } from "./claude/client";
 import { prepareSessionHookDir, resolveHookNodeBin, tailJsonl, writeSessionSettings, type SessionHookFiles } from "./claude/hook-inject";
 import { findTranscriptFile, parseTranscriptEvents, parseTranscriptItems } from "./claude/transcript";
+import { resolveUserClaudeDir } from "./skill-conflicts";
 import { isAuthFailureStatus, isAuthFailureText } from "./session-error";
 
 /** 可注入的流客户端面（生产 ClaudeStreamClient；测试 Fake 手动驱动协议消息） */
@@ -37,6 +39,8 @@ export interface ClaudeAdapterOptions {
   hookDir?: string;
   /** hook 命令使用的 node 可执行覆盖（缺省 resolveHookNodeBin 探测） */
   hookNodeBin?: string;
+  /** 用户级 Claude 基准目录覆盖（listCommands #89：~/.claude/skills 扫描基准；缺省 resolveUserClaudeDir=CLAUDE_CONFIG_DIR 优先，否则 ~/.claude；测试注入 fixture） */
+  userClaudeDir?: string;
   /** 测试注入客户端工厂 */
   clientFactory?: (options: ClaudeStreamOptions) => ClaudeStreamClientLike;
   /** 诊断日志 */
@@ -101,6 +105,7 @@ export class ClaudeAdapter implements CliAdapter {
   private readonly handlers = new Set<(event: AdapterEvent) => void>();
   private readonly hookDir: string;
   private readonly hookNodeBin: string;
+  private readonly userClaudeDir: string | null;
   private readonly clientFactory: (options: ClaudeStreamOptions) => ClaudeStreamClientLike;
   private readonly log: (kind: LogKind, detail: string) => void;
   private exeCache: string | null = null;
@@ -111,6 +116,7 @@ export class ClaudeAdapter implements CliAdapter {
     this.log = options.log ?? (() => {});
     this.hookDir = options.hookDir ?? path.join(tmpdir(), "kanban-claude-hooks");
     this.hookNodeBin = resolveHookNodeBin(options.hookNodeBin);
+    this.userClaudeDir = options.userClaudeDir ?? null;
     const factory = options.clientFactory;
     if (factory) {
       this.clientFactory = factory;
@@ -170,6 +176,12 @@ export class ClaudeAdapter implements CliAdapter {
       });
     }
     return this.modelsPromise;
+  }
+
+  /** 命令列举（issue #89 / spec #82 E 块）：扫描用户级+项目级 skill 目录（纯目录读取不触 CLI 进程；任何读取失败在扫描模块内安全降级） */
+  async listCommands(input: ListCommandsInput): Promise<CommandEntry[]> {
+    const userDir = this.userClaudeDir ?? resolveUserClaudeDir(process.env, homedir());
+    return listClaudeSkillCommands(input.cwd, userDir);
   }
 
   /** 临时握手进程拉目录：无会话状态（不带 --session-id/--resume/--settings）；finally 确保进程退出不残留 */

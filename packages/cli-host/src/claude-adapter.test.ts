@@ -976,3 +976,42 @@ describe("ClaudeAdapter：spawn 失败协议级映射（#46）", () => {
     });
   });
 });
+
+describe("ClaudeAdapter：listCommands（issue #89：用户级+项目级 skill 目录扫描，不依赖 CLI 进程）", () => {
+  /** 命令源 fixture：用户级与项目级各一棵 skills 树（复用扫描模块的行为细节断言在 claude/skill-commands.test.ts，此处验证 adapter 接线与目录注入） */
+  function makeCommandFixture(): { userClaudeDir: string; projectCwd: string } {
+    const root = mkdtempSync(path.join(tmpdir(), "kb-claude-cmd-"));
+    hookRoots.push(root);
+    const userClaudeDir = path.join(root, "claude-user");
+    const projectCwd = path.join(root, "proj");
+    mkdirSync(path.join(userClaudeDir, "skills", "user-skill"), { recursive: true });
+    writeFileSync(path.join(userClaudeDir, "skills", "user-skill", "SKILL.md"), "---\nname: user-skill\ndescription: 用户级\n---\n", "utf8");
+    mkdirSync(path.join(projectCwd, ".claude", "skills", "proj-skill"), { recursive: true });
+    writeFileSync(path.join(projectCwd, ".claude", "skills", "proj-skill", "SKILL.md"), "---\nname: proj-skill\ndescription: 项目级\ndisable-model-invocation: true\n---\n", "utf8");
+    return { userClaudeDir, projectCwd };
+  }
+
+  it("注入 userClaudeDir 时按注入目录 + 项目 cwd 扫描；条目带来源文件路径与仅用户调用标记；不触 CLI 进程（clientFactory 不被调用）", async () => {
+    const { userClaudeDir, projectCwd } = makeCommandFixture();
+    let factoryCalls = 0;
+    const adapter = new ClaudeAdapter({
+      userClaudeDir,
+      clientFactory: (options) => {
+        factoryCalls += 1;
+        return new FakeStream(options);
+      },
+    });
+    const commands = await adapter.listCommands({ cwd: projectCwd });
+    expect(commands.map((c) => c.name)).toEqual(["proj-skill", "user-skill"]);
+    expect(commands.find((c) => c.name === "proj-skill")).toMatchObject({ source: "project", userOnly: true, cli: "claude" });
+    expect(commands.find((c) => c.name === "user-skill")!.sourcePath).toBe(path.join(userClaudeDir, "skills", "user-skill", "SKILL.md"));
+    expect(factoryCalls).toBe(0);
+  });
+
+  it("目录全缺失 → 空集不报错", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "kb-claude-cmd-empty-"));
+    hookRoots.push(root);
+    const adapter = new ClaudeAdapter({ userClaudeDir: path.join(root, "none"), clientFactory: (options) => new FakeStream(options) });
+    expect(await adapter.listCommands({ cwd: path.join(root, "no-proj") })).toEqual([]);
+  });
+});
