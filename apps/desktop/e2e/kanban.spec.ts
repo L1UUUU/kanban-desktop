@@ -1,4 +1,4 @@
-// 用途：看板视图 E2E（#18/#19/#20 验收 + #22 全流程串测）—— 侧栏「看板」入口 → 五列看板（Fake 全链）；verified design-feature 自动建卡实时出现；视图切换回聊天会话仍在；重启后 kanban:list 再水化看板与退出前一致（#18，对照原型一致项 1/2/3）；#19 详情面板全套操作往返（编辑/修正/确认/删除/建卡，对照原型一致项 4/5）；#20 关联管理往返（关联已有/解除/卡片建会话/跳转/会话徽标，对照原型一致项 4 关联区/6）；#22 单条连续旅程串完全部环节（入口→建卡→关联→修正→确认→删除→重启）
+// 用途：看板视图 E2E（#18/#19/#20 验收 + #22 全流程串测 + #84 卡片行内重命名）—— 侧栏「看板」入口 → 五列看板（Fake 全链）；verified design-feature 自动建卡实时出现；视图切换回聊天会话仍在；重启后 kanban:list 再水化看板与退出前一致（#18，对照原型一致项 1/2/3）；#19 详情面板全套操作往返（编辑/修正/确认/删除/建卡，对照原型一致项 4/5）；#20 关联管理往返（关联已有/解除/卡片建会话/跳转/会话徽标，对照原型一致项 4 关联区/6）；#22 单条连续旅程串完全部环节（入口→建卡→关联→修正→确认→删除→重启）；#84 建卡即命名 + 悬浮重命名 → 重启标题不回退
 import { test, expect, _electron, type ElectronApplication, type Page } from "@playwright/test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -219,16 +219,16 @@ test("全流程串测（#22 验收）：入口→看板→手动建卡→卡片�
       await expect(win.getByTestId(`kanban-col-${key}`)).toBeVisible();
     }
 
-    // ② 手动建卡（S2-09）：未开始列「＋」→「待命名需求」→ 详情行内编辑改名
+    // ② 手动建卡（S2-09）：未开始列「＋」→ 建卡即命名（#84：卡片立即进入行内命名输入，Enter 提交走 kanban:rename 事件流）
     const noneCol = win.getByTestId("kanban-col-none");
     await noneCol.getByTitle("手动新建需求（归属当前项目）").click();
-    await expect(noneCol.getByText("待命名需求")).toBeVisible({ timeout: 10_000 });
-    await noneCol.getByText("待命名需求").click();
-    await expect(win.getByTestId("detail-panel")).toBeVisible();
-    const titleInput = win.getByTestId("detail-title-input");
-    await titleInput.fill("全流程演示需求");
-    await titleInput.press("Enter");
+    const nameInput = noneCol.getByTestId("card-title-input");
+    await expect(nameInput).toBeVisible({ timeout: 10_000 });
+    await nameInput.fill("全流程演示需求");
+    await nameInput.press("Enter");
     await expect(noneCol.getByText("全流程演示需求")).toBeVisible({ timeout: 10_000 });
+    await noneCol.getByText("全流程演示需求").click();
+    await expect(win.getByTestId("detail-panel")).toBeVisible();
 
     // ③ 关联 = 卡片建会话（S2-11）：详情「＋新建会话」OpenCode → #59 草稿：发首条消息才创建（requirementId 随之落关联）
     await win.getByTestId("new-session-menu").click();
@@ -294,25 +294,77 @@ test("全流程串测（#22 验收）：入口→看板→手动建卡→卡片�
   }
 });
 
+test("卡片行内重命名（#84）：建卡即命名 → 悬浮编辑重命名 → 详情面板改名 → 重启标题不回退（rename 事件流）", async () => {
+  const { userData, repoDir, repoRoot } = makeFixture();
+  try {
+    const { app, win } = await launchApp(userData, repoDir);
+    await registerAndCreate(win);
+
+    // 建卡即命名（#84 T2）：「＋」→ 卡片立即进入行内命名输入（不再堆积「待命名需求」）→ Enter 落定
+    await win.getByTestId("kanban-entry").click();
+    const noneCol = win.getByTestId("kanban-col-none");
+    await noneCol.getByTitle("手动新建需求（归属当前项目）").click();
+    const nameInput = noneCol.getByTestId("card-title-input");
+    await expect(nameInput).toBeVisible({ timeout: 10_000 });
+    await nameInput.fill("行内重命名需求");
+    await nameInput.press("Enter");
+    await expect(noneCol.getByText("行内重命名需求")).toBeVisible({ timeout: 10_000 });
+    await expect(noneCol.getByText("待命名需求")).toHaveCount(0);
+
+    // 悬浮编辑按钮 → 行内改名（Enter 提交；与建卡命名同一 kanban:rename 唯一路径，无新增 IPC）
+    const card = noneCol.getByTestId("requirement-card");
+    await card.hover();
+    await noneCol.getByTestId("card-edit-button").click();
+    const editInput = noneCol.getByTestId("card-title-input");
+    await expect(editInput).toBeVisible();
+    await editInput.fill("行内重命名需求v2");
+    await editInput.press("Enter");
+    await expect(noneCol.getByText("行内重命名需求v2")).toBeVisible({ timeout: 10_000 });
+
+    // 详情面板改名（卡片与面板同数据源）：v2 同步进面板输入框 → 面板提交 v3 → 卡片实时更新
+    await noneCol.getByText("行内重命名需求v2").click();
+    const detailInput = win.getByTestId("detail-title-input");
+    await expect(detailInput).toHaveValue("行内重命名需求v2");
+    await detailInput.fill("行内重命名需求v3");
+    await detailInput.press("Enter");
+    await expect(noneCol.getByText("行内重命名需求v3")).toBeVisible({ timeout: 10_000 });
+    await win.getByTestId("detail-close").click();
+
+    // 重启：rename 经 tracker 事件流落库（restore 重放 + kanban:list 再水化）→ 人工标题不回退
+    await app.close();
+    const second = await launchApp(userData);
+    await second.win.getByTestId("kanban-entry").click();
+    const noneCol2 = second.win.getByTestId("kanban-col-none");
+    await expect(noneCol2.getByText("行内重命名需求v3")).toBeVisible({ timeout: 15_000 });
+    await expect(second.win.getByTestId("requirement-card")).toHaveCount(1);
+    await expect(second.win.getByText("待命名需求")).toHaveCount(0);
+    await second.app.close();
+  } finally {
+    await rmBestEffort(userData);
+    await rmBestEffort(repoRoot);
+  }
+});
+
 test("详情面板全套操作往返：建卡 → 编辑 → 修正移列 → uncertain 确认 → 删除；手动卡重启保留（#19，原型一致项 4/5）", async () => {
   const { userData, repoDir, repoRoot } = makeFixture();
   try {
     const { app, win } = await launchApp(userData, repoDir);
     await registerAndCreate(win);
 
-    // 「未开始」列头「＋」手动建卡（S2-09：归属当前项目、初始标题「待命名需求」）
+    // 「未开始」列头「＋」手动建卡（S2-09：归属当前项目；#84 建卡即命名 → Enter 落定人工标题）
     await win.getByTestId("kanban-entry").click();
     await win.getByTestId("kanban-col-none").getByTitle("手动新建需求（归属当前项目）").click();
     const noneCol = win.getByTestId("kanban-col-none");
-    await expect(noneCol.getByText("待命名需求")).toBeVisible({ timeout: 10_000 });
-
-    // 点卡片 → 详情滑出面板：标题行内编辑（rename 事件流，重启不回退）
-    await noneCol.getByText("待命名需求").click();
-    await expect(win.getByTestId("detail-panel")).toBeVisible();
-    const titleInput = win.getByTestId("detail-title-input");
-    await titleInput.fill("调研桌面端打包方案");
-    await titleInput.press("Enter");
+    const nameInput = noneCol.getByTestId("card-title-input");
+    await expect(nameInput).toBeVisible({ timeout: 10_000 });
+    await nameInput.fill("调研桌面端打包方案");
+    await nameInput.press("Enter");
     await expect(noneCol.getByText("调研桌面端打包方案")).toBeVisible({ timeout: 10_000 });
+
+    // 点卡片 → 详情滑出面板：标题与卡片同数据源同步（rename 事件流，重启不回退）
+    await noneCol.getByText("调研桌面端打包方案").click();
+    await expect(win.getByTestId("detail-panel")).toBeVisible();
+    await expect(win.getByTestId("detail-title-input")).toHaveValue("调研桌面端打包方案");
 
     // 五段阶段修正条：Design 即时移列 + 当前依据（手动修正）；再回「未开始」
     await win.getByTestId("stage-seg-Design").click();
