@@ -109,8 +109,8 @@ describe("记忆入口与三态视图切换（#34；原型一致项 1）", () =>
       expect(screen.getByTestId("memory-workspace")).toBeTruthy();
       expect(screen.queryByTestId("kanban-board")).toBeNull();
       expect(screen.queryByPlaceholderText("输入消息，/ 开头触发 Skill…")).toBeNull();
-      // 三态共享侧栏：会话分组仍在
-      expect(screen.getByText("结构化会话")).toBeTruthy();
+      // 三态共享侧栏：会话分组仍在（#87 文案：会话（本应用创建））
+      expect(screen.getByText("会话（本应用创建）")).toBeTruthy();
     } finally {
       cleanup();
       for (const db of openDbs.splice(0)) db.close();

@@ -14,11 +14,11 @@ describe("App 三区布局骨架（原型一致项 1）", () => {
     expect(screen.getByText("设置")).toBeTruthy();
   });
 
-  it("侧栏：项目 / 结构化会话 / PTY 终端三分组可见；无项目时显示注册引导", () => {
+  it("侧栏：项目 / 会话（本应用创建）/ PTY 终端（本应用创建）三分组可见；无项目时显示注册引导", () => {
     render(<App />);
     expect(screen.getByText("项目")).toBeTruthy();
-    expect(screen.getByText("结构化会话")).toBeTruthy();
-    expect(screen.getByText("PTY 终端")).toBeTruthy();
+    expect(screen.getByText("会话（本应用创建）")).toBeTruthy();
+    expect(screen.getByText("PTY 终端（本应用创建）")).toBeTruthy();
     expect(screen.getByText("尚无项目")).toBeTruthy();
     expect(screen.getByRole("button", { name: "＋ 注册本地目录…" })).toBeTruthy();
   });
