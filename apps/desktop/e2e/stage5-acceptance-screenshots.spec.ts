@@ -187,8 +187,8 @@ test("原型对照③⑤ + 布局基线：断开恢复引导条 + 设置面板�
     await expect(win.getByText("Kanban Desktop")).toBeVisible();
     await expect(win.getByText("设置")).toBeVisible();
     await expect(win.getByText("项目", { exact: true })).toBeVisible();
-    await expect(win.getByText("结构化会话")).toBeVisible();
-    await expect(win.getByText("PTY 终端")).toBeVisible();
+    await expect(win.getByText("会话（本应用创建）")).toBeVisible();
+    await expect(win.getByText("PTY 终端（本应用创建）")).toBeVisible();
     for (const entry of ["看板", "记忆", "Diff"]) {
       await expect(win.locator("aside").getByText(new RegExp(`^${entry}`))).toBeVisible();
     }

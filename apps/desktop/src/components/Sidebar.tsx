@@ -1,4 +1,4 @@
-// 用途：侧栏 —— 项目区（注册引导/项目行切换/悬浮「＋」CLI 新建菜单）+ 结构化会话与 PTY 终端两组会话行（CLI 色点/目录徽标/状态徽标/需求徽标/PTY 停止按钮，按当前项目过滤）+ 底部运行信息（原型一致项 1/2/3/6；PTY 实体 #12；REQ 徽标 #20；hover 归档 #58；hover 删除+二次确认 #62）
+// 用途：侧栏 —— 项目区（注册引导/项目行切换/悬浮「＋」CLI 新建菜单）+ 结构化会话与 PTY 终端两组会话行（CLI 色点/目录徽标/状态徽标/需求徽标/PTY 停止按钮，按当前项目过滤）+ 底部运行信息（原型一致项 1/2/3/6；PTY 实体 #12；REQ 徽标 #20；hover 归档 #58；hover 删除+二次确认 #62；分组标题语义澄清 #87）
 import { useState, type ReactNode } from "react";
 import type { AppInfo, CliKind, ProjectRow } from "@kanban/ipc-schema";
 import type { SessionView } from "../features/chat/chat-store";
@@ -181,7 +181,7 @@ export function Sidebar({
         ))
       )}
 
-      <h4 className="px-3.5 pb-0.5 pt-3 text-[11px] tracking-wide text-muted-foreground">结构化会话</h4>
+      <h4 className="px-3.5 pb-0.5 pt-3 text-[11px] tracking-wide text-muted-foreground">会话（本应用创建）</h4>
       {structured.length === 0 ? (
         <p className="px-3.5 py-1 text-xs text-fg-faint">暂无会话</p>
       ) : (
@@ -231,7 +231,14 @@ export function Sidebar({
         ))
       )}
 
-      <h4 className="px-3.5 pb-0.5 pt-3 text-[11px] tracking-wide text-muted-foreground">PTY 终端</h4>
+      {/* #87（spec #82-F）：PTY 分组标题 + 常驻说明 + 悬浮解释 —— 澄清此列表只含本应用创建的终端，外部终端里运行的 CLI 不混入 */}
+      <div
+        className="px-3.5 pb-0.5 pt-3"
+        title="仅列出本应用内创建的终端会话；在外部终端（系统终端 / IDE 等）里运行的 CLI 不会出现在此列表"
+      >
+        <h4 className="text-[11px] tracking-wide text-muted-foreground">PTY 终端（本应用创建）</h4>
+        <p className="text-[10px] leading-tight text-fg-faint">仅应用内创建的终端；外部终端会话不混入</p>
+      </div>
       {ptySessions.length === 0 ? (
         <p className="px-3.5 py-1 text-xs text-fg-faint">暂无终端会话</p>
       ) : (

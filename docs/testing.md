@@ -151,6 +151,7 @@ include 均已通配（`packages/cli-host/vitest.config.ts`、`apps/desktop/vite
 | desktop node project 多 worktree 并行负载下 5s 超时假红 | 机器负载 / 临时目录清理竞态（ENOTEMPTY/EPERM） | 超时阈值 5s→20s、清理重试兜底（bae1b3d） |
 | hover→「＋」点击竞态、single-instance OS 焦点断言、worker 外杀后 `app.close()` 固定 5s 白等 | 断言与 UI/OS 状态耦合 | 事件驱动 + 最小化还原断言（b6064b3 / 47555da） |
 | `app.close()` 超时但断言全部通过 | teardown 挂死（Electron utilityProcess 平台限制） | 应用侧 dispose 3s 超时 + kill 兜底；产品代码未动 |
+| C 类 Playwright whole-test 60s 超时（stage4 I-3 恢复流转、lifecycle 冲突条/PTY 孤儿，逐轮换用例） | 多兄弟 worktree 并行跑测试的机器负载拉长 Electron 冷启/turn 用时（issue 87 全量跑实测：60s 预算超时，单跑 35.6s 通过；断言面与当次 diff 无交集） | 负载型假红，非产品缺陷；单跑/低负载验证收敛，不改代码 |
 
 新发现时追加一行并注明复现条件；连续全绿才标记「已收敛」，仍要保留根因记录。
 
