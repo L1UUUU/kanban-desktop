@@ -2066,3 +2066,41 @@ describe("composer:listCommands 通道（#89：renderer 经 transport 调通道�
     expect(res.commands!.some((c) => c.argsHint !== null)).toBe(true);
   });
 });
+
+describe("斜杠补全菜单（#90：草稿态/会话态输入框接菜单，命令数据走真实通道）", () => {
+  it("草稿态：输入 / 弹菜单（FakeAdapter 固定命令集经 Main 路由可见，应用组在前）；Enter 接受把命令引用写入草稿输入", async () => {
+    const t = mount();
+    await t.flush();
+    // 无项目无会话：boot 演示草稿（DraftPane 可见）
+    expect(screen.getByTestId("draft-pane")).toBeTruthy();
+    const box = screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…");
+    // 输入 /：预热 + Main CommandCatalog + FakeAdapter 固定集 → 菜单弹出
+    fireEvent.change(box, { target: { value: "/", selectionStart: 1 } });
+    await waitFor(() => expect(screen.getByTestId("slash-menu")).toBeTruthy());
+    const names = screen.getAllByTestId("slash-menu-item").map((el) => el.textContent ?? "");
+    expect(names.some((s) => s.includes("/fake-plan"))).toBe(true); // FakeAdapter 固定集可见
+    expect(names.some((s) => s.includes("/pty"))).toBe(true); // 内置应用命令入应用组
+    // 应用组在前：/pty（app）排在 /fake-*（cli）之前
+    expect(names.findIndex((s) => s.includes("/pty"))).toBeLessThan(names.findIndex((s) => s.includes("/fake-plan")));
+    // Enter 接受（初始高亮第 0 项 /kanban）：命令引用置入输入流（不发送，派发留 #92）
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect((box as HTMLTextAreaElement).value).toBe("/kanban ");
+    expect(screen.queryByTestId("slash-menu")).toBeNull(); // 接受后菜单关闭
+    // 草稿 store 同步受控值
+    const d = t.ctl().draft;
+    expect(d && d.kind === "structured" ? d.data.input : null).toBe("/kanban ");
+  });
+
+  it("会话态：已建会话 composer 同样弹菜单（cli/cwd 键控换源）", async () => {
+    const t = mount();
+    await t.flush();
+    await createViaDraft(t.ctl, "fake", undefined, "首条消息（建立会话）");
+    t.advance(); // 首轮演示脚本跑完（running 期输入框禁用）
+    await t.flush();
+    // 会话态 composer（与草稿态同款输入框组件）：输入 / 弹菜单
+    const box = screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…");
+    fireEvent.change(box, { target: { value: "/", selectionStart: 1 } });
+    await waitFor(() => expect(screen.getByTestId("slash-menu")).toBeTruthy());
+    expect(screen.getAllByTestId("slash-menu-item").some((el) => (el.textContent ?? "").includes("/fake-skill"))).toBe(true);
+  });
+});

@@ -172,6 +172,7 @@ export function ChatWorkspace({
           <DraftPane
             draft={controller.draft.data}
             models={controller.models}
+            commands={controller.commands}
             configPath={configPath}
             actions={{
               onSubmit: controller.submitDraft,
@@ -188,6 +189,7 @@ export function ChatWorkspace({
         <ChatPane
           session={controller.activeSession}
           models={controller.models}
+          commands={controller.commands}
           version={controller.version}
           conflictTitles={conflictTitles}
           configPath={configPath}

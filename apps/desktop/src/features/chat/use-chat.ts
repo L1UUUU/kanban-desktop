@@ -6,6 +6,7 @@ import { createScopedLogger } from "../../lib/logger";
 import { ChatStore, type DraftSession, type SessionMeta, type SessionView } from "./chat-store";
 import { selectStartupSessionId } from "./startup-select";
 import { ModelCatalog } from "./model-catalog";
+import { ComposerCommandSource } from "./composer-command-source";
 import { TerminalDraftController, type TerminalDraftSnapshot } from "../terminal/terminal-draft";
 import { TerminalManager } from "../terminal/TerminalManager";
 
@@ -82,6 +83,8 @@ export interface ChatController extends ChatControllerActions, SessionRegistry {
   draft: SessionDraft | null;
   /** 模型目录控制器（issue #77）：DraftPane/Composer 挂载预取与 ModelCombobox 数据源 */
   models: ModelCatalog;
+  /** 斜杠命令源（issue #90）：composer 补全菜单数据（composer:listCommands 通道 + TTL 缓存/预热） */
+  commands: ComposerCommandSource;
   /** PTY 终端数据源与显式终止入口（TerminalWorkspace 渲染挂点） */
   terminals: { manager: TerminalManager; kill(id: string): void };
 }
@@ -317,6 +320,13 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
         Promise.resolve({ ok: false, error: { code: "E_INTERNAL", message: "transport 不可用" } } satisfies ModelsResult),
       ),
   );
+  // 斜杠命令源（issue #90）：补全菜单数据；同 models 款闭包捕获首帧 transport（App 经 useMemo 同步建桥）
+  const [commands] = useState(
+    () =>
+      new ComposerCommandSource(
+        (req) => transport?.invoke(req) ?? Promise.resolve({ ok: false, error: { code: "E_INTERNAL", message: "transport 不可用" } } satisfies IpcResult),
+      ),
+  );
   const snap = useSyncExternalStore(store.subscribe, store.getSnapshot);
   // PTY 草稿机制（issue #71 S3 吸收自 use-terminals）：草稿控制器与多路复用管理器为本 hook 实现细节
   // shortcut: drafts/manager 闭包直接捕获首帧 transport 与 store（App 经 useMemo 同步建桥、测试首帧给定，身份稳定；
@@ -513,6 +523,7 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
     version: snap.version,
     draft,
     models,
+    commands,
     terminals,
   };
 }
