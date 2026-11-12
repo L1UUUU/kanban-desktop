@@ -489,7 +489,7 @@ describe("需求经验区 · 候选列表（原型一致项 6/7）", () => {
 });
 
 describe("DetailPanel 挂点（#33：需求经验区挂关联会话区之后）", () => {
-  const actions: DetailActions = { onRename: () => undefined, onSetStage: () => undefined, onDelete: () => undefined, onClose: () => undefined };
+  const actions: DetailActions = { onRename: async () => null, onSetStage: () => undefined, onDelete: () => undefined, onClose: () => undefined };
 
   it("memory 缺省 → 需求经验占位形态；挂点位于关联会话区之后", () => {
     render(<DetailPanel card={CARD} actions={actions} related={{ sessions: [] }} />);

@@ -1,11 +1,11 @@
 // 用途：详情滑出面板组件测试（#19，spec #15 Testing seam 4）—— FakeAdapter 事件流直连驱动真实组件：面板开合（点击卡片开、关闭钮/遮罩关）、标题行内编辑持久化（模拟重启再水化仍为人工标题）、五段阶段修正条即时移列（含回未开始）、uncertain 提示条与确认清除、删除二次确认与卡片实时消失、手动建卡重启保留、删除墓碑 + 同会话再建卡（对照原型一致项 4/5）
 /// <reference types="node" /> <!-- 本文件用 node:fs/os/path 建持久化 fixture（重启再水化用例） -->
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AdapterEvent, CliKind, IpcRequest, ModelsRequest, TerminalEvent, TrackerChangeWire } from "@kanban/ipc-schema";
+import type { AdapterEvent, CliKind, IpcRequest, ModelsRequest, RequirementCardRow, TerminalEvent, TrackerChangeWire } from "@kanban/ipc-schema";
 import { FakeAdapter, VirtualClock } from "@kanban/cli-host";
 import { TrackerEngine } from "@kanban/tracker";
 import { openDatabase } from "../../../electron/main/db";
@@ -16,6 +16,7 @@ import { createAdapterSessionProcesses, createSessionLifecycle } from "../../../
 import { ProjectStore } from "../../../electron/main/project-store";
 import { SessionStore } from "../../../electron/main/session-store";
 import { AppShell } from "../../App";
+import { DetailPanel, type DetailActions } from "./DetailPanel";
 import type { ChatController } from "../chat/use-chat";
 import type { ChatTransport } from "../../lib/kanban-api";
 
@@ -252,9 +253,11 @@ describe("详情滑出面板（#19；原型一致项 4/5）", () => {
     t.advance(); // 首条 turn 完成回空闲（供后续用例继续发消息）
   }
 
-  /** 未开始列「＋」手动建卡并等待出现 */
+  /** 未开始列「＋」手动建卡并等待出现（#84 建卡即命名：Esc 放弃命名保留缺省标题） */
   async function createManualCard(): Promise<void> {
     fireEvent.click(within(col("none")).getByTitle("手动新建需求（归属当前项目）"));
+    await waitFor(() => expect(within(col("none")).getByTestId("card-title-input")).toBeTruthy());
+    fireEvent.keyDown(within(col("none")).getByTestId("card-title-input"), { key: "Escape" });
     await waitFor(() => expect(within(col("none")).getByText("待命名需求")).toBeTruthy());
   }
 
@@ -437,5 +440,60 @@ describe("详情滑出面板（#19；原型一致项 4/5）", () => {
     await waitFor(() => expect(within(col("Design")).getAllByTestId("requirement-card").length).toBe(1));
     const allCards = ["none", "Design", "Implement", "PR", "Retro"].flatMap((k) => within(col(k)).queryAllByTestId("requirement-card"));
     expect(allCards).toHaveLength(1);
+  });
+});
+
+describe("详情面板标题编辑失败与还原（#84 T2：失败不再静默）", () => {
+  // 密封组件 seam：直接渲染 DetailPanel + stub actions（onRename 结果可注入）
+  const CARD: RequirementCardRow = {
+    id: "REQ-009",
+    title: "原标题",
+    stage: null,
+    stageBasis: null,
+    uncertain: false,
+    projectId: "P1",
+    sessions: [],
+  };
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("重命名失败：输入框回滚原值 + 行内错误提示；再次成功后提示清除", async () => {
+    let fail = true;
+    const actions: DetailActions = {
+      onRename: async (_id, title) => (fail && title === "注定失败" ? "需求不存在：REQ-009" : null),
+      onSetStage: () => undefined,
+      onDelete: () => undefined,
+      onClose: () => undefined,
+    };
+    render(<DetailPanel card={CARD} actions={actions} related={{ sessions: [] }} />);
+    const input = screen.getByTestId("detail-title-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "注定失败" } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(screen.getByTestId("detail-rename-error").textContent).toBe("重命名失败：需求不存在：REQ-009"));
+    expect(input.value).toBe("原标题"); // 回滚为原值（store 未变，显式恢复）
+    // 再次编辑成功 → 提示清除
+    fireEvent.change(input, { target: { value: "成功的新标题" } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(screen.queryByTestId("detail-rename-error")).toBeNull());
+  });
+
+  it("Esc 还原：放弃草稿不触发 onRename（陈旧草稿不得被 blur 提交）", async () => {
+    const rename = vi.fn(async () => null);
+    const actions: DetailActions = {
+      onRename: rename,
+      onSetStage: () => undefined,
+      onDelete: () => undefined,
+      onClose: () => undefined,
+    };
+    render(<DetailPanel card={CARD} actions={actions} related={{ sessions: [] }} />);
+    const input = screen.getByTestId("detail-title-input") as HTMLInputElement;
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: "被放弃的草稿" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+    await waitFor(() => expect(input.value).toBe("原标题"));
+    expect(rename).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("detail-rename-error")).toBeNull();
   });
 });

@@ -310,8 +310,10 @@ describe("五列看板：列映射/建卡/移列/徽标/会话数/删除（#18�
   it("「＋」手动建卡进未开始列（stage=null→列 0）+ verified design-feature 自动建卡进 Design 列；列头计数与会话数", async () => {
     await bootWithProjectSession();
     enterKanban();
-    // 未开始列「＋」手动建卡（原型一致项 2）
+    // 未开始列「＋」手动建卡（原型一致项 2）——建卡即进入命名输入（#84），Esc 放弃保留缺省标题
     fireEvent.click(within(col("none")).getByTitle("手动新建需求（归属当前项目）"));
+    await waitFor(() => expect(within(col("none")).getByTestId("card-title-input")).toBeTruthy());
+    fireEvent.keyDown(within(col("none")).getByTestId("card-title-input"), { key: "Escape" });
     await waitFor(() => expect(within(col("none")).getByText("待命名需求")).toBeTruthy());
     expect(within(col("none")).getAllByTestId("requirement-card")).toHaveLength(1);
     expect(within(col("none")).getByTestId("kanban-col-count").textContent).toBe("1"); // 列头计数
@@ -329,6 +331,34 @@ describe("五列看板：列映射/建卡/移列/徽标/会话数/删除（#18�
     expect(within(col("Design")).getByTestId("kanban-col-count").textContent).toBe("1");
     // 未开始列的手动卡仍在（两张卡分列）
     expect(within(col("none")).getAllByTestId("requirement-card")).toHaveLength(1);
+  });
+
+  it("建卡即命名 + 悬浮重命名（#84）：「＋」→ 卡片立即进入命名输入，Enter 落定；悬浮编辑按钮再改名；详情面板同数据源同步", async () => {
+    await bootWithProjectSession();
+    enterKanban();
+    // 建卡即命名：create 透传新需求 id → 卡片以行内命名输入出现（预填缺省标题）
+    fireEvent.click(within(col("none")).getByTitle("手动新建需求（归属当前项目）"));
+    const input = await waitFor(() => within(col("none")).getByTestId("card-title-input") as HTMLInputElement);
+    expect(input.value).toBe("待命名需求");
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "行内命名的需求" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    // Enter 提交 → kanban:rename 事件流 → requirement_renamed 推送 → 卡片标题实时落定
+    await waitFor(() => expect(within(col("none")).getByText("行内命名的需求")).toBeTruthy());
+    expect(within(col("none")).queryByText("待命名需求")).toBeNull();
+    // 悬浮编辑按钮再次改名（与建卡命名同一控制器动作：kanban:rename 唯一路径）
+    fireEvent.click(within(col("none")).getByTestId("card-edit-button"));
+    const input2 = within(col("none")).getByTestId("card-title-input") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(input2, { target: { value: "行内命名的需求v2" } });
+      fireEvent.blur(input2);
+    });
+    await waitFor(() => expect(within(col("none")).getByText("行内命名的需求v2")).toBeTruthy());
+    expect(within(col("none")).queryByTestId("card-rename-error")).toBeNull(); // 成功无错误提示
+    // 卡片与详情面板标题实时一致（同一 store 数据源派生）
+    fireEvent.click(within(col("none")).getByText("行内命名的需求v2"));
+    expect((screen.getByTestId("detail-title-input") as HTMLInputElement).value).toBe("行内命名的需求v2");
   });
 
   it("阶段变化移列 + uncertain/verified 徽标：self_reported → Implement+待确认；更新发生的 verified → 转正", async () => {
@@ -369,6 +399,8 @@ describe("五列看板：列映射/建卡/移列/徽标/会话数/删除（#18�
     });
     enterKanban();
     fireEvent.click(within(col("none")).getByTitle("手动新建需求（归属当前项目）"));
+    await waitFor(() => expect(within(col("none")).getByTestId("card-title-input")).toBeTruthy());
+    fireEvent.keyDown(within(col("none")).getByTestId("card-title-input"), { key: "Escape" }); // #84 建卡即命名：Esc 放弃保留缺省标题
     await waitFor(() => expect(within(col("none")).getByText("待命名需求")).toBeTruthy());
     expect(within(col("none")).getByText("◍ 0 会话")).toBeTruthy();
     // link 两个会话 → 会话数 2（经 tracker session_linked 实时更新）
@@ -445,8 +477,10 @@ describe("按项目过滤（#18；S2-08）", () => {
     await screen.findAllByText("repo-b");
     await waitFor(() => expect(within(col("Design")).queryAllByTestId("requirement-card")).toHaveLength(0));
     expect(screen.queryByText("选择或注册项目后查看其需求")).toBeNull();
-    // B 手动建卡（未开始列）
+    // B 手动建卡（未开始列；#84 建卡即命名 → Esc 放弃保留缺省标题）
     fireEvent.click(within(col("none")).getByTitle("手动新建需求（归属当前项目）"));
+    await waitFor(() => expect(within(col("none")).getByTestId("card-title-input")).toBeTruthy());
+    fireEvent.keyDown(within(col("none")).getByTestId("card-title-input"), { key: "Escape" });
     await waitFor(() => expect(within(col("none")).getAllByText("待命名需求").length).toBeGreaterThan(0));
 
     // 切回 A：A 的 Design 卡在、B 的未开始卡不在（TopBar 徽标与项目行同名，取侧栏行）

@@ -20,10 +20,10 @@ export interface KanbanController {
   setActive(id: string | null): void;
   /** kanban:list 再水化（启动/建卡补全） */
   refresh(): Promise<void>;
-  /** 未开始列「＋」手动建卡（S2-09；缺省标题「待命名需求」，归属当前项目） */
-  create(projectId: string, title?: string): Promise<void>;
-  /** 标题行内编辑（#19：kanban:rename 落事件流，重启不被「待命名需求」回退） */
-  rename(requirementId: string, title: string): Promise<void>;
+  /** 未开始列「＋」手动建卡（S2-09；缺省标题「待命名需求」，归属当前项目）；#84 起成功返回新需求 id（调用方据此立即进入命名态），失败返回 null */
+  create(projectId: string, title?: string): Promise<string | null>;
+  /** 标题行内编辑（#19：kanban:rename 落事件流，重启不被「待命名需求」回退）；#84 起返回 null=成功、错误文案=失败（卡片/详情面板行内提示，link 同模式） */
+  rename(requirementId: string, title: string): Promise<string | null>;
   /** 阶段修正 / uncertain 确认共用（#19：kanban:setStage；"none" = 未开始） */
   setStage(requirementId: string, stage: KanbanStageInput): Promise<void>;
   /** 删除需求（#19：kanban:delete 墓碑；卡片经 requirement_deleted 推送实时消失） */
@@ -70,19 +70,28 @@ export function useKanban(transport: ChatTransport | null): KanbanController {
   }, [transport, store, refresh]);
 
   const create = useCallback(
-    async (projectId: string, title?: string) => {
-      if (!transport) return;
+    async (projectId: string, title?: string): Promise<string | null> => {
+      if (!transport) return null;
       const r = await transport.invoke({ channel: "kanban:create", projectId, ...(title ? { title } : {}) });
-      if (!r.ok) log.error("建卡失败", { code: r.error.code, message: r.error.message, projectId });
+      if (!r.ok) {
+        log.error("建卡失败", { code: r.error.code, message: r.error.message, projectId });
+        return null;
+      }
+      return r.requirementId ?? null;
     },
     [transport],
   );
 
   const rename = useCallback(
-    async (requirementId: string, title: string) => {
-      if (!transport) return;
+    async (requirementId: string, title: string): Promise<string | null> => {
+      if (!transport) return "transport 不可用";
       const r = await transport.invoke({ channel: "kanban:rename", requirementId, title });
-      if (!r.ok) log.error("重命名失败", { code: r.error.code, message: r.error.message, requirementId });
+      // 错误码结果（如 E_REQUIREMENT_NOT_FOUND）以文案形式直达 UI 行内提示（#84 不再静默）
+      if (!r.ok) {
+        log.error("重命名失败", { code: r.error.code, message: r.error.message, requirementId });
+        return r.error.message;
+      }
+      return null;
     },
     [transport],
   );

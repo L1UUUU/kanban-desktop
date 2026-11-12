@@ -246,14 +246,16 @@ test("阶段 3 真实验收全链：双 CLI 真实会话 → GUI 提取（2 段�
     await win.getByTestId("kanban-entry").click();
     await win.getByTestId("kanban-col-none").getByTitle("手动新建需求（归属当前项目）").click();
     const noneCol = win.getByTestId("kanban-col-none");
-    await expect(noneCol.getByText("待命名需求")).toBeVisible({ timeout: 10_000 });
-    await noneCol.getByText("待命名需求").click();
-    await expect(win.getByTestId("detail-panel")).toBeVisible();
-    const titleInput = win.getByTestId("detail-title-input");
-    await titleInput.fill(REQ_TITLE);
-    await titleInput.press("Enter");
+    // #84 建卡即命名：卡片立即进入行内命名输入，Enter 落定（kanban:rename 事件流，重启不回退）
+    const nameInput = noneCol.getByTestId("card-title-input");
+    await expect(nameInput).toBeVisible({ timeout: 10_000 });
+    await nameInput.fill(REQ_TITLE);
+    await nameInput.press("Enter");
     await expect(noneCol.getByText(REQ_TITLE)).toBeVisible({ timeout: 10_000 });
-    // 重命名 Enter 提交后面板保持打开（stage2 §8：面板透明遮罩拦截点卡，不重复点卡）
+    // 点卡开详情面板（面板保持打开：stage2 §8 面板透明遮罩拦截点卡，不重复点卡）
+    await noneCol.getByText(REQ_TITLE).click();
+    await expect(win.getByTestId("detail-panel")).toBeVisible();
+    await expect(win.getByTestId("detail-title-input")).toHaveValue(REQ_TITLE);
 
     // ---- ② 关联 structured 会话×2：Claude + Codex 各一条真实短 turn（含工具调用）----
     await win.getByTestId("new-session-menu").click();

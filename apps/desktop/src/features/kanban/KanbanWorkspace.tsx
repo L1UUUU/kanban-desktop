@@ -1,4 +1,5 @@
-// 用途：看板工作区（#18）—— 五列看板（列头计数、按当前项目过滤、未开始列「＋」手动建卡）+ 无项目空板引导文案；#19 起点击卡片开右侧详情滑出面板（activeRequirementId 驱动，原型一致项 1/2/3/4/5）；#20 起详情面板关联区由 related 注入（关联列表/关联已有/跳转/建会话）
+// 用途：看板工作区（#18）—— 五列看板（列头计数、按当前项目过滤、未开始列「＋」手动建卡）+ 无项目空板引导文案；#19 起点击卡片开右侧详情滑出面板（activeRequirementId 驱动，原型一致项 1/2/3/4/5）；#20 起详情面板关联区由 related 注入（关联列表/关联已有/跳转/建会话）；#84 起卡片行内重命名（悬浮编辑按钮 + 建卡即命名态）
+import { useState } from "react";
 import type { RequirementCardRow } from "@kanban/ipc-schema";
 import type { ProjectsController } from "../projects/use-projects";
 import { KANBAN_COLUMNS, stageToColumn } from "./columns";
@@ -29,6 +30,16 @@ export function KanbanWorkspace({
   // 详情面板数据源：activeRequirementId 对应卡（行随 tracker 推送实时更新；删除/消失即卸载面板）
   const activeCard = kanban?.requirements.find((r) => r.id === kanban.activeRequirementId) ?? null;
   const openCard = onOpenRequirement ?? ((card: RequirementCardRow) => kanban?.setActive(card.id));
+  // 行内编辑中的卡片 id（#84：悬浮编辑按钮置位；建卡即命名由「＋」handler 以 create 透传的新需求 id 置位）
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  /** 「＋」建卡即命名（#84 T2）：create 成功透传新需求 id → 该卡出现即进入行内命名输入，不再堆积「待命名需求」 */
+  const createAndName = (): void => {
+    if (!kanban || currentProjectId === null) return;
+    void kanban.create(currentProjectId).then((id) => {
+      if (id) setEditingId(id);
+    });
+  };
 
   return (
     <section data-testid="kanban-board" className="relative flex min-h-0 min-w-0 flex-col bg-background">
@@ -52,12 +63,12 @@ export function KanbanWorkspace({
                 {columns[ix].length}
               </span>
               {col.key === "none" && currentProjectId !== null ? (
-                // 未开始列「＋」手动建卡（S2-09；归属当前项目，标题缺省「待命名需求」）
+                // 未开始列「＋」手动建卡（S2-09；归属当前项目，#84 起建卡即进入命名态）
                 <button
                   type="button"
                   title="手动新建需求（归属当前项目）"
                   className="ml-auto flex h-5 w-5 items-center justify-center rounded text-fg-faint hover:text-primary"
-                  onClick={() => void kanban?.create(currentProjectId)}
+                  onClick={createAndName}
                 >
                   ＋
                 </button>
@@ -65,7 +76,16 @@ export function KanbanWorkspace({
             </div>
             <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
               {columns[ix].map((card) => (
-                <RequirementCard key={card.id} card={card} onOpen={openCard} active={activeCard?.id === card.id} />
+                <RequirementCard
+                  key={card.id}
+                  card={card}
+                  onOpen={openCard}
+                  active={activeCard?.id === card.id}
+                  editing={editingId === card.id}
+                  onRename={kanban ? (id, title) => kanban.rename(id, title) : undefined}
+                  onStartEdit={() => setEditingId(card.id)}
+                  onEndEdit={() => setEditingId((cur) => (cur === card.id ? null : cur))}
+                />
               ))}
             </div>
           </div>
@@ -75,7 +95,7 @@ export function KanbanWorkspace({
         <DetailPanel
           card={activeCard}
           actions={{
-            onRename: (id, title) => void kanban.rename(id, title),
+            onRename: (id, title) => kanban.rename(id, title),
             onSetStage: (id, stage) => void kanban.setStage(id, stage),
             onDelete: (id) => void kanban.removeRequirement(id),
             onClose: () => kanban.setActive(null),
