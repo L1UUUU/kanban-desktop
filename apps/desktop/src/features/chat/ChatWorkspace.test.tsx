@@ -1881,14 +1881,20 @@ describe("启动自动选中（issue #86：回到当前项目最近会话，只�
     };
   }
 
-  /** stub transport：精确控制 project:list / session:list 启动应答（gate 给定时 session:list 挂起至释放，驱动先手让位）；其余通道兜底 ok */
+  /** stub transport：精确控制 project:list / session:list 启动应答（gate 给定时 session:list 挂起至释放，驱动先手让位）；
+   *  currentProjectId 可变（project:switch 原地改写，覆盖切项目刷新路径）；其余通道兜底 ok */
   function makeBootStub(opts: { projects: ProjectRow[]; currentProjectId: string | null; sessions: SessionRow[]; gate?: Promise<void> }): { transport: ChatTransport; seen: IpcRequest[] } {
     const seen: IpcRequest[] = [];
+    const current = { id: opts.currentProjectId };
     const transport: ChatTransport = {
       invoke: async (req: IpcRequest): Promise<IpcResult> => {
         seen.push(req);
         if (req.channel === "project:list") {
-          return { ok: true, projects: opts.projects, currentProjectId: opts.currentProjectId };
+          return { ok: true, projects: opts.projects, currentProjectId: current.id };
+        }
+        if (req.channel === "project:switch") {
+          current.id = req.projectId;
+          return { ok: true };
         }
         if (req.channel === "session:list") {
           if (opts.gate) await opts.gate;
@@ -2002,6 +2008,33 @@ describe("启动自动选中（issue #86：回到当前项目最近会话，只�
     await t.flush();
     expect(t.ctl().activeId).toBeNull();
     expect(t.ctl().draft?.kind).toBe("pty"); // PTY 草稿保留
+  });
+
+  it("先手让位（项目维度）：切项目清除他项目的自动选中会话、回落空态；切回不自动重选（issue #86 验收边界）", async () => {
+    const { transport } = makeBootStub({
+      projects: [proj("p-1"), proj("p-2")],
+      currentProjectId: "p-1",
+      sessions: [sess("s-new", { lastActiveAt: "2026-11-12T09:30:00.000Z" })],
+    });
+    const t = mount(transport);
+    await t.flush();
+    expect(t.ctl().activeId).toBe("s-new"); // 启动自动选中（#86 既有五场景语义不变）
+    expect(screen.getByTestId("resume-banner").textContent).toContain("s-new");
+
+    // 点侧栏项目行切到 p-2（注册成功自动切换同款路径：currentProjectId 变化，用户先手）
+    await act(async () => {
+      fireEvent.click(screen.getByText("p-2"));
+    });
+    await waitFor(() => expect(t.ctl().activeId).toBeNull()); // 他项目的自动选中会话不跨项目残留
+    expect(screen.queryByTestId("resume-banner")).toBeNull(); // 主区回落空态：旧项目断开会话标题消失
+    expect(screen.getAllByText("暂无会话").length).toBeGreaterThan(0); // p-2 无会话（侧栏过滤；主区空态同文案）
+
+    // 切回 p-1：会话行可见但不自动重选（修复形态=清除选中，非切换到最近会话）
+    await act(async () => {
+      fireEvent.click(screen.getByText("p-1"));
+    });
+    await waitFor(() => expect(screen.getByText("s-new")).toBeTruthy());
+    expect(t.ctl().activeId).toBeNull();
   });
 
   it("演示草稿：无项目且无会话 → 维持演示草稿现状（不选中、无恢复横幅）", async () => {
