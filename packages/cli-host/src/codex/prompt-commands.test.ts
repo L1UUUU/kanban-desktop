@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { listCodexPromptCommands } from "./prompt-commands";
+import { listCodexPromptCommands, expandCodexPromptCommand } from "./prompt-commands";
 
 let tmpRoot = "";
 
@@ -66,5 +66,36 @@ describe("listCodexPromptCommands（#89 codex 命令源）", () => {
     mkdirSync(join(prompts, "sub"), { recursive: true });
     writeFileSync(join(prompts, "sub", "nested.md"), "---\ndescription: 嵌套\n---\n", "utf8");
     expect(listCodexPromptCommands(projectCwd, home)).toEqual([]);
+  });
+});
+
+describe("expandCodexPromptCommand（#92 codex 客户端展开）", () => {
+  it("frontmatter 剥离 + $ARGUMENTS 全量实参替换", () => {
+    const file = "---\ndescription: 探针\nargument-hint: [说明]\n---\n目标：$ARGUMENTS，标记 KB-CODEX-PROMPT-EXECUTED";
+    expect(expandCodexPromptCommand(file, "修登录bug")).toBe("目标：修登录bug，标记 KB-CODEX-PROMPT-EXECUTED");
+  });
+
+  it("位置参数 $1..$9：空白切分；缺位展开为空串", () => {
+    expect(expandCodexPromptCommand("第一=$1 第二=$2 第三=$3", "alpha beta")).toBe("第一=alpha 第二=beta 第三=");
+  });
+
+  it("$@ 与 $ARGUMENTS 同义（全量实参）", () => {
+    expect(expandCodexPromptCommand("全部：$@", "a b c")).toBe("全部：a b c");
+  });
+
+  it("无占位符且带实参：正文后空行追加实参（不静默丢参）", () => {
+    expect(expandCodexPromptCommand("Reply with exactly this line.", "extra input")).toBe(
+      "Reply with exactly this line.\n\nextra input",
+    );
+  });
+
+  it("无占位符且无实参：仅正文；无 frontmatter 文件全文为正文；未闭合围栏按无围栏处理", () => {
+    expect(expandCodexPromptCommand("---\ndescription: d\n---\n仅正文", "")).toBe("仅正文");
+    expect(expandCodexPromptCommand("# 普通提示词\n正文两行", "")).toBe("# 普通提示词\n正文两行");
+    expect(expandCodexPromptCommand("---\n未闭合\n正文", "x")).toBe("---\n未闭合\n正文\n\nx");
+  });
+
+  it("实参自身含 $1 不被二次展开（单趟替换）", () => {
+    expect(expandCodexPromptCommand("值=$ARGUMENTS 后续=$1", "$1 raw")).toBe("值=$1 raw 后续=$1");
   });
 });

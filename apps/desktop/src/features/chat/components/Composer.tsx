@@ -10,7 +10,8 @@ import { ComposerTextarea } from "./ComposerTextarea";
 import { ModelCombobox } from "./ModelCombobox";
 
 export interface ComposerActions {
-  onSend(text: string): void;
+  /** 发送编排含斜杠派发（issue #92）：返回 true=输入已消费（清空输入框）；false=保留输入（派发失败错误卡已展示，可重试） */
+  onSend(text: string): Promise<boolean>;
   onInterrupt(): void;
   onPermChange(mode: PermMode): void;
   onModelChange(model: string): void;
@@ -35,10 +36,11 @@ export function Composer({
   // #79：模型切换在 turn 进行中（含审批待决 waiting）被禁用——main 侧同语义校验拒绝
   const busy = running || session.status === "waiting";
 
-  const send = (): void => {
+  // #92：发送编排含斜杠派发（await 展开完成后再决定是否清空；fail-closed/展开失败返回 false 保留输入可重试）
+  const send = async (): Promise<void> => {
     if (text.trim().length === 0) return;
-    actions.onSend(text);
-    setText("");
+    const consumed = await actions.onSend(text);
+    if (consumed) setText("");
   };
 
   return (
@@ -81,7 +83,7 @@ export function Composer({
               type="button"
               disabled={text.trim().length === 0}
               className="h-[30px] rounded-full bg-primary px-4 text-xs text-primary-foreground hover:bg-accent2 disabled:opacity-50"
-              onClick={send}
+              onClick={() => void send()}
             >
               发送 ➤
             </button>

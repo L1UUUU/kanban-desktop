@@ -218,6 +218,14 @@ describe("composer:listCommands 通道（#89 斜杠命令列举）", () => {
     expect(() => ipcRequestSchema.parse({ ...req, cwd: "" })).toThrow();
   });
 
+  it("composer:expandCommand 请求（#92 codex 客户端展开）：sourcePath + args 合法往返；空 sourcePath 被拒；成功载荷附展开文本", () => {
+    const req = { channel: "composer:expandCommand" as const, sourcePath: "C:\\home\\.codex\\prompts\\commit.md", args: "fix bug" };
+    expect(ipcRequestSchema.parse(req)).toEqual(req);
+    expect(ipcRequestSchema.parse({ ...req, args: "" })).toEqual({ ...req, args: "" }); // 空实参合法（无参调用）
+    expect(() => ipcRequestSchema.parse({ ...req, sourcePath: "" })).toThrow();
+    expect(ipcResultSchema.parse({ ok: true, text: "展开后正文" })).toEqual({ ok: true, text: "展开后正文" });
+  });
+
   it("成功结果：ok 载荷附统一命令条目数组（commands）；条目形状不合契约被拒", () => {
     const command = {
       name: "kb-probe-skill",

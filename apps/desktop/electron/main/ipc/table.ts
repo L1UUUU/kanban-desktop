@@ -23,7 +23,7 @@ export function routeByTable<Req extends { channel: string }, Res, D>(
   return handler(req, deps);
 }
 
-/** kanban:ipc 总表 = 五个 feature 子表合并（27 子通道：project 3 + session 12 + terminal 4 + kanban 7 + composer 1；漏任一即此处编译失败） */
+/** kanban:ipc 总表 = 五个 feature 子表合并（28 子通道：project 3 + session 12 + terminal 4 + kanban 7 + composer 2；漏任一即此处编译失败） */
 export const allKanbanHandlers: SubChannelHandlers<IpcRequest, IpcResult, IpcDeps> = {
   ...projectHandlers,
   ...sessionHandlers,

@@ -140,6 +140,12 @@ export const ipcRequestSchema = z.discriminatedUnion("channel", [
     cli: cliKindSchema,
     cwd: z.string().min(1),
   }),
+  /** codex 斜杠命令客户端展开（issue #92 / spec #82 E 块派发）：读来源文件替换参数占位符返回普通文本（app-server 不解析 / 前缀；文件不可读 → E_INTERNAL fail-closed） */
+  z.object({
+    channel: z.literal("composer:expandCommand"),
+    sourcePath: z.string().min(1),
+    args: z.string(),
+  }),
 ]);
 export type IpcRequest = z.infer<typeof ipcRequestSchema>;
 
@@ -184,6 +190,8 @@ export const ipcOkSchema = z.object({
   skillConflicts: z.array(z.string()).optional(),
   /** composer:listCommands 附带（issue #89 / spec #82 E 块）：该 CLI 的统一命令目录（名称/描述/参数提示/来源/所属 CLI/来源文件路径/仅用户调用标记） */
   commands: z.array(commandEntrySchema).optional(),
+  /** composer:expandCommand 附带（issue #92 / spec #82 E 块）：展开后普通文本（frontmatter 已剥离、占位符已替换） */
+  text: z.string().optional(),
 });
 export type IpcOk = z.infer<typeof ipcOkSchema>;
 
