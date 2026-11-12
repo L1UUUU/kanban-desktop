@@ -135,7 +135,8 @@ export function ChatPane({
             onResume={() => actions.onResume(session.sessionId)}
             onRetry={() => {
               const lastUser = [...session.items].reverse().find((i) => i.kind === "user");
-              if (lastUser && lastUser.kind === "user") actions.onSend(lastUser.text);
+              // #92：onSend 为派发编排（重试文本不以 / 开头 → 直接透传重发；展开产物原文即最终文本）
+              if (lastUser && lastUser.kind === "user") void actions.onSend(lastUser.text);
             }}
             onOpenPtyTerminal={() => actions.onOpenPtyTerminal(session.sessionId)}
             onDismiss={() => actions.onDismissError(session.sessionId)}

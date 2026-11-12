@@ -1,7 +1,9 @@
-// 用途：FakeAdapter —— C1 契约的脚本化 mock 实现：事件溯源日志（readHistory=重放，天然满足不变量 4）、可注入时钟、演示脚本驱动（原型行为规格）+ readTranscript 双视角剧本（#28，独立于 ChatEvent 日志维护）+ listModels 假模型目录（#76：演示 UI 形态与真实 CLI 一致）+ listCommands 固定命令集（#89：整机 e2e 补全菜单前提）
+// 用途：FakeAdapter —— C1 契约的脚本化 mock 实现：事件溯源日志（readHistory=重放，天然满足不变量 4）、可注入时钟、演示脚本驱动（原型行为规格）+ readTranscript 双视角剧本（#28，独立于 ChatEvent 日志维护）+ listModels 假模型目录（#76：演示 UI 形态与真实 CLI 一致）+ listCommands 固定命令集（#89：整机 e2e 补全菜单前提；#92 起 cli=codex 模拟真实 codex 目录扫描）
+import { homedir } from "node:os";
 import type { AdapterEvent, ChatEvent, ChatEventSeed, CommandEntry, ModelEntry, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
 import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListCommandsInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
 import { SystemClock, type FakeClock } from "./clock";
+import { listCodexPromptCommands } from "./codex/prompt-commands";
 import { pickScript, type ScriptStep } from "./fake-scripts";
 
 // 视觉节奏常量（对照原型：流式 ~60ms 出 3 字符、步进间隔给工具卡/消息留呼吸感）
@@ -61,6 +63,8 @@ export interface FakeAdapterOptions {
   failModelsFirst?: number;
   /** #81 e2e 支撑：前 N 次 setModel 抛 AdapterError（整机 Playwright 驱动中途切换失败回滚；缺省 0 不注入） */
   failSetModelFirst?: number;
+  /** 用户主目录覆盖（#92：cli=codex 时目录模拟真实 codex 扫描的 ~/.codex/prompts 基准；缺省 os.homedir()；测试注入 fixture） */
+  homeDir?: string;
 }
 
 /** 全能力 Fake：UI 不隐藏任何控件（spec B capabilities 语义） */
@@ -100,6 +104,7 @@ export class FakeAdapter implements CliAdapter {
   private createCalls = 0;
   private listModelsCalls = 0;
   private setModelCalls = 0;
+  private readonly homeDir: string | null;
   private readonly sessions = new Map<string, SessionState>();
   private readonly handlers = new Set<(event: AdapterEvent) => void>();
 
@@ -113,6 +118,7 @@ export class FakeAdapter implements CliAdapter {
     this.modelsDelayMs = options.modelsDelayMs ?? 0;
     this.failModelsFirst = options.failModelsFirst ?? 0;
     this.failSetModelFirst = options.failSetModelFirst ?? 0;
+    this.homeDir = options.homeDir ?? null;
   }
 
   async createSession(init: CreateSessionInput): Promise<{ sessionId: string; model?: string | null }> {
@@ -159,8 +165,11 @@ export class FakeAdapter implements CliAdapter {
     return FAKE_MODELS.map((m) => ({ ...m }));
   }
 
-  /** 命令列举（issue #89）：返回固定演示集（拷贝防调用方改写常量）；无注入开关——菜单链路稳定可断言 */
-  async listCommands(_input: ListCommandsInput): Promise<CommandEntry[]> {
+  /** 命令列举（issue #89）：固定演示集（拷贝防调用方改写常量），无注入开关——菜单链路稳定可断言；
+   *  #92 起 cli=codex 时改走真实 codex prompts 目录扫描（KANBAN_DISABLE_CODEX 回落 Fake 的场景保持目录语义一致，
+   *  展开派发链路整机 e2e 无需真实 exe 即可端到端驱动） */
+  async listCommands(input: ListCommandsInput): Promise<CommandEntry[]> {
+    if (input.cli === "codex") return listCodexPromptCommands(input.cwd, this.homeDir ?? homedir());
     return FAKE_COMMANDS.map((c) => ({ ...c }));
   }
 

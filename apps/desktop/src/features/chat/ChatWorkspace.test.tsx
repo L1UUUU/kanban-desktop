@@ -171,7 +171,10 @@ const STUB_MODELS: ModelsResult = {
 };
 
 /** 挂载工作区（含真实 useProjects host）并暴露 controller 与 transport（供测试直接驱动动作/取项目 id） */
-function mount(transport?: ChatTransport, opts?: { configPath?: string | null; pick?: () => Promise<string | null> }) {
+function mount(
+  transport?: ChatTransport,
+  opts?: { configPath?: string | null; pick?: () => Promise<string | null>; onSetView?: (v: "chat" | "kanban") => void },
+) {
   const clock = new VirtualClock();
   const adapter = new FakeAdapter({ clock });
   const tr = transport ?? makeTransport(adapter, opts?.pick ? { pick: opts.pick } : undefined);
@@ -188,6 +191,7 @@ function mount(transport?: ChatTransport, opts?: { configPath?: string | null; p
         demoCwd={DEMO_CWD}
         onController={onController}
         configPath={opts?.configPath ?? null}
+        onSetView={opts?.onSetView}
       />
     );
   }
@@ -2135,6 +2139,92 @@ describe("斜杠补全菜单（#90：草稿态/会话态输入框接菜单，命
     fireEvent.change(box, { target: { value: "/", selectionStart: 1 } });
     await waitFor(() => expect(screen.getByTestId("slash-menu")).toBeTruthy());
     expect(screen.getAllByTestId("slash-menu-item").some((el) => (el.textContent ?? "").includes("/fake-skill"))).toBe(true);
+  });
+});
+
+describe("斜杠派发闭环（#92：发送期派发判定 → 透传/展开/内置本地执行，全链走真实 Main 路由）", () => {
+  let tmpRoot = "";
+
+  afterEach(() => {
+    cleanup();
+    for (const db of openDbs.splice(0)) db.close();
+    if (tmpRoot) {
+      rmSync(tmpRoot, { recursive: true, force: true });
+      tmpRoot = "";
+    }
+  });
+
+  it("内置 /kanban（草稿态）：本地执行切视图 + 清空输入保留草稿，不经任何发送通道", async () => {
+    const views: string[] = [];
+    const t = mount(undefined, { onSetView: (v) => views.push(v) });
+    await t.flush();
+    await act(async () => {
+      send("/kanban");
+    });
+    await t.flush();
+    expect(views).toEqual(["kanban"]); // App 层 setView 单源出口被调用
+    const d = t.ctl().draft;
+    expect(d?.kind === "structured" ? d.data.input : null).toBe(""); // 输入已消费、草稿保留
+    expect(screen.getByTestId("draft-hint")).toBeTruthy();
+    expect(t.ctl().sessions.length).toBe(0); // 未创建会话（未发送）
+  });
+
+  it("fake 会话未匹配 /foo：原样发送（用户气泡=原文）+ turn 正常推进", async () => {
+    const clock = new VirtualClock();
+    const t = mount(makeTransport(new FakeAdapter({ clock })));
+    await t.flush();
+    await act(async () => {
+      send("首条消息（建立会话）");
+    });
+    act(() => {
+      clock.runToIdle(); // 首轮演示脚本跑完（running 期输入框禁用）
+    });
+    await t.flush();
+    await act(async () => {
+      send("/nope 任意参数");
+    });
+    act(() => {
+      clock.runToIdle();
+    });
+    expect(screen.getByText("/nope 任意参数")).toBeTruthy(); // 未匹配：气泡为原文
+    expect(screen.getAllByText("好的，我先跑一遍现有测试确认基线，然后开始拆分。").length).toBeGreaterThanOrEqual(2); // 两轮 turn 照常（默认脚本同文案）
+  });
+
+  it("codex 草稿匹配展开：菜单数据源（FakeAdapter codex 目录模拟）→ 发送期 composer:expandCommand（真实 Main 读文件）→ 展开文本为首条消息（气泡=展开结果，占位符已替换）", async () => {
+    tmpRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "kb-ws-slash-")));
+    const projDir = join(tmpRoot, "demo-repo");
+    mkdirSync(join(projDir, ".git"), { recursive: true });
+    const promptsDir = join(projDir, ".codex", "prompts");
+    mkdirSync(promptsDir, { recursive: true });
+    writeFileSync(join(promptsDir, "kb-probe.md"), "---\ndescription: 展开探针\nargument-hint: [说明]\n---\n目标：$ARGUMENTS，首参=$1，标记 KB-CODEX-PROMPT-EXECUTED", "utf8");
+    const t = mount(makeTransport(new FakeAdapter({ clock: new VirtualClock() }), { pick: async () => projDir }));
+    await t.flush();
+    const projectId = await registerProject(t, projDir);
+    await act(async () => {
+      const r = t.ctl().openSessionDraft({ projectId, cli: "codex" });
+      if (!r.ok) throw new Error("codex 草稿打开失败");
+    });
+    // 菜单可见（codex 目录模拟 → 项目级 prompt 进菜单）
+    const box = screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…");
+    await act(async () => {
+      await waitFor(() => {
+        const d = t.ctl().draft;
+        if (d?.kind !== "structured" || d.data.model === undefined) throw new Error("模型未就绪");
+      });
+    });
+    fireEvent.change(box, { target: { value: "/kb", selectionStart: 3 } });
+    await waitFor(() => expect(screen.getByTestId("slash-menu")).toBeTruthy());
+    expect(screen.getAllByTestId("slash-menu-item").some((el) => (el.textContent ?? "").includes("/kb-probe"))).toBe(true);
+    // 接受置入 + 补实参 → 提交：展开链路（Main 读文件替换占位符）以展开文本为首条消息
+    fireEvent.keyDown(box, { key: "Enter" });
+    fireEvent.change(box, { target: { value: "/kb-probe alpha beta", selectionStart: 21 } });
+    await act(async () => {
+      send("/kb-probe alpha beta");
+    });
+    await t.flush();
+    expect(screen.getByText("目标：alpha beta，首参=alpha，标记 KB-CODEX-PROMPT-EXECUTED")).toBeTruthy(); // 气泡=展开文本
+    expect(screen.queryByText(/\$ARGUMENTS/)).toBeNull(); // 占位符已替换（无残留）
+    expect(screen.getByText("新会话 · Codex")).toBeTruthy(); // 原子创建链成功
   });
 });
 

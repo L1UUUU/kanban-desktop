@@ -1,5 +1,5 @@
 // 用途：Main 入站 IPC 路由单测 —— zod 强制校验（非法消息明确错误码 E_SCHEMA）+ 各通道路由到 Adapter/store + AdapterError 错误码透传（spec E/#6 验收第 4 条/#7 project/session 通道；#17 kanban 七通道 + 原子关联 + tracker 推送）
-import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1917,5 +1917,22 @@ describe("composer:listCommands 通道（#89 斜杠命令列举）", () => {
     })();
     const res = await handleIpc({ ...makeDeps(failAdapter), commandCatalog: new CommandCatalog({ adapter: failAdapter, now: () => 0 }) }, { channel: "composer:listCommands", cli: "opencode", cwd: "C:\\p" });
     expect(res).toMatchObject({ ok: false, error: { code: "E_SPAWN_NOT_FOUND" } });
+  });
+});
+
+describe("composer:expandCommand 通道（#92 codex 客户端展开）", () => {
+  it("读来源文件展开：剥 frontmatter + 占位符替换，返回普通文本", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "kb-expand-"));
+    const file = join(tmpRoot, "probe.md");
+    writeFileSync(file, "---\ndescription: 探针\n---\n目标：$ARGUMENTS，第一=$1，标记 KB-CODEX-PROMPT-EXECUTED", "utf8");
+    const deps = makeDeps(new FakeAdapter({ clock: new VirtualClock() }));
+    const res = await handleIpc(deps, { channel: "composer:expandCommand", sourcePath: file, args: "alpha beta" });
+    expect(res).toMatchObject({ ok: true, text: "目标：alpha beta，第一=alpha，标记 KB-CODEX-PROMPT-EXECUTED" });
+  });
+
+  it("文件不可读 → E_INTERNAL 明确报错（fail-closed 不静默）", async () => {
+    const deps = makeDeps(new FakeAdapter({ clock: new VirtualClock() }));
+    const res = await handleIpc(deps, { channel: "composer:expandCommand", sourcePath: join(tmpRoot, "不存在.md"), args: "x" });
+    expect(res).toMatchObject({ ok: false, error: { code: "E_INTERNAL", message: expect.stringContaining("不可读") } });
   });
 });

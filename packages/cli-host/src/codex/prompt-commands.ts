@@ -52,3 +52,36 @@ export function listCodexPromptCommands(projectCwd: string, home: string): Comma
   }
   return [...merged.values()].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
 }
+
+// —— #92 codex 客户端展开（PoC 结论：app-server 不解析 / 前缀，GUI 读 prompt 文件展开后作普通文本发送）——
+// 占位符形态（与 prompt-commands 的 argument-hint 约定一致）：$ARGUMENTS / $@ = 全量实参原文；$1..$9 = 空白切分位置参数（缺位空串）
+
+/** 占位符单趟匹配（$ARGUMENTS / $@ / $1..$9）：单趟替换保证实参插入文本不被二次展开 */
+const PLACEHOLDER_RE = /\$(ARGUMENTS|@|[1-9])/g;
+
+/** 剥离文件头部 frontmatter（`---` 围栏闭合后为正文）；无围栏/未闭合返回原文 */
+function stripFrontmatter(text: string): string {
+  const lines = text.split(/\r?\n/);
+  if (lines[0]?.trim() !== "---") return text;
+  const close = lines.findIndex((line, i) => i > 0 && line.trim() === "---");
+  if (close === -1) return text; // 未闭合：按无围栏处理（与 parseFrontmatter 判定一致）
+  return lines.slice(close + 1).join("\n");
+}
+
+/**
+ * 展开 Codex prompt 命令为普通文本（issue #92 / spec #82 E 块派发形态）：
+ * 剥 frontmatter → 正文占位符替换（$ARGUMENTS/$@ 全量、$1..$9 位置）；无占位符且带实参时空行追加（不静默丢参）。
+ */
+export function expandCodexPromptCommand(fileText: string, args: string): string {
+  const body = stripFrontmatter(fileText).trim();
+  const fullArgs = args.trim();
+  const positionals = fullArgs.split(/\s+/).filter((w) => w !== "");
+  let substituted = false;
+  const expanded = body.replace(PLACEHOLDER_RE, (_, token: string) => {
+    substituted = true;
+    if (token === "ARGUMENTS" || token === "@") return fullArgs;
+    return positionals[Number(token) - 1] ?? "";
+  });
+  if (!substituted && fullArgs) return `${expanded}\n\n${fullArgs}`;
+  return expanded;
+}

@@ -7,6 +7,7 @@ import { ChatStore, type DraftSession, type SessionMeta, type SessionView } from
 import { selectStartupSessionId } from "./startup-select";
 import { ModelCatalog } from "./model-catalog";
 import { ComposerCommandSource } from "./composer-command-source";
+import { dispatchDraftSubmit, dispatchSessionSend, type SlashDispatchEnv } from "./slash-dispatch-exec";
 import { TerminalDraftController, type TerminalDraftSnapshot } from "../terminal/terminal-draft";
 import { TerminalManager } from "../terminal/TerminalManager";
 
@@ -34,7 +35,8 @@ export type OpenDraftResult =
   | { ok: false; reason: "project-missing" };
 
 export interface ChatControllerActions {
-  send(text: string): void;
+  /** 发送编排含斜杠派发（issue #92）：透传/展开发送、内置 /pty /kanban 本地执行、fail-closed 拒绝；返回 true=输入已消费 */
+  send(text: string): Promise<boolean>;
   interrupt(): void;
   resolveApproval(decision: ApprovalDecision): void;
   /** 互斥属主唯一安装点（issue #71 S4）：cwd 解析 / 项目不存在提示 / 跨类草稿互斥替换 / replacedHint 单源，一个动作完成 */
@@ -98,6 +100,8 @@ export interface ChatControllerDeps {
   resolveCwd(projectId: string | null, cli: CliKind | "pty"): string | null;
   /** 项目不存在等新建拒绝提示（单源：3 份手抄归 1） */
   onNotice(message: string): void;
+  /** 内置 /kanban 命令的视图切换单源出口（issue #92：App 层 setView 经 ChatWorkspace 注入，composer 不直面 App） */
+  onSetView?(v: "chat" | "kanban"): void;
 }
 
 /**
@@ -204,10 +208,12 @@ export function discardAllDraftsAction(env: Omit<SessionDraftEnv, "resolveCwd" |
  * 成功：登记会话 + 首条消息本地回显 + 丢弃草稿；失败：草稿与输入保留（可重试），错误直达失败卡，
  * Main 回滚时事件先至的占位行按 rolledBackSessionId 撤销（不留空会话）。
  */
-export async function submitDraftChain(store: ChatStore, transport: ChatTransport): Promise<boolean> {
+export async function submitDraftChain(store: ChatStore, transport: ChatTransport, firstMessage?: string): Promise<boolean> {
   const d = store.getSnapshot().draft;
   // 单一就绪态守卫：模型未选（列表未就绪/未手输兜底）不提交——UI 发送钮同步禁用，此处为链路兜底
   if (!d || d.input.trim().length === 0 || !d.model) return false;
+  // #92 斜杠派发：codex 展开类以展开文本为首条消息（覆盖草稿原文；气泡与 wire 同文本，所见即所发）
+  const sendText = firstMessage ?? d.input;
   const r = await transport.invoke({
     channel: "session:create",
     cli: d.cli,
@@ -217,7 +223,7 @@ export async function submitDraftChain(store: ChatStore, transport: ChatTranspor
     model: d.model, // 所见即所发：默认选中项同样真实下发（无占位串）
     permMode: d.permMode,
     requirementId: d.requirementId,
-    firstMessage: d.input,
+    firstMessage: sendText,
   });
   if (r.ok && r.sessionId) {
     // #20：卡片进草稿的自动关联由 Main 原子完成（session_linked 推送回流看板 store）；拒绝仅报告不阻断会话
@@ -239,7 +245,7 @@ export async function submitDraftChain(store: ChatStore, transport: ChatTranspor
       // #21：Main 仅对 claude 会话附同名 skill 冲突名（其余 CLI 缺省无冲突）
       skillConflicts: r.skillConflicts ?? [],
     });
-    store.appendUserMessage(r.sessionId, d.input); // 首条消息本地回显（内容不经事件流回传）
+    store.appendUserMessage(r.sessionId, sendText); // 首条消息本地回显（内容不经事件流回传；= 实际发送文本）
     store.discardDraft();
     return true;
   }
@@ -437,12 +443,23 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
         if (!r.ok) store.setError(sessionId, r.error.code, r.error.message);
       });
     };
+    // #92 斜杠派发环境（透传/展开/内置/fail-closed 编排收口在 slash-dispatch-exec；此处只注入依赖）
+    const slashEnv = (): SlashDispatchEnv | null =>
+      transport
+        ? {
+            store,
+            transport,
+            commands,
+            openSessionDraft: (input) => openSessionDraftAction({ store, drafts, manager, resolveCwd, onNotice }, input),
+            onSetView: deps.onSetView,
+          }
+        : null;
     return {
-      send: (text) => {
+      send: async (text) => {
         const id = activeId();
-        if (!id || !transport || text.trim().length === 0) return;
-        store.appendUserMessage(id, text);
-        report(transport.invoke({ channel: "session:send", sessionId: id, text }), id);
+        const env = slashEnv();
+        if (!id || !env || text.trim().length === 0) return true;
+        return dispatchSessionSend(env, id, text);
       },
       interrupt: () => {
         const id = activeId();
@@ -466,8 +483,9 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
       },
       openSessionDraft: (input) => openSessionDraftAction({ store, drafts, manager, resolveCwd, onNotice }, input),
       submitDraft: async () => {
-        if (!transport) return false;
-        return submitDraftChain(store, transport);
+        const env = slashEnv();
+        if (!env || !transport) return false;
+        return dispatchDraftSubmit(env, (firstMessage) => submitDraftChain(store, transport, firstMessage));
       },
       updateDraft: (patch) => store.updateDraft(patch),
       clearDraftSubmitError: () => store.clearDraftSubmitError(),
@@ -507,7 +525,7 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
         }
       },
     };
-  }, [transport, store, resolveCwd, onNotice, drafts, manager]);
+  }, [transport, store, resolveCwd, onNotice, drafts, manager, commands, deps.onSetView]);
 
   const activeSession = snap.activeId ? (store.getSession(snap.activeId) ?? null) : null;
   // 草稿判别联合聚合：结构化与 PTY 两分支并一支（中央区路由单源）
