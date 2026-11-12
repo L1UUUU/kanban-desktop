@@ -1,4 +1,4 @@
-// 用途：session 子通道路由表 —— session:list/archivedList/archive/unarchive/delete/create/send/interrupt/resolveApproval/readHistory/resume 十一个 handler（#72 C1 Step2 自 ipc.ts route switch 原样迁入；归档/取消归档/删除编排主体在 session-lifecycle，#70 C2 唯一写者）
+// 用途：session 子通道路由表 —— session:list/archivedList/archive/unarchive/delete/create/send/interrupt/setModel/resolveApproval/readHistory/resume 十二个 handler（#72 C1 Step2 自 ipc.ts route switch 原样迁入；归档/取消归档/删除编排主体在 session-lifecycle，#70 C2 唯一写者）
 import { homedir } from "node:os";
 import type { IpcRequest, IpcResult, SessionRow } from "@kanban/ipc-schema";
 import { AdapterError, detectSkillConflicts, resolveUserClaudeDir } from "@kanban/cli-host";
@@ -157,6 +157,21 @@ export const sessionHandlers: SubChannelHandlers<SessionRequest, IpcResult, IpcD
   "session:interrupt": async (req, deps) => {
     await deps.adapter.interruptTurn(req.sessionId);
     return { ok: true };
+  },
+  "session:setModel": async (req, deps) => {
+    // issue #79 / spec #75：三 CLI 统一「idle 可切、下一轮生效、进行中/断开拒绝」——忙态/断开在 Main 侧以落库状态校验
+    //（session_status 事件驱动更新；running/waiting 均属本轮进行中，interrupted 本轮已结束可切），adapter 侧各自落实生效语义
+    const rec = deps.sessions.get(req.sessionId);
+    if (!rec) return sessionNotFound(req.sessionId);
+    const status = rec.status ?? "idle";
+    if (status === "running" || status === "waiting") {
+      return { ok: false, error: { code: "E_INTERNAL", message: "本轮进行中，结束后再切换" } };
+    }
+    if (status === "disconnected") {
+      return { ok: false, error: { code: "E_INTERNAL", message: "会话已断开，恢复后可切换" } };
+    }
+    const r = await deps.adapter.setModel({ sessionId: req.sessionId, model: req.model });
+    return { ok: true, ...(r.model ? { model: r.model } : {}) }; // 生效模型回传（claude 为响应实际名，供 chip 回显）
   },
   "session:resolveApproval": async (req, deps) => {
     await deps.adapter.resolveApproval({

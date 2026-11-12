@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ClaudeAdapter, type ClaudeStreamClientLike } from "./claude-adapter";
 import { ExeNotFoundError } from "./adapter";
-import { assertApprovalFlag, CLAUDE_BASE_ARGS, type ClaudeStreamOptions } from "./claude/client";
+import { assertApprovalFlag, ClaudeSetModelError, CLAUDE_BASE_ARGS, type ClaudeStreamOptions } from "./claude/client";
 import { skillObservationSchema, type AdapterEvent, type ChatEvent, type SkillObservation } from "@kanban/ipc-schema";
 
 /** 记录型 Fake 流客户端：start 立即握手成功；测试手动 emit 协议消息/控制请求/进程退出 */
@@ -21,6 +21,12 @@ class FakeStream implements ClaudeStreamClientLike {
   interruptCalls = 0;
   /** initialize 握手响应载荷（listModels #78 数据源；缺省空对象） */
   initPayload: Record<string, unknown> = {};
+  /** set_model 成功回传的实际模型名（#79；null=透传请求值） */
+  setModelResult: string | null = null;
+  /** set_model 失败错误码（#79：invalid_request/catalog_unknown/not_found；null=成功） */
+  failSetModelCode: string | null = null;
+  /** set_model 调用记录（#79：断言下发模型） */
+  readonly setModelCalls: string[] = [];
   /** 模拟 initialize 握手失败（start 抛错） */
   failStart: Error | null = null;
   /** stop() 调用计数（listModels 临时进程退出断言用） */
@@ -42,6 +48,11 @@ class FakeStream implements ClaudeStreamClientLike {
   interrupt(): Promise<void> {
     this.interruptCalls += 1;
     return Promise.resolve();
+  }
+  async setModel(model: string): Promise<string> {
+    this.setModelCalls.push(model);
+    if (this.failSetModelCode) throw new ClaudeSetModelError(this.failSetModelCode, `set_model 被拒绝（${this.failSetModelCode}）：模型 ${model} 不可用`);
+    return this.setModelResult ?? model;
   }
   respondControlRequest(requestId: string, response: unknown): void {
     this.sentControlResponses.push({ requestId, response });
@@ -297,6 +308,49 @@ describe("ClaudeAdapter：listModels（issue #78：spawn 临时进程 initialize
       code: "E_INTERNAL",
       message: expect.stringContaining("不含 models 数组"),
     });
+  });
+});
+
+describe("ClaudeAdapter：setModel 中途切换（issue #79 / spec #75）", () => {
+  it("向会话活进程下发所选模型；成功以响应实际模型名回写会话态 → 进程重启 resume 以 --model 携带新模型（切换不因重启丢失）", async () => {
+    const ctx = makeAdapter();
+    const { sessionId } = await ctx.adapter.createSession({ cwd: CWD, model: "claude-old" });
+    const live = ctx.stream();
+    live.setModelResult = "claude-actual-id"; // 响应 payload 回传实际模型名（与请求别名可不同）
+    const r = await ctx.adapter.setModel({ sessionId, model: "claude-alias" });
+    expect(r).toEqual({ model: "claude-actual-id" });
+    expect(live.setModelCalls).toEqual(["claude-alias"]);
+    // 进程死亡 → resume 重 spawn：--model 携带响应回写的实际模型名（防静默回退旧模型）
+    live.simulateExit(1);
+    await ctx.adapter.resume(sessionId);
+    const resumed = ctx.stream();
+    const i = (resumed.options.args ?? []).indexOf("--model");
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(resumed.options.args![i + 1]).toBe("claude-actual-id");
+  });
+
+  it.each(["invalid_request", "catalog_unknown", "not_found"])("CLI 错误码 %s 映射 AdapterError（消息含原始错误码与模型名）；失败不回写会话态", async (wireCode) => {
+    const ctx = makeAdapter();
+    const { sessionId } = await ctx.adapter.createSession({ cwd: CWD, model: "claude-old" });
+    ctx.stream().failSetModelCode = wireCode;
+    await expect(ctx.adapter.setModel({ sessionId, model: "nope-model" })).rejects.toMatchObject({
+      code: "E_INTERNAL",
+      message: expect.stringContaining(wireCode),
+    });
+    // 失败不回写：进程重启 resume 仍携带创建时模型（不静默换成错误模型）
+    ctx.stream().simulateExit(1);
+    await ctx.adapter.resume(sessionId);
+    const resumed = ctx.stream();
+    const i = (resumed.options.args ?? []).indexOf("--model");
+    expect(resumed.options.args![i + 1]).toBe("claude-old");
+  });
+
+  it("断开会话（进程已死）拒绝；未知会话 E_SESSION_NOT_FOUND", async () => {
+    const ctx = makeAdapter();
+    const { sessionId } = await ctx.adapter.createSession({ cwd: CWD });
+    ctx.stream().simulateExit(1);
+    await expect(ctx.adapter.setModel({ sessionId, model: "m" })).rejects.toMatchObject({ code: "E_INTERNAL" });
+    await expect(ctx.adapter.setModel({ sessionId: "s-nope", model: "m" })).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
   });
 });
 

@@ -1,7 +1,7 @@
 // 用途：AdapterRouter —— 多 CLI 分发门面：createSession/listModels 按 init.cli 分发到对应 Adapter 并登记路由，其余 C1 方法按 sessionId 路由（ipc 单 adapter 注入位不变）
 import { randomUUID } from "node:crypto";
 import type { AdapterEvent, ChatEvent, ModelEntry, TranscriptEvent } from "@kanban/ipc-schema";
-import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
+import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
 
 /** Router 构造工厂：cli → adapter（不支持该 CLI 时抛 AdapterError） */
 export type AdapterFactory = (cli: string) => CliAdapter;
@@ -70,6 +70,11 @@ export class AdapterRouter implements CliAdapter {
 
   async interruptTurn(sessionId: string): Promise<void> {
     return this.route(sessionId).interruptTurn(sessionId);
+  }
+
+  /** 会话中途切换模型（issue #79）：按 sessionId 路由到所属 Adapter（三 CLI 统一 idle 可切、下一轮生效语义在各实现内） */
+  async setModel(input: SetModelInput): Promise<{ model: string }> {
+    return this.route(input.sessionId).setModel(input);
   }
 
   async resolveApproval(input: ResolveApprovalInput): Promise<void> {

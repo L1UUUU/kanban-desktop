@@ -127,6 +127,40 @@ describe("Main 入站强制校验", () => {
     if (res.ok) expect(res.model).toBe("fake-standard");
   });
 
+  it("session:setModel：idle 可切——adapter 生效模型回传；未知会话 E_SESSION_NOT_FOUND（issue #79）", async () => {
+    const { handle } = makeRouter();
+    const created = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p", model: "fake-standard" });
+    const sessionId = created.ok ? created.sessionId! : "";
+    const r = await handle({ channel: "session:setModel", sessionId, model: "fake-lite" });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.model).toBe("fake-lite");
+    const ghost = await handle({ channel: "session:setModel", sessionId: "ghost", model: "x" });
+    expect(ghost.ok).toBe(false);
+    if (!ghost.ok) expect(ghost.error.code).toBe("E_SESSION_NOT_FOUND");
+  });
+
+  it("session:setModel main 侧校验：本轮进行中（running/waiting）拒绝、断开拒绝、interrupted/idle 可切（issue #79 三 CLI 统一语义）", async () => {
+    const { deps, handle } = makeRouter();
+    const created = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p" });
+    const sessionId = created.ok ? created.sessionId! : "";
+    const setModel = () => handle({ channel: "session:setModel", sessionId, model: "fake-lite" });
+    deps.sessions.updateStatus(sessionId, "running");
+    let r = await setModel();
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.message).toBe("本轮进行中，结束后再切换");
+    deps.sessions.updateStatus(sessionId, "waiting"); // 审批待决 = 本轮未结束
+    r = await setModel();
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.message).toBe("本轮进行中，结束后再切换");
+    deps.sessions.updateStatus(sessionId, "interrupted"); // 本轮已结束：可切
+    r = await setModel();
+    expect(r.ok).toBe(true);
+    deps.sessions.updateStatus(sessionId, "disconnected");
+    r = await setModel();
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.message).toBe("会话已断开，恢复后可切换");
+  });
+
   it("session:send / interrupt / resolveApproval 路由成功（ok:true）", async () => {
     const { clock, adapter, handle } = makeRouter();
     const created = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p" });
@@ -1260,6 +1294,7 @@ function spyAdapter(
     capabilities: base.capabilities,
     createSession: (i) => base.createSession(i),
     listModels: (i) => base.listModels(i),
+    setModel: (i) => base.setModel(i),
     sendTurn: (i) => base.sendTurn(i),
     interruptTurn: async (id) => {
       calls.push(`interrupt:${id}`);

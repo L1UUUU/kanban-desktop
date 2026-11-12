@@ -231,6 +231,26 @@ describe("OpenCodeAdapter：createSession 与 server-per-project", () => {
   });
 });
 
+describe("OpenCodeAdapter：setModel 中途切换（issue #79 / spec #75）", () => {
+  it("切换仅更新会话态：下一 prompt 请求携带新 model（providerID/modelID 切分，自然下一轮生效）", async () => {
+    const ctx = makeAdapter();
+    const { sessionId, nativeSessionId } = await ctx.adapter.createSession({ cwd: CWD });
+    const r = await ctx.adapter.setModel({ sessionId, model: "openai/gpt-new" });
+    expect(r).toEqual({ model: "openai/gpt-new" });
+    await ctx.adapter.sendTurn({ sessionId, text: "切换后首轮" });
+    const prompt = ctx
+      .server(CWD)
+      .apiCalls.find((c) => c.path.endsWith("/prompt_async") && (c.body as { parts?: Array<{ text?: string }> } | undefined)?.parts?.[0]?.text === "切换后首轮");
+    expect(prompt?.body).toMatchObject({ model: { providerID: "openai", modelID: "gpt-new" } });
+    ctx.server(CWD).emit("session.idle", { sessionID: nativeSessionId! }); // 收尾 turn（停轮询计时器）
+  });
+
+  it("未知会话 → E_SESSION_NOT_FOUND", async () => {
+    const ctx = makeAdapter();
+    await expect(ctx.adapter.setModel({ sessionId: "s-nope", model: "openai/x" })).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
+  });
+});
+
 describe("OpenCodeAdapter：turn 与流式映射（delta+part 双通道）", () => {
   it("delta → message_delta；快照自愈补缺失；idle → turn_completed + message_completed", async () => {
     const ctx = makeAdapter();

@@ -184,6 +184,7 @@ describe.skipIf(!E2E)("OpenCodeAdapter 真实集成（env-gated）", () => {
     },
     sendTurn: (i) => adapter.sendTurn(i),
     listModels: (i) => adapter.listModels(i),
+    setModel: (i) => adapter.setModel(i),
     interruptTurn: (id) => adapter.interruptTurn(id),
     resolveApproval: (i) => adapter.resolveApproval(i),
     readHistory: (id) => adapter.readHistory(id),
@@ -216,6 +217,19 @@ describe.skipIf(!E2E)("OpenCodeAdapter 真实集成（env-gated）", () => {
   );
 
   /* ---------------- server-per-project：并发 ≥3 共享 server + 引用计数生命周期 ---------------- */
+  /* ---------------- setModel 真实切换（issue #79：目录内模型，最小 turn 验证） ---------------- */
+  it("setModel：切换目录内另一模型后 prompt 请求携带新 model——最小 turn 正常完成（内网网关 token cost=0）", async () => {
+    const models = await adapter.listModels({ cwd: workdir });
+    expect(models.length).toBeGreaterThan(0);
+    const target = models.at(-1)!; // 目录内任一真实模型（与默认不同则切换语义完整）
+    const { sessionId } = await adapter.createSession({ cwd: workdir });
+    await expect(adapter.setModel({ sessionId, model: target.id })).resolves.toEqual({ model: target.id });
+    await adapter.sendTurn({ sessionId, text: "只回复：OK" });
+    await driveIdle();
+    expect(chat(sessionId).some((e) => e.type === "turn_completed")).toBe(true); // prompt 携带新 model 被接受并完成
+    expect(chat(sessionId).some((e) => e.type === "session_error")).toBe(false);
+  });
+
   it("server-per-project：并发 ≥3 会话共享同一 server 回复互不串扰；逐个 dispose 最后一个释放才停", async () => {
     markScope();
     const host = makeE2EHost(path.join(root, "servers-conc.json"));

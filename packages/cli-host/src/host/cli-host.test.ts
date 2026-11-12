@@ -159,6 +159,9 @@ class BaseStubAdapter implements CliAdapter {
   async listModels(): Promise<never[]> {
     return [];
   }
+  async setModel(input: { sessionId: string; model: string }): Promise<{ model: string }> {
+    return { model: input.model };
+  }
   async sendTurn(): Promise<void> {}
   async interruptTurn(): Promise<void> {}
   async resolveApproval(): Promise<void> {}

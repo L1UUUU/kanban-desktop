@@ -1,13 +1,13 @@
-// 用途：ClaudeAdapter —— C1 契约的真实 Claude 实现：stream-json 行协议直连（每会话一进程，poc-7 client 演进）、stdio 审批（can_use_tool 控制请求）、interrupt 归类已取消、--resume 跨重启恢复、--settings 会话级 hook 注入产生 verified SkillObservation（t0-02 裁决：无 SDK 备选路径）、listModels spawn 临时进程 initialize 握手读 models 数组（#78）
+// 用途：ClaudeAdapter —— C1 契约的真实 Claude 实现：stream-json 行协议直连（每会话一进程，poc-7 client 演进）、stdio 审批（can_use_tool 控制请求）、interrupt 归类已取消、--resume 跨重启恢复、--settings 会话级 hook 注入产生 verified SkillObservation（t0-02 裁决：无 SDK 备选路径）、listModels spawn 临时进程 initialize 握手读 models 数组（#78）、setModel 活进程 set_model 控制请求 + 实际模型名回写会话态（#79）
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { LogKind, AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, ModelEntry, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
 import { transformHookEvents } from "@kanban/tracker";
-import { AdapterError, ExeNotFoundError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
+import { AdapterError, ExeNotFoundError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
 import { resolveClaudeExe } from "./claude/exe";
-import { ClaudeStreamClient, type ClaudeStreamOptions } from "./claude/client";
+import { ClaudeSetModelError, ClaudeStreamClient, type ClaudeStreamOptions } from "./claude/client";
 import { prepareSessionHookDir, resolveHookNodeBin, tailJsonl, writeSessionSettings, type SessionHookFiles } from "./claude/hook-inject";
 import { findTranscriptFile, parseTranscriptEvents, parseTranscriptItems } from "./claude/transcript";
 import { isAuthFailureStatus, isAuthFailureText } from "./session-error";
@@ -18,6 +18,8 @@ export interface ClaudeStreamClientLike {
   start(): Promise<Record<string, unknown>>;
   sendUser(text: string): void;
   interrupt(): Promise<void>;
+  /** set_model 控制请求（#79）：成功回传下一 turn 实际模型名；失败抛 ClaudeSetModelError（CLI 错误码透传） */
+  setModel(model: string): Promise<string>;
   respondControlRequest(requestId: string, response: unknown): void;
   onMessage(fn: (msg: Record<string, unknown>) => void): () => void;
   onDead(fn: (err: Error) => void): () => void;
@@ -226,6 +228,26 @@ export class ClaudeAdapter implements CliAdapter {
     }
     s.pendingApprovals.clear();
     if (s.client && !s.client.dead) void s.client.interrupt().catch(() => {});
+  }
+
+  /**
+   * 会话中途切换模型（issue #79 / spec #75）：向会话活进程发 set_model 控制请求并等确认；
+   * 成功以响应 payload 实际模型名回写会话态（进程重启后 resume 以 --model 携带，防静默回退旧模型）；
+   * CLI 错误码（invalid_request/catalog_unknown/not_found）与超时/进程异常统一映射 AdapterError，失败不回写。
+   */
+  async setModel(input: SetModelInput): Promise<{ model: string }> {
+    const s = this.requireLiveSession(input.sessionId);
+    let actual: string;
+    try {
+      actual = await s.client!.setModel(input.model);
+    } catch (e) {
+      if (e instanceof ClaudeSetModelError) {
+        throw new AdapterError("E_INTERNAL", `切换 Claude 模型失败（${e.wireCode}）：${e.message}（模型：${input.model}）`);
+      }
+      throw new AdapterError("E_INTERNAL", `切换 Claude 模型失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+    s.model = actual; // 回写实际名：resume 重 spawn 以 --model 携带（spec #75：切换不因进程重启丢失）
+    return { model: actual };
   }
 
   async resolveApproval(input: ResolveApprovalInput): Promise<void> {

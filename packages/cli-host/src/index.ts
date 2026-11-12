@@ -12,7 +12,7 @@ export { createDefaultModelResolver, latestRolloutModel, probeModelWithMinimalTu
 export { probeProtocol, type ProtocolProbeResult } from "./codex/protocol-probe";
 export { ClaudeAdapter, type ClaudeAdapterOptions, type ClaudeStreamClientLike } from "./claude-adapter";
 export { resolveClaudeExe, listClaudeExeCandidates } from "./claude/exe";
-export { ClaudeStreamClient, CLAUDE_BASE_ARGS, assertApprovalFlag, type ClaudeStreamOptions } from "./claude/client";
+export { ClaudeStreamClient, CLAUDE_BASE_ARGS, assertApprovalFlag, buildSetModelControlRequest, parseSetModelResponse, ClaudeSetModelError, type ClaudeStreamOptions } from "./claude/client";
 export { resolveHookNodeBin } from "./claude/hook-inject";
 export { findTranscriptFile } from "./claude/transcript";
 export { OpenCodeAdapter, type OpenCodeAdapterOptions, splitModelId } from "./opencode-adapter";

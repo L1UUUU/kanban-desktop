@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { LogKind, AdapterEvent, ApprovalDecision, ApprovalSuggestion, ChatEvent, ChatEventSeed, ModelEntry, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
-import { AdapterError, ExeNotFoundError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
+import { AdapterError, ExeNotFoundError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
 import type { OpenCodeSseEvent, OpenCodeServerClientLike } from "./opencode/client";
 import { OpenCodeServerHost, type OpenCodeServerHostLike, type OpenCodeServerHostOptions } from "./opencode/server-host";
 import { isAuthFailureStatus, isAuthFailureText, isProtocolDisconnectText } from "./session-error";
@@ -217,6 +217,13 @@ export class OpenCodeAdapter implements CliAdapter {
     this.sessions.set(input.sessionId, s);
     this.byNative.set(input.nativeSessionId, s);
     this.emit(s, { type: "session_status", status: "disconnected" });
+  }
+
+  /** 会话中途切换模型（issue #79 / spec #75）：仅更新会话态——prompt 请求已带 model（resolveModelWire 读 s.model），自然下一轮生效 */
+  async setModel(input: SetModelInput): Promise<{ model: string }> {
+    const s = this.requireSession(input.sessionId);
+    s.model = input.model;
+    return { model: input.model };
   }
 
   async sendTurn(input: SendTurnInput): Promise<void> {

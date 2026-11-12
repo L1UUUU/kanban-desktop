@@ -118,6 +118,7 @@ export class ChatStore {
       existing.title = meta.title;
       existing.permMode = meta.permMode;
       existing.model = meta.model;
+      existing.modelChangePending = false; // #79：重登记即新会话语境，切换提示不跨登记残留
       existing.projectId = meta.projectId ?? null;
       existing.cwd = meta.cwd ?? existing.cwd;
       existing.dirIdentity = meta.dirIdentity ?? existing.dirIdentity;
@@ -135,6 +136,7 @@ export class ChatStore {
       status: "idle",
       permMode: meta.permMode,
       model: meta.model,
+      modelChangePending: false,
       projectId: meta.projectId ?? null,
       cwd: meta.cwd ?? null,
       dirIdentity: meta.dirIdentity ?? "none",
@@ -161,6 +163,7 @@ export class ChatStore {
       permMode: row.permMode ?? "auto",
       // DB 无 model 列：恢复会话模型为空（undefined），chip 显示由显示层派生默认名（不写 store，issue #77）
       model: undefined,
+      modelChangePending: false,
       projectId: row.projectId,
       cwd: row.cwd,
       dirIdentity: row.dirIdentity,
@@ -246,8 +249,8 @@ export class ChatStore {
     this.changed();
   }
 
-  /** 本地会话设置更新（权限档位/模型 chip） */
-  updateSession(id: string, patch: Partial<Pick<SessionView, "permMode" | "model">>): void {
+  /** 本地会话设置更新（权限档位/模型 chip；modelChangePending 为 #79 切换成功标注，「下一轮起生效」提示数据源） */
+  updateSession(id: string, patch: Partial<Pick<SessionView, "permMode" | "model" | "modelChangePending">>): void {
     const s = this.sessions.get(id);
     if (!s) return;
     Object.assign(s, patch);
@@ -346,6 +349,7 @@ export class ChatStore {
         s.pendingApproval = null;
         s.lastTurnInterrupted = false;
         s.lastError = null;
+        s.modelChangePending = false; // #79：新 turn 开始即切换已生效，「下一轮起生效」提示收起
         break;
       case "message_delta": {
         const existing = s.items.find(
@@ -457,6 +461,7 @@ export class ChatStore {
         status: "idle",
         permMode: "auto",
         model: undefined, // 事件先至占位：模型未知（注册后回填，issue #77）
+        modelChangePending: false,
         projectId: null,
         cwd: null,
         dirIdentity: "none",

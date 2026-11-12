@@ -51,6 +51,12 @@ export interface ListModelsInput {
   cli?: string;
 }
 
+/** setModel 输入（issue #79 / spec #75）：会话中途切换模型 —— idle 可切、下一轮生效；忙态/断开由 main 侧校验拒绝 */
+export interface SetModelInput {
+  sessionId: string;
+  model: string;
+}
+
 /** 会话收养输入（#13 恢复编排）：按 DB 持久化的 native id 重建会话状态（登记 disconnected，无进程；readHistory/resume 按需拉起） */
 export interface AdoptSessionInput {
   /** 应用侧 sessionId（DB sessions 表 PK） */
@@ -136,6 +142,12 @@ export interface CliAdapter {
    * 不可用（未安装/未登录/协议失败）抛 AdapterError。
    */
   listModels(input: ListModelsInput): Promise<ModelEntry[]>;
+  /**
+   * 会话中途切换模型（issue #79 / spec #75）：统一语义 idle 可切、下一轮生效——codex 更新会话态（此后每次
+   * turn/start 携带 model 覆盖参数，幂等）；claude 向活进程发 set_model 控制请求并以响应实际模型名回写会话态；
+   * opencode 仅更新会话态（prompt 请求已带 model）；fake 存储 no-op。返回下一轮实际生效的模型名；失败抛 AdapterError。
+   */
+  setModel(input: SetModelInput): Promise<{ model: string }>;
   /** 订阅归一化事件流（ChatEvent ∪ SkillObservation），返回退订函数 */
   subscribe(handler: (event: AdapterEvent) => void): () => void;
 }

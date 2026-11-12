@@ -41,10 +41,12 @@ export interface ModelComboboxProps {
   catalog: ModelCatalog;
   /** 就绪后未选中时自动选中 isDefault 项（草稿面板 true；已建会话 composer false——不写会话 store） */
   autoSelectDefault?: boolean;
+  /** #79：禁用（turn 进行中/审批待决）——只读不展开（main 侧同语义校验兜底） */
+  disabled?: boolean;
 }
 
 /** 模型选择 combobox：输入框（role=combobox）+ 自定义下拉；加载与错误态不提供「默认/自选」逃生项 */
-export function ModelCombobox({ cli, cwd, value, onChange, catalog, autoSelectDefault = false }: ModelComboboxProps) {
+export function ModelCombobox({ cli, cwd, value, onChange, catalog, autoSelectDefault = false, disabled = false }: ModelComboboxProps) {
   const state = useModelsState(catalog, cli, cwd);
   const [open, setOpen] = useState(false);
   // 编辑查询（null = 非编辑态，输入框显示派生值）；输入或收起时切换
@@ -89,14 +91,14 @@ export function ModelCombobox({ cli, cwd, value, onChange, catalog, autoSelectDe
         aria-label="模型选择"
         aria-expanded={open}
         aria-haspopup="listbox"
-        readOnly={loading}
+        readOnly={loading || disabled}
         value={query ?? deriveDisplay(state, value)}
         title={value ?? undefined}
         onFocus={() => {
-          if (!loading) setOpen(true);
+          if (!loading && !disabled) setOpen(true);
         }}
         onChange={(e) => {
-          if (loading) return;
+          if (loading || disabled) return;
           setQuery(e.target.value);
           setOpen(true);
         }}
@@ -107,9 +109,9 @@ export function ModelCombobox({ cli, cwd, value, onChange, catalog, autoSelectDe
             setQuery(null);
           }
         }}
-        className={`h-7 w-[190px] cursor-pointer rounded-full border bg-transparent pl-3 pr-7 text-xs text-muted-foreground outline-none hover:border-primary hover:text-foreground focus:border-primary focus:text-foreground ${
-          state.status === "error" ? "border-warn/60" : "border-border"
-        }`}
+        className={`h-7 w-[190px] rounded-full border bg-transparent pl-3 pr-7 text-xs text-muted-foreground outline-none focus:border-primary focus:text-foreground ${
+          disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:border-primary hover:text-foreground"
+        } ${state.status === "error" ? "border-warn/60" : "border-border"}`}
       />
       <span className="pointer-events-none absolute right-2.5 self-center text-[10px] text-muted-foreground">▾</span>
       {open ? (

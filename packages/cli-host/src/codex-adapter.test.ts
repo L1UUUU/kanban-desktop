@@ -198,6 +198,27 @@ describe("CodexAdapter：listModels 模型目录（issue #76 / spec #75）", () 
   });
 });
 
+describe("CodexAdapter：setModel 中途切换（issue #79 / spec #75）", () => {
+  it("切换更新会话态：此后每次 turn/start 携带新 model 覆盖参数（本 turn 及后续，幂等）", async () => {
+    const { rpc, adapter } = makeAdapter();
+    const { sessionId } = await adapter.createSession({ cwd: CWD, model: "gpt-old" });
+    const r = await adapter.setModel({ sessionId, model: "gpt-new" });
+    expect(r).toEqual({ model: "gpt-new" });
+    await adapter.sendTurn({ sessionId, text: "第一轮" }); // 直接开 turn
+    await adapter.sendTurn({ sessionId, text: "第二轮" }); // 忙态排队
+    rpc.emit("turn/started", { threadId: "th-1", turn: { id: "turn-1", status: "inProgress" } });
+    rpc.emit("turn/completed", { threadId: "th-1", turn: { id: "turn-1", status: "completed" } }); // 触发排队续发
+    const starts = rpc.callsOf("turn/start") as Array<{ model?: string }>;
+    expect(starts).toHaveLength(2);
+    expect(starts.map((p) => p.model)).toEqual(["gpt-new", "gpt-new"]);
+  });
+
+  it("未知会话 → E_SESSION_NOT_FOUND", async () => {
+    const { adapter } = makeAdapter();
+    await expect(adapter.setModel({ sessionId: "s-nope", model: "gpt-x" })).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
+  });
+});
+
 describe("CodexAdapter：turn 与流式映射", () => {
   it("sendTurn → turn/start 参数正确；delta→message_delta；completed→终文自愈补 delta + message_completed", async () => {
     const { rpc, adapter, chat } = makeAdapter();

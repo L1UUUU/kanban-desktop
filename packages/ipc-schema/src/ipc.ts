@@ -79,6 +79,12 @@ export const ipcRequestSchema = z.discriminatedUnion("channel", [
     channel: z.literal("session:interrupt"),
     sessionId: sessionIdSchema,
   }),
+  /** 会话中途切换模型（issue #79 / spec #75）：三 CLI 统一 idle 可切、下一轮生效；忙态/断开由 Main 侧校验拒绝 */
+  z.object({
+    channel: z.literal("session:setModel"),
+    sessionId: sessionIdSchema,
+    model: z.string().min(1),
+  }),
   z.object({
     channel: z.literal("session:resolveApproval"),
     sessionId: sessionIdSchema,

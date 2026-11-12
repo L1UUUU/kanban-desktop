@@ -195,6 +195,19 @@ describe.skipIf(!E2E)("CodexAdapter 真实集成（env-gated）", () => {
   });
 
   /* ---------------- 进程受控停止：session_exit + 后续明确报错（工单验收 3） ---------------- */
+  /* ---------------- setModel 真实切换（issue #79：白名单控成本，最小 turn 验证） ---------------- */
+  it("setModel：切换白名单模型后 turn/start 携带新 model——最小 turn 正常完成（不可用模型会 400 报错，完成即覆盖参数生效）", async () => {
+    const preferred = (process.env.KANBAN_CODEX_MODEL ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+    expect(preferred.length).toBeGreaterThan(0); // 白名单必设（docs/testing.md 门禁协议；成本控制不回退）
+    const { sessionId } = await adapter.createSession({ cwd: workdir, model: preferred[0] }); // 探测一次（白名单内廉价模型）
+    const target = preferred[1] ?? preferred[0];
+    await expect(adapter.setModel({ sessionId, model: target })).resolves.toEqual({ model: target });
+    await adapter.sendTurn({ sessionId, text: "只回复两个字：收到" });
+    await driveIdle();
+    expect(chat(sessionId).some((e) => e.type === "turn_completed")).toBe(true); // turn/start 携带新 model 被服务端接受并完成
+    expect(chat(sessionId).some((e) => e.type === "session_error")).toBe(false);
+  });
+
   it("dispose 后 session_exit 呈现，后续操作明确报错不重放", async () => {
     const a = new CodexAdapter({ effort: "low" });
     const local: AdapterEvent[] = [];

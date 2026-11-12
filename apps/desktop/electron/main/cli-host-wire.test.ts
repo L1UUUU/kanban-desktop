@@ -32,6 +32,7 @@ const allKinds = [
   "runOnce",
   "cancelRunOnce",
   "listModels",
+  "setModel",
 ] as const satisfies readonly HostCommand["kind"][];
 
 /** 编译期双向相等断言（Equal 惯用法）：清单缺 kind → false 不可赋给 true 字面量 → 编译红 */
@@ -211,5 +212,13 @@ describe("wire 契约 roundtrip（issue #73）", () => {
     const withCli = await client.listModels({ cwd: "C:\\wire", cli: "fake" });
     expect(cmdOf(proc.posted.at(-1))).toEqual({ kind: "listModels", payload: { cwd: "C:\\wire", cli: "fake" } });
     expect(withCli).toHaveLength(2);
+  });
+
+  it("setModel：payload 即 SetModelInput；返回值直传生效模型（issue #79）；未知会话错误码经 wire 原样回传", async () => {
+    const { proc, client } = makeWire();
+    const s = await client.createSession({ cwd: "C:\\wire", cli: "fake", model: "fake-standard" });
+    await expect(client.setModel({ sessionId: s.sessionId, model: "fake-lite" })).resolves.toEqual({ model: "fake-lite" });
+    expect(cmdOf(proc.posted.at(-1))).toEqual({ kind: "setModel", payload: { sessionId: s.sessionId, model: "fake-lite" } });
+    await expect(client.setModel({ sessionId: "s-nope", model: "x" })).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
   });
 });

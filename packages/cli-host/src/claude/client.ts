@@ -1,4 +1,4 @@
-// 用途：Claude Code stream-json 行协议持久客户端（演进自 poc-7 lib/client.mjs + poc-2 protocol-client.mjs 谱系，t0-02 裁决为唯一传输层）—— 单进程单会话：spawn 直连、initialize 握手、多轮 user 行、interrupt 控制请求、CLI→host 控制请求（can_use_tool 审批）应答、进程死亡明确报错
+// 用途：Claude Code stream-json 行协议持久客户端（演进自 poc-7 lib/client.mjs + poc-2 protocol-client.mjs 谱系，t0-02 裁决为唯一传输层）—— 单进程单会话：spawn 直连、initialize 握手、多轮 user 行、interrupt 控制请求、set_model 控制请求（#79 中途切换模型）、CLI→host 控制请求（can_use_tool 审批）应答、进程死亡明确报错
 import type { LogKind } from "@kanban/ipc-schema";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -33,6 +33,8 @@ export interface ClaudeStreamOptions {
   initTimeoutMs?: number;
   /** interrupt 确认等待上限（缺省 15s；超时按已尽力处理不报错——中断效果以流为准） */
   interruptAckTimeoutMs?: number;
+  /** set_model 确认等待上限（缺省 15s；超时报错——切换成败需明确，不与 interrupt 同款静默） */
+  setModelAckTimeoutMs?: number;
 }
 
 /** 启动自检 fail-fast：审批 flag 未成对出现即抛错（spec G：默认非交互=静默全拒绝，宁可启动失败不留静默路径） */
@@ -42,6 +44,51 @@ export function assertApprovalFlag(args: readonly string[]): void {
     throw new Error(
       `启动自检失败：spawn 参数缺少 ${APPROVAL_FLAG} ${APPROVAL_FLAG_VALUE}（非交互 stream-json 默认把审批静默全拒绝，PoC 7 T3 实证）。这属于实现缺陷，请报告。`,
     );
+  }
+}
+
+/** set_model 控制请求失败：wireCode 为 CLI 回传错误码（spec #75 Further Notes 实证：invalid_request/catalog_unknown/not_found；解析不出时 unknown_error） */
+export class ClaudeSetModelError extends Error {
+  constructor(readonly wireCode: string, message: string) {
+    super(message);
+    this.name = "ClaudeSetModelError";
+  }
+}
+
+/** set_model 控制请求报文（issue #79；wire 形状出处 spec #75 Further Notes：claude 2.1.317 二进制检索 {subtype:"set_model", model}，与 interrupt 同通道） */
+export function buildSetModelControlRequest(requestId: string, model: string): Record<string, unknown> {
+  return { request_id: requestId, type: "control_request", request: { subtype: "set_model", model } };
+}
+
+/**
+ * set_model control_response 解析（纯函数，issue #79）：成功提取 payload 中的下一 turn 实际模型名（payload 无模型名时回退请求值）；
+ * 失败提取 CLI 错误码 invalid_request/catalog_unknown/not_found（错误对象位置防御式取值，解析不出归 unknown_error）。
+ */
+export function parseSetModelResponse(resp: unknown, fallbackModel: string): { ok: true; model: string } | { ok: false; code: string; message: string } {
+  const outer = (resp as { response?: { subtype?: string; response?: unknown; error?: { code?: unknown; type?: unknown; message?: unknown } | null } } | null)?.response;
+  if (!outer || typeof outer !== "object") {
+    return { ok: false, code: "unknown_error", message: `set_model 响应缺失 response 外层（协议异常）：${safeJsonSlice(resp)}` };
+  }
+  if (outer.subtype !== "success") {
+    const err = outer.error ?? {};
+    const code = typeof err.code === "string" && err.code ? err.code : typeof err.type === "string" && err.type ? err.type : "unknown_error";
+    const message = typeof err.message === "string" && err.message ? err.message : `set_model 失败（subtype=${String(outer.subtype)}）`;
+    return { ok: false, code, message };
+  }
+  const payload = outer.response;
+  const model =
+    payload && typeof payload === "object" && typeof (payload as { model?: unknown }).model === "string" && (payload as { model: string }).model
+      ? (payload as { model: string }).model
+      : fallbackModel; // 协议漂移防御：成功但 payload 无模型名 → 回退请求值（CLI 已接受切换）
+  return { ok: true, model };
+}
+
+/** 截断 JSON 串（诊断信息用，防整包刷屏） */
+function safeJsonSlice(v: unknown): string {
+  try {
+    return JSON.stringify(v)?.slice(0, 200) ?? "";
+  } catch {
+    return "";
   }
 }
 
@@ -161,6 +208,34 @@ export class ClaudeStreamClient {
   /** 回应 CLI 的控制请求（can_use_tool 审批）：request_id 嵌套在 response 内（SDK wire 形状，PoC 7 发现 1） */
   respondControlRequest(requestId: string, response: unknown): void {
     this.send({ type: "control_response", response: { subtype: "success", request_id: requestId, response } });
+  }
+
+  /**
+   * 发 set_model 控制请求并等 control_response（issue #79 中途切换模型，与 interrupt 同通道）：
+   * 成功 resolve 下一 turn 实际模型名（payload 缺模型名回退请求值）；失败 reject ClaudeSetModelError（CLI 错误码透传）。
+   */
+  setModel(model: string): Promise<string> {
+    if (this.dead) return Promise.reject(new Error("claude 进程未运行"));
+    return new Promise<string>((resolve, reject) => {
+      const id = randomUUID();
+      const timer = setTimeout(() => {
+        this.pendingControl.delete(id);
+        reject(new Error("set_model 确认超时"));
+      }, this.options.setModelAckTimeoutMs ?? 15_000);
+      this.pendingControl.set(id, {
+        resolve: (resp) => {
+          clearTimeout(timer);
+          const parsed = parseSetModelResponse(resp, model);
+          if (parsed.ok) resolve(parsed.model);
+          else reject(new ClaudeSetModelError(parsed.code, parsed.message));
+        },
+        reject: (err) => {
+          clearTimeout(timer);
+          reject(err);
+        },
+      });
+      this.send(buildSetModelControlRequest(id, model));
+    });
   }
 
   /** 子进程 pid（C5 演进 #44 listChildPids 用；未 spawn/已退出为 null） */

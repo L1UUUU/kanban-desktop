@@ -16,6 +16,7 @@ function makeSession(partial: Partial<SessionView> = {}): SessionView {
     status: "idle",
     permMode: "auto",
     model: undefined,
+    modelChangePending: false,
     projectId: "p-1",
     cwd: "C:\\alpha",
     dirIdentity: "main",

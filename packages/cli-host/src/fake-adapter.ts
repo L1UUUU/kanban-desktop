@@ -1,6 +1,6 @@
 // 用途：FakeAdapter —— C1 契约的脚本化 mock 实现：事件溯源日志（readHistory=重放，天然满足不变量 4）、可注入时钟、演示脚本驱动（原型行为规格）+ readTranscript 双视角剧本（#28，独立于 ChatEvent 日志维护）+ listModels 假模型目录（#76：演示 UI 形态与真实 CLI 一致）
 import type { AdapterEvent, ChatEvent, ChatEventSeed, ModelEntry, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
-import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
+import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
 import { SystemClock, type FakeClock } from "./clock";
 import { pickScript, type ScriptStep } from "./fake-scripts";
 
@@ -127,6 +127,13 @@ export class FakeAdapter implements CliAdapter {
   /** 模型目录（issue #76）：返回两条假模型（拷贝防调用方改写常量），第一条默认 */
   async listModels(_input?: ListModelsInput): Promise<ModelEntry[]> {
     return FAKE_MODELS.map((m) => ({ ...m }));
+  }
+
+  /** 会话中途切换模型（issue #79）：存储 no-op——记录所选值并回显，不报错、不影响演示脚本 */
+  async setModel(input: SetModelInput): Promise<{ model: string }> {
+    const s = this.requireSession(input.sessionId);
+    s.model = input.model;
+    return { model: input.model };
   }
 
   async sendTurn(input: SendTurnInput): Promise<void> {

@@ -244,6 +244,27 @@ describe.skipIf(!E2E)("ClaudeAdapter 真实集成（env-gated）", () => {
     await expect(a.sendTurn({ sessionId, text: "x" })).rejects.toMatchObject({ code: "E_INTERNAL" });
     await a.dispose();
   });
+
+  /* ---------------- setModel 真实切换（issue #79 / spec #75：零 turn 验证） ---------------- */
+  it("setModel：set_model 控制请求真实往返——响应 payload 实际模型名回传（零 turn 零推理成本）；实测项：无效模型 id 的失败面", async () => {
+    const { sessionId } = await adapter.createSession({ cwd: workdir, permMode: "auto" });
+    // 目录内非默认模型为目标（真实可用；避免硬编码 id）
+    const models = await adapter.listModels({ cwd: workdir });
+    expect(models.length).toBeGreaterThan(0);
+    const target = models.find((m) => !m.isDefault) ?? models[0];
+    const r = await adapter.setModel({ sessionId, model: target.id });
+    // 以真实响应 payload 验证协议形状（spec Further Notes：payload 含下一 turn 实际模型名）；requested 与 actual 差异如实打日志
+    expect(typeof r.model).toBe("string");
+    expect(r.model.length).toBeGreaterThan(0);
+    if (process.env.KANBAN_E2E_DEBUG) console.error(`[claude:set-model] requested=${target.id} actual=${r.model}`);
+    // 实测项（#75 Testing Decisions）：无效模型 id 的 set_model 失败面——预期映射 AdapterError（错误码 catalog_unknown/not_found 类）
+    const outcome: unknown = await adapter.setModel({ sessionId, model: "definitely-not-a-model-xyz" }).catch((e: unknown) => e);
+    if (outcome instanceof Error) {
+      if (process.env.KANBAN_E2E_DEBUG) console.error(`[claude:set-model-invalid] ${String(outcome.message).slice(0, 200)}`);
+      expect(outcome.message).toContain("切换 Claude 模型失败");
+    }
+    // CLI 若静默接受无效 id（与 spec 预期差异），如实放行——由实测记录，不造假断言
+  });
 });
 
 // 保持 createCollector 引用（契约套收集器一致性由其自身保证）

@@ -509,6 +509,7 @@ describe("link 拒绝原因直达呈现（三类，#20）", () => {
     status: "idle",
     permMode: "auto",
     model: undefined,
+    modelChangePending: false,
     projectId,
     cwd: null,
     dirIdentity: "none",

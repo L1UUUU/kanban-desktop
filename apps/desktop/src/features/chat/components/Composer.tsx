@@ -16,6 +16,8 @@ export interface ComposerActions {
 export function Composer({ session, models, actions }: { session: SessionView; models: ModelCatalog; actions: ComposerActions }) {
   const [text, setText] = useState("");
   const running = session.status === "running";
+  // #79：模型切换在 turn 进行中（含审批待决 waiting）被禁用——main 侧同语义校验拒绝
+  const busy = running || session.status === "waiting";
 
   const send = (): void => {
     if (text.trim().length === 0) return;
@@ -37,8 +39,8 @@ export function Composer({ session, models, actions }: { session: SessionView; m
         <div className="mt-2 flex items-center gap-2">
           {/* 权限档位 chip + 下拉菜单（三档带说明） */}
           <PermChip value={session.permMode} onChange={actions.onPermChange} />
-          {/* 模型 combobox：真实目录数据源；已建会话模型为空（恢复会话）时仅派生显示默认名，不写 store（中途切换下发属 #79）；PTY 会话不经本组件（TerminalWorkspace 渲染），cli 收窄为 CliKind */}
-          <ModelCombobox cli={session.cli as CliKind} cwd={session.cwd} value={session.model} onChange={actions.onModelChange} catalog={models} />
+          {/* 模型 combobox：真实目录数据源；已建会话模型为空（恢复会话）时仅派生显示默认名，不写 store（中途切换走 session:setModel，#79）；PTY 会话不经本组件（TerminalWorkspace 渲染），cli 收窄为 CliKind */}
+          <ModelCombobox cli={session.cli as CliKind} cwd={session.cwd} value={session.model} onChange={actions.onModelChange} catalog={models} disabled={busy} />
           <span className="flex-1" />
           {running ? (
             <button
@@ -64,6 +66,12 @@ export function Composer({ session, models, actions }: { session: SessionView; m
       {session.cli === "opencode" ? (
         <div className="mt-1.5 text-center text-[11px] text-muted-foreground">
           OpenCode 权限档位为 server 级（同项目下会话共享）；切换后新会话生效
+        </div>
+      ) : null}
+      {/* #79：模型切换成功提示——当前轮仍用旧模型，下一轮起生效（turn_started 自动收起） */}
+      {session.modelChangePending ? (
+        <div data-testid="model-switch-note" className="mt-1.5 text-center text-[11px] text-muted-foreground">
+          模型已切换，下一轮起生效
         </div>
       ) : null}
     </footer>

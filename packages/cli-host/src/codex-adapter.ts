@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { LogKind, AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, ModelEntry, PermMode, SessionStatus, TranscriptEvent } from "@kanban/ipc-schema";
-import { AdapterError, ExeNotFoundError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
+import { AdapterError, ExeNotFoundError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
 import { resolveCodexExe } from "./codex/exe";
 import { CodexRpcClient } from "./codex/rpc";
 import { parseRolloutTranscript } from "./codex/rollout";
@@ -202,6 +202,13 @@ export class CodexAdapter implements CliAdapter {
       throw new AdapterError("E_INTERNAL", `拉取 Codex 模型目录失败：${e instanceof Error ? e.message : String(e)}`);
     }
     return entries;
+  }
+
+  /** 会话中途切换模型（issue #79 / spec #75）：更新会话态——此后每次 turn/start 携带 model 覆盖参数（协议语义「本 turn 及后续 turn 生效」，幂等） */
+  async setModel(input: SetModelInput): Promise<{ model: string }> {
+    const s = this.requireSession(input.sessionId);
+    s.model = input.model;
+    return { model: input.model };
   }
 
   /** 应用重启后的会话收养（#13 恢复编排）：按 DB thread id 重建状态（无进程；readHistory 拉起进程读原生历史，resume 后可续问） */
@@ -568,6 +575,9 @@ export class CodexAdapter implements CliAdapter {
       input: [{ type: "text", text, text_elements: [] }],
     };
     if (this.effort) params.effort = this.effort;
+    // 会话模型随每次 turn/start 携带（issue #79）：协议注释 "Override the model for this turn and subsequent turns"（poc-1 TurnStartParams）——
+    // 创建期同值幂等；setModel 更新 s.model 后本 turn 及后续全部生效
+    if (s.model) params.model = s.model;
     try {
       await this.client!.request("turn/start", params);
     } catch (e) {

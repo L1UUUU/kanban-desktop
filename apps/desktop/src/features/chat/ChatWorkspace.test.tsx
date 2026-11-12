@@ -45,6 +45,13 @@ if (typeof globalThis.ResizeObserver === "undefined") {
   } as unknown as typeof ResizeObserver;
 }
 
+/** setModel 必败的 FakeAdapter 子类（#79 失败回滚用例注入：走 session:create 原链路，仅切换动作抛错） */
+class SetModelFailAdapter extends FakeAdapter {
+  async setModel(): Promise<{ model: string }> {
+    throw new AdapterError("E_INTERNAL", "注入的切换失败（#79 测试钩子）");
+  }
+}
+
 /** 回显 mock PTY（old-kanban mock PTY 模式）：spawn 后发提示符，write 原样回显，kill 触发 exit —— 驱动 TerminalPanel 全链路（不含真实 ConPTY） */
 class EchoPty implements PtyLike {
   readonly spawns: Array<{ file: string; args: string[] }> = [];
@@ -456,7 +463,8 @@ describe("聊天区（原型一致项 5/6/7）", () => {
 
   it("composer 模型选择（#77）：默认选中项随草稿提交真实下发（所见即所发）；点选候选后新草稿继承并下发", async () => {
     const seen: IpcRequest[] = [];
-    const base = makeTransport(new FakeAdapter({ clock: new VirtualClock() }));
+    const clock = new VirtualClock();
+    const base = makeTransport(new FakeAdapter({ clock }));
     const spy: ChatTransport = { ...base, invoke: (req) => { seen.push(req); return base.invoke(req); } };
     const t = mount(spy);
     await t.flush();
@@ -468,6 +476,11 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     const boot = creates().find((r) => r.firstMessage === "默认演示");
     expect(boot, "boot 演示草稿提交应发出 session:create").toBeTruthy();
     expect(boot!.model, "默认选中项同样下发（所见即所发）").toBe("fake-standard");
+    // #79：turn 进行中会话 combobox 禁用——推进时钟结束首轮后再点选候选（会话切换经 session:setModel 下发）
+    await act(() => {
+      clock.runToIdle();
+    });
+    await t.flush();
 
     // combobox 点选 fake-lite → 新开草稿提交：继承选定值随 session:create 下发，新会话 composer 回显该值
     const model = screen.getByRole("combobox") as HTMLInputElement;
@@ -481,6 +494,69 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     expect(withModel, "草稿提交应发出 session:create").toBeTruthy();
     expect(withModel!.model).toBe("fake-lite");
     expect((screen.getByRole("combobox") as HTMLInputElement).value).toBe("Fake 轻量模型");
+  });
+
+  it("composer 模型切换（#79）：点选候选走 session:setModel 下发，chip 立即更新并注明「下一轮起生效」；下一轮开始提示消失", async () => {
+    const seen: IpcRequest[] = [];
+    const clock = new VirtualClock();
+    const base = makeTransport(new FakeAdapter({ clock }));
+    const spy: ChatTransport = { ...base, invoke: (req) => { seen.push(req); return base.invoke(req); } };
+    const t = mount(spy);
+    await t.flush();
+    await act(async () => {
+      send("默认演示"); // boot 演示草稿 → 建会话（fake-standard）
+    });
+    await act(() => {
+      clock.runToIdle(); // 首轮完成 → idle（turn 进行中切换被禁用，须本轮结束）
+    });
+    await t.flush();
+    const model = screen.getByRole("combobox") as HTMLInputElement;
+    await waitFor(() => expect(model.value).toBe("Fake 标准模型"));
+    fireEvent.focus(model);
+    fireEvent.click(screen.getByText("Fake 轻量模型"));
+    // chip 立即显示新模型（乐观更新）+ 下发请求在场
+    await waitFor(() => expect((screen.getByRole("combobox") as HTMLInputElement).value).toBe("Fake 轻量模型"));
+    expect(seen.some((r) => r.channel === "session:setModel" && r.model === "fake-lite")).toBe(true);
+    expect(screen.getByText("模型已切换，下一轮起生效")).toBeTruthy();
+    // 下一轮开始（turn_started 即时到达）→ 提示消失
+    await act(async () => {
+      send("切换后首轮");
+    });
+    expect(screen.queryByText("模型已切换，下一轮起生效")).toBeNull();
+  });
+
+  it("composer 模型切换失败（#79）：回滚为切换前值并按会话内既有错误形态展示（错误卡）", async () => {
+    const clock = new VirtualClock();
+    const t = mount(makeTransport(new SetModelFailAdapter({ clock })));
+    await t.flush();
+    await act(async () => {
+      send("默认演示");
+    });
+    await act(() => {
+      clock.runToIdle(); // 首轮完成 → idle 可切
+    });
+    await t.flush();
+    const model = screen.getByRole("combobox") as HTMLInputElement;
+    await waitFor(() => expect(model.value).toBe("Fake 标准模型"));
+    fireEvent.focus(model);
+    fireEvent.click(screen.getByText("Fake 轻量模型"));
+    await waitFor(() => expect(screen.getByTestId("error-card")).toBeTruthy());
+    expect(screen.getByTestId("error-card").textContent).toContain("注入的切换失败");
+    await waitFor(() => expect((screen.getByRole("combobox") as HTMLInputElement).value).toBe("Fake 标准模型")); // 回滚为切换前值
+    expect(screen.queryByText("模型已切换，下一轮起生效")).toBeNull(); // 失败不发「下一轮起生效」标注
+  });
+
+  it("composer 模型切换禁用（#79）：turn 进行中（running/waiting）combobox 禁用，本轮结束恢复", async () => {
+    const t = mount();
+    await t.flush();
+    await act(async () => {
+      send("默认演示"); // VirtualClock 不自动推进 → turn 保持 running
+    });
+    await t.flush();
+    expect((screen.getByRole("combobox") as HTMLInputElement).readOnly).toBe(true);
+    t.advance();
+    await t.flush();
+    expect((screen.getByRole("combobox") as HTMLInputElement).readOnly).toBe(false);
   });
 
   it("composer：OpenCode 会话明示权限档位为 server 级（同项目共享）；其他 CLI 无此说明（spec B UI 明示）", async () => {

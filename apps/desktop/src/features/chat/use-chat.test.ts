@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ChatEvent, IpcRequest, IpcResult, ProjectRow } from "@kanban/ipc-schema";
 import type { ChatTransport } from "../../lib/kanban-api";
 import { ChatStore } from "./chat-store";
-import { discardAllDraftsAction, openSessionDraftAction, resolveSessionCwd, resumeChain, submitDraftChain, switchToAction, type SessionDraftEnv } from "./use-chat";
+import { discardAllDraftsAction, openSessionDraftAction, resolveSessionCwd, resumeChain, setModelChain, submitDraftChain, switchToAction, type SessionDraftEnv } from "./use-chat";
 import { TerminalDraftController } from "../terminal/terminal-draft";
 import { TerminalManager } from "../terminal/TerminalManager";
 
@@ -345,5 +345,47 @@ describe("openSessionDraftAction 互斥矩阵（issue #71 S5：全局任一时�
     openSessionDraftAction(env, { projectId: "p1", cli: "pty" });
     discardAllDraftsAction(env);
     expect(env.drafts.getSnapshot()).toBeNull();
+  });
+});
+
+describe("setModelChain（issue #79：session:setModel 中途切换编排）", () => {
+  /** 已建会话的 store（模型 fake-standard，与 FakeAdapter 目录一致） */
+  function storeWithSession(): ChatStore {
+    const store = new ChatStore();
+    store.registerSession({ sessionId: "s-sw", cli: "fake", title: "切换会话", permMode: "auto", model: "fake-standard", cwd: "C:\\repo" });
+    return store;
+  }
+
+  it("成功：乐观更新 → session:setModel 下发；响应实际模型回写 + 「下一轮起生效」标注；下一 turn_started 自动清除标注", async () => {
+    const store = storeWithSession();
+    const { transport, requests } = makeTransport({ "session:setModel": { ok: true, model: "claude-actual-id" } });
+    const p = setModelChain(store, transport, "s-sw", "claude-alias");
+    expect(store.getSession("s-sw")?.model).toBe("claude-alias"); // 乐观更新：chip 立即显示新模型
+    await expect(p).resolves.toBe(true);
+    expect(requests).toEqual([{ channel: "session:setModel", sessionId: "s-sw", model: "claude-alias" }]);
+    const s = store.getSession("s-sw")!;
+    expect(s.model).toBe("claude-actual-id"); // 响应实际模型名回写（claude 语义）
+    expect(s.modelChangePending).toBe(true); // 「下一轮起生效」标注
+    store.applyEvent({ type: "turn_started", sessionId: "s-sw", seq: 1, at: "2026-01-01T00:00:00Z", turnId: "t-1" });
+    expect(store.getSession("s-sw")?.modelChangePending).toBe(false); // 下一轮开始即清除
+  });
+
+  it("失败：回滚为切换前值 + 错误直达会话错误卡（既有形态），不发标注", async () => {
+    const store = storeWithSession();
+    const { transport } = makeTransport({
+      "session:setModel": { ok: false, error: { code: "E_INTERNAL", message: "本轮进行中，结束后再切换" } },
+    });
+    await expect(setModelChain(store, transport, "s-sw", "fake-lite")).resolves.toBe(false);
+    const s = store.getSession("s-sw")!;
+    expect(s.model).toBe("fake-standard"); // 回滚为切换前值
+    expect(s.modelChangePending).toBe(false);
+    expect(s.lastError).toEqual({ code: "E_INTERNAL", message: "本轮进行中，结束后再切换" });
+  });
+
+  it("守卫：同值切换 no-op 不发请求（幂等）", async () => {
+    const store = storeWithSession();
+    const { transport, requests } = makeTransport();
+    await expect(setModelChain(store, transport, "s-sw", "fake-standard")).resolves.toBe(true);
+    expect(requests).toHaveLength(0);
   });
 });

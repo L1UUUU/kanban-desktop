@@ -279,6 +279,25 @@ export async function resumeChain(store: ChatStore, transport: ChatTransport, se
 }
 
 /**
+ * #79 中途切换模型编排（模块级可直测）：乐观更新 chip → session:setModel 下发；
+ * 成功以响应实际模型回写并标注「下一轮起生效」（下一 turn_started 自动清除）；失败回滚为切换前值并按会话内既有错误形态展示。
+ */
+export async function setModelChain(store: ChatStore, transport: ChatTransport, sessionId: string, model: string): Promise<boolean> {
+  const prev = store.getSession(sessionId)?.model;
+  if (prev === model) return true; // 幂等：同值不下发
+  store.updateSession(sessionId, { model }); // 乐观更新：chip 立即显示新模型
+  const r = await transport.invoke({ channel: "session:setModel", sessionId, model });
+  if (r.ok) {
+    store.updateSession(sessionId, { model: r.model ?? model, modelChangePending: true }); // claude 实际模型名回写
+    return true;
+  }
+  store.updateSession(sessionId, { model: prev, modelChangePending: false }); // 回滚为切换前值
+  store.setError(sessionId, r.error.code, r.error.message); // 会话内既有错误形态（错误卡直达）
+  log.error("会话模型切换失败", { sessionId, code: r.error.code, message: r.error.message, model });
+  return false;
+}
+
+/**
  * 会话控制器 hook（issue #71：store 与 PTY 草稿机制均为 seam 之后的实现细节）。
  * deps.demoCwd 为 Fake 演示草稿 cwd（App 层经 AppInfo 注入：Main 读 KANBAN_FAKE_DEMO_CWD、缺省用户主目录）；
  * 未注入（null/undefined）前不自举 boot 演示草稿，真实会话 cwd 一律来自已注册项目（deps.resolveCwd）。
@@ -443,8 +462,9 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
         if (id) store.updateSession(id, { permMode: mode });
       },
       setModel: (model) => {
+        // #79：已建会话切换走 session:setModel（乐观更新/成功回写/失败回滚见 setModelChain）
         const id = activeId();
-        if (id) store.updateSession(id, { model });
+        if (id && transport) void setModelChain(store, transport, id, model);
       },
       resumeSession: async (sessionId) => {
         if (!transport) return;

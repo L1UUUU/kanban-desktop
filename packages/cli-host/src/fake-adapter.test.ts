@@ -320,3 +320,23 @@ describe("FakeAdapter：S4 错误演示脚本分支与 spawn 注入（#46）", (
     expect(ok.sessionId.length).toBeGreaterThan(0);
   });
 });
+
+describe("FakeAdapter：setModel no-op 存储（issue #79 / spec #75）", () => {
+  it("存储不报错：回显请求值，重复切换幂等，会话行为不受切换影响", async () => {
+    const clock = new VirtualClock();
+    const adapter = new FakeAdapter({ clock });
+    const col = createCollector(adapter);
+    const { sessionId } = await adapter.createSession({ cwd: "C:\\demo", model: "fake-standard" });
+    await expect(adapter.setModel({ sessionId, model: "fake-lite" })).resolves.toEqual({ model: "fake-lite" });
+    await expect(adapter.setModel({ sessionId, model: "fake-lite" })).resolves.toEqual({ model: "fake-lite" }); // 幂等
+    await adapter.sendTurn({ sessionId, text: "你好" });
+    clock.runToIdle();
+    expect(col.chat(sessionId).some((e) => e.type === "turn_completed")).toBe(true); // 演示脚本照常
+    col.off();
+  });
+
+  it("未知会话 → E_SESSION_NOT_FOUND（与其余 adapter 一致）", async () => {
+    const adapter = new FakeAdapter({ clock: new VirtualClock() });
+    await expect(adapter.setModel({ sessionId: "s-nope", model: "x" })).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
+  });
+});

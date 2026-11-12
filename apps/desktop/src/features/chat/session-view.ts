@@ -48,6 +48,8 @@ export interface SessionView {
   /** 权限档位为 renderer 本地会话状态；模型为创建时选定值（chip 切换），undefined = 未选择/未就绪（恢复会话：显示层派生默认名，issue #77） */
   permMode: PermMode;
   model: string | undefined;
+  /** #79：模型切换已成功、下一轮起生效（composer「下一轮起生效」提示数据源；下一 turn_started 自动清除） */
+  modelChangePending: boolean;
   /** 会话挂靠项目（null=无项目演示会话；侧栏按当前项目过滤） */
   projectId: string | null;
   /** 会话工作目录与目录身份徽标数据（spec I-3） */

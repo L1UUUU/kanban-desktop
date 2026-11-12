@@ -20,6 +20,7 @@ import {
   type RunOnceInput,
   type RunOnceResult,
   type SendTurnInput,
+  type SetModelInput,
 } from "@kanban/cli-host";
 
 export interface CliHostClientOptions {
@@ -148,6 +149,11 @@ export class CliHostClient implements CliAdapter {
 
   async interruptTurn(sessionId: string): Promise<void> {
     return this.send({ kind: "interruptTurn", payload: sessionId });
+  }
+
+  /** 会话中途切换模型（issue #79）：返回下一轮实际生效的模型名（claude 为 set_model 响应实际名，其余回显请求值） */
+  async setModel(input: SetModelInput): Promise<{ model: string }> {
+    return this.send({ kind: "setModel", payload: input });
   }
 
   async resolveApproval(input: ResolveApprovalInput): Promise<void> {

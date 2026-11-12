@@ -55,6 +55,9 @@ export class CliHost {
       case "interruptTurn":
         await this.router.interruptTurn(cmd.payload);
         return;
+      case "setModel":
+        // issue #79：会话中途切换模型（按 sessionId 路由；忙态/断开由 main 侧校验）
+        return this.router.setModel(cmd.payload);
       case "resolveApproval":
         await this.router.resolveApproval(cmd.payload);
         return;

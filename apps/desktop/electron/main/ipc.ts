@@ -1,4 +1,4 @@
-// 用途：Main 入站 IPC 处理器聚合 —— kanban:ipc（信封经共享工厂 + 25 子通道编译期穷尽查表，handler 按 feature 落 main/ipc/*.ts）与 memory/residue/diff/config/cli:status 五个独立单通道路由（纯函数无 Electron 依赖：dialog 与 config 经 deps 注入）；#72 C1 Step2 自 775 行 route switch 巨石拆分
+// 用途：Main 入站 IPC 处理器聚合 —— kanban:ipc（信封经共享工厂 + 25 子通道编译期穷尽查表，handler 按 feature 落 main/ipc/*.ts）与 memory/residue/diff/config/cli:status 五个独立单通道路由（26 子通道）（纯函数无 Electron 依赖：dialog 与 config 经 deps 注入）；#72 C1 Step2 自 775 行 route switch 巨石拆分
 import {
   IPC_CHANNELS,
   type AutoArchiveScanSummary,
