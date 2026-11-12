@@ -1,9 +1,10 @@
 // 用途：可关闭浮层整机 E2E（issue #83 / spec #82）—— 权限档位菜单与模型下拉共享关闭交互的两条路径（点击外部 / Esc）真窗口断言；
 // 经草稿面板同时驱动两浮层（Fake 演示链路，真实 CLI 全部禁用回落 Fake；无需建会话，与 model-combobox.spec.ts 同 launch/env 模式）
 import { test, expect, _electron, type ElectronApplication, type Locator, type Page } from "@playwright/test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { rmBestEffort } from "./helpers/rm-best-effort";
 
 const PROJECT_NAME = "kb-overlay-close";
 
@@ -14,19 +15,6 @@ function makeFixture(): { userData: string; repoDir: string; repoRoot: string } 
   const repoDir = join(repoRoot, PROJECT_NAME);
   mkdirSync(join(repoDir, ".git"), { recursive: true });
   return { userData, repoDir, repoRoot };
-}
-
-/** 尽力删除目录：Windows 下 electron 子进程退出有延迟，重试后仍锁则告警放行（不应判定测试失败） */
-async function rmBestEffort(target: string): Promise<void> {
-  for (let i = 0; i < 20; i += 1) {
-    try {
-      rmSync(target, { recursive: true, force: true });
-      return;
-    } catch {
-      await new Promise((r) => setTimeout(r, 500));
-    }
-  }
-  console.warn(`[e2e] 临时目录仍被占用，跳过清理：${target}`);
 }
 
 /** 启动应用（Fake 演示链路：三真实 CLI 全部禁用回落 Fake；userData 隔离） */

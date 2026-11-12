@@ -1,8 +1,8 @@
 // 用途：CommandCatalog 短 TTL 缓存测试（issue #89 / spec #82 E 块）—— 同 (cli, cwd) 重复调用在 TTL 内不重复扫描；过期重扫；不同 cli/cwd 独立缓存键；拉取失败不缓存（下次重读）
 import { describe, expect, it } from "vitest";
 import { AdapterError, FakeAdapter, type ListCommandsInput } from "@kanban/cli-host";
-import type { CommandEntry } from "@kanban/ipc-schema";
-import { CommandCatalog, COMMAND_CATALOG_TTL_MS } from "./command-catalog";
+import { COMMAND_LIST_CACHE_TTL_MS, type CommandEntry } from "@kanban/ipc-schema";
+import { CommandCatalog } from "./command-catalog";
 
 /** 计数型 FakeAdapter 子类：记录 listCommands 调用（TTL 命中率断言依据） */
 class CountingAdapter extends FakeAdapter {
@@ -33,7 +33,7 @@ describe("CommandCatalog（#89 命令目录 TTL 缓存）", () => {
     const second = await catalog.list("fake", "C:\\w");
     expect(adapter.listCommandsCalls).toBe(1); // TTL 内：缓存命中不重扫
     expect(second).toEqual(first);
-    now += COMMAND_CATALOG_TTL_MS; // 恰好到 TTL 边界：过期
+    now += COMMAND_LIST_CACHE_TTL_MS; // 恰好到 TTL 边界：过期
     await catalog.list("fake", "C:\\w");
     expect(adapter.listCommandsCalls).toBe(2); // 过期后重扫
   });

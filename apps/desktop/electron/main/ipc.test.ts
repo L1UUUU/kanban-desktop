@@ -1921,18 +1921,50 @@ describe("composer:listCommands 通道（#89 斜杠命令列举）", () => {
 });
 
 describe("composer:expandCommand 通道（#92 codex 客户端展开）", () => {
-  it("读来源文件展开：剥 frontmatter + 占位符替换，返回普通文本", async () => {
+  it("读来源文件展开：剥 frontmatter + 占位符替换，返回普通文本（项目级 prompts 目录内）", async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "kb-expand-"));
-    const file = join(tmpRoot, "probe.md");
+    const prompts = join(tmpRoot, ".codex", "prompts");
+    mkdirSync(prompts, { recursive: true });
+    const file = join(prompts, "probe.md");
     writeFileSync(file, "---\ndescription: 探针\n---\n目标：$ARGUMENTS，第一=$1，标记 KB-CODEX-PROMPT-EXECUTED", "utf8");
     const deps = makeDeps(new FakeAdapter({ clock: new VirtualClock() }));
-    const res = await handleIpc(deps, { channel: "composer:expandCommand", sourcePath: file, args: "alpha beta" });
+    const res = await handleIpc(deps, { channel: "composer:expandCommand", sourcePath: file, args: "alpha beta", cwd: tmpRoot });
     expect(res).toMatchObject({ ok: true, text: "目标：alpha beta，第一=alpha，标记 KB-CODEX-PROMPT-EXECUTED" });
   });
 
+  it("用户级 prompts 目录（注入 codexHomeDir）同样可展开（扫描口径两层之一）", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "kb-expand-"));
+    const home = join(tmpRoot, "fake-home");
+    const prompts = join(home, ".codex", "prompts");
+    mkdirSync(prompts, { recursive: true });
+    const file = join(prompts, "user.md");
+    writeFileSync(file, "---\ndescription: 用户级\n---\n用户级正文", "utf8");
+    const deps: IpcDeps = { ...makeDeps(new FakeAdapter({ clock: new VirtualClock() })), codexHomeDir: home };
+    const res = await handleIpc(deps, { channel: "composer:expandCommand", sourcePath: file, args: "", cwd: join(tmpRoot, "proj") });
+    expect(res).toMatchObject({ ok: true, text: "用户级正文" });
+  });
+
+  it("sourcePath 越界（两层 prompts 目录之外 / .. 逃逸）→ E_INTERNAL 拒读（安全收窄：renderer 不可借展开通道读任意文件）", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "kb-expand-"));
+    // 机密文件真实存在且可读：证明拒绝来自目录边界校验而非文件缺失
+    const secret = join(tmpRoot, "secret.md");
+    writeFileSync(secret, "---\ndescription: x\n---\n机密正文 $ARGUMENTS", "utf8");
+    const home = join(tmpRoot, "fake-home");
+    mkdirSync(join(home, ".codex", "prompts"), { recursive: true });
+    const deps: IpcDeps = { ...makeDeps(new FakeAdapter({ clock: new VirtualClock() })), codexHomeDir: home };
+    const proj = join(tmpRoot, "proj");
+    const res1 = await handleIpc(deps, { channel: "composer:expandCommand", sourcePath: secret, args: "x", cwd: proj });
+    expect(res1).toMatchObject({ ok: false, error: { code: "E_INTERNAL", message: expect.stringContaining("越界") } });
+    // 保留字面 .. 的逃逸串（join 会归一化，改手工拼接）：resolve 后 = secret 绝对路径（prompts 外）
+    const escape = [proj, ".codex", "prompts", "..", "..", "..", "secret.md"].join("\\");
+    const res2 = await handleIpc(deps, { channel: "composer:expandCommand", sourcePath: escape, args: "x", cwd: proj });
+    expect(res2).toMatchObject({ ok: false, error: { code: "E_INTERNAL", message: expect.stringContaining("越界") } });
+  });
+
   it("文件不可读 → E_INTERNAL 明确报错（fail-closed 不静默）", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "kb-expand-"));
     const deps = makeDeps(new FakeAdapter({ clock: new VirtualClock() }));
-    const res = await handleIpc(deps, { channel: "composer:expandCommand", sourcePath: join(tmpRoot, "不存在.md"), args: "x" });
+    const res = await handleIpc(deps, { channel: "composer:expandCommand", sourcePath: join(tmpRoot, ".codex", "prompts", "不存在.md"), args: "x", cwd: tmpRoot });
     expect(res).toMatchObject({ ok: false, error: { code: "E_INTERNAL", message: expect.stringContaining("不可读") } });
   });
 });

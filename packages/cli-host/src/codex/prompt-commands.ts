@@ -2,7 +2,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { CommandEntry } from "@kanban/ipc-schema";
-import { parseFrontmatter } from "../frontmatter";
+import { parseFrontmatter, splitFrontmatter } from "../frontmatter";
 
 /** 读取目录下的一级 .md 文件名（目录缺失/不可读 → 空数组；普通文件只认 .md，子目录不参与——codex prompts 为平铺目录） */
 function listMarkdownFiles(dir: string): string[] {
@@ -59,21 +59,12 @@ export function listCodexPromptCommands(projectCwd: string, home: string): Comma
 /** 占位符单趟匹配（$ARGUMENTS / $@ / $1..$9）：单趟替换保证实参插入文本不被二次展开 */
 const PLACEHOLDER_RE = /\$(ARGUMENTS|@|[1-9])/g;
 
-/** 剥离文件头部 frontmatter（`---` 围栏闭合后为正文）；无围栏/未闭合返回原文 */
-function stripFrontmatter(text: string): string {
-  const lines = text.split(/\r?\n/);
-  if (lines[0]?.trim() !== "---") return text;
-  const close = lines.findIndex((line, i) => i > 0 && line.trim() === "---");
-  if (close === -1) return text; // 未闭合：按无围栏处理（与 parseFrontmatter 判定一致）
-  return lines.slice(close + 1).join("\n");
-}
-
 /**
  * 展开 Codex prompt 命令为普通文本（issue #92 / spec #82 E 块派发形态）：
- * 剥 frontmatter → 正文占位符替换（$ARGUMENTS/$@ 全量、$1..$9 位置）；无占位符且带实参时空行追加（不静默丢参）。
+ * 剥 frontmatter（复用 frontmatter.ts 围栏切分单源，无围栏/未闭合取原文）→ 正文占位符替换（$ARGUMENTS/$@ 全量、$1..$9 位置）；无占位符且带实参时空行追加（不静默丢参）。
  */
 export function expandCodexPromptCommand(fileText: string, args: string): string {
-  const body = stripFrontmatter(fileText).trim();
+  const body = splitFrontmatter(fileText).body.trim();
   const fullArgs = args.trim();
   const positionals = fullArgs.split(/\s+/).filter((w) => w !== "");
   let substituted = false;

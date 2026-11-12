@@ -1,5 +1,6 @@
 // 用途：斜杠触发检测与菜单纯逻辑（issue #90 / spec #82 E 块）—— 首 token 触发/过滤分组/补全替换/高亮环移全部纯函数，与 React 和 IME 时序解耦（IME 合成冻结由调用方传标志驱动，见 use-slash-menu）
 import type { CliKind, CommandEntry } from "@kanban/ipc-schema";
+import { APP_COMMAND_NAMES, type AppCommandName } from "../slash-dispatch";
 
 /** token 边界字符（空白一族；与 PI composer-trigger 的 WHITESPACE 集一致） */
 const WHITESPACE = new Set([" ", "\t", "\n", "\r"]);
@@ -42,11 +43,20 @@ export interface MenuCommand {
   cli?: CliKind;
 }
 
-/** 内置应用命令（#90 只入菜单展示；本地执行接线在 #92：/pty 开终端草稿、/kanban 切看板视图） */
-export const APP_SLASH_COMMANDS: MenuCommand[] = [
-  { name: "pty", description: "打开 PTY 终端", argsHint: null, userOnly: false, group: "app" },
-  { name: "kanban", description: "切换到看板视图", argsHint: null, userOnly: false, group: "app" },
-];
+/** 内置应用命令展示元数据（按名键控：名称单源在 slash-dispatch.APP_COMMAND_NAMES，此处只补菜单展示字段；缺项为编译错，防两处漂移） */
+const APP_COMMAND_META: Record<AppCommandName, { description: string }> = {
+  pty: { description: "打开 PTY 终端" },
+  kanban: { description: "切换到看板视图" },
+};
+
+/** 内置应用命令（#90 只入菜单展示；本地执行接线在 #92：/pty 开终端草稿、/kanban 切看板视图；名称自 APP_COMMAND_NAMES 派生单源） */
+export const APP_SLASH_COMMANDS: MenuCommand[] = APP_COMMAND_NAMES.map((name) => ({
+  name,
+  description: APP_COMMAND_META[name].description,
+  argsHint: null,
+  userOnly: false,
+  group: "app",
+}));
 
 /** 通道列举条目 → 菜单条目（cli 组标记 + 透传展示字段） */
 export function toMenuCommand(entry: CommandEntry): MenuCommand {

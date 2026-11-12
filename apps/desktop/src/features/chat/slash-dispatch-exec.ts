@@ -38,15 +38,16 @@ function reportSend(env: SlashDispatchEnv, sessionId: string, text: string): voi
     });
 }
 
-/** 展开请求（codex 派发形态）：成功返回展开文本；失败统一 {code,message}（IPC 错误原码透传，结果为空视为失败不静默） */
+/** 展开请求（codex 派发形态）：cwd 随请求带给 Main 做项目级 prompts 目录安全校验；成功返回展开文本；失败统一 {code,message}（IPC 错误原码透传，结果为空视为失败不静默） */
 async function invokeExpand(
   env: SlashDispatchEnv,
+  cwd: string,
   sourcePath: string,
   args: string,
 ): Promise<{ ok: true; text: string } | { ok: false; code: string; message: string }> {
   let r: IpcResult;
   try {
-    r = await env.transport.invoke({ channel: "composer:expandCommand", sourcePath, args });
+    r = await env.transport.invoke({ channel: "composer:expandCommand", cwd, sourcePath, args });
   } catch (err) {
     return { ok: false, code: "E_INTERNAL", message: err instanceof Error ? err.message : String(err) };
   }
@@ -76,7 +77,8 @@ export async function dispatchSessionSend(env: SlashDispatchEnv, sessionId: stri
       reportSend(env, sessionId, action.text);
       return true;
     case "expand": {
-      const r = await invokeExpand(env, action.sourcePath, action.args);
+      // cwd 非空是进入本分支的前提（命令快照非 null 依赖 cwd，codex 目录不可用已 blocked），断言仅类型收窄
+      const r = await invokeExpand(env, session.cwd!, action.sourcePath, action.args);
       if (!r.ok) {
         log.error("斜杠命令展开失败（会话发送拒绝）", { sessionId, command: action.name, code: r.code, message: r.message });
         env.store.setError(sessionId, r.code, r.message);
@@ -113,7 +115,7 @@ export async function dispatchDraftSubmit(
     case "send-text":
       return submit();
     case "expand": {
-      const r = await invokeExpand(env, action.sourcePath, action.args);
+      const r = await invokeExpand(env, d.cwd, action.sourcePath, action.args);
       if (!r.ok) {
         log.error("斜杠命令展开失败（草稿提交拒绝）", { command: action.name, code: r.code, message: r.message });
         env.store.setDraftSubmitError(r.code, r.message);

@@ -89,7 +89,7 @@ describe("dispatchSessionSend（会话态发送编排）", () => {
   it("codex 匹配展开：先 composer:expandCommand 再 session:send 展开文本；气泡=展开文本（所见即所发）", async () => {
     const t = await makeHarness([CODEX_ENTRY]);
     expect(await dispatchSessionSend(t.env, "s1", "/commit 修登录 bug")).toBe(true);
-    expect(t.transport.calls[0]).toMatchObject({ channel: "composer:expandCommand", sourcePath: "C:\\prompts\\commit.md", args: "修登录 bug" });
+    expect(t.transport.calls[0]).toMatchObject({ channel: "composer:expandCommand", cwd: "C:\\proj", sourcePath: "C:\\prompts\\commit.md", args: "修登录 bug" });
     expect(t.transport.calls[1]).toEqual({ channel: "session:send", sessionId: "s1", text: "展开正文：修登录 bug" });
     expect(t.store.getSession("s1")!.items.at(-1)).toMatchObject({ kind: "user", text: "展开正文：修登录 bug" });
   });
