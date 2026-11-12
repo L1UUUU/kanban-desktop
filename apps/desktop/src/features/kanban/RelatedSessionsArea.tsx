@@ -2,6 +2,7 @@
 import { useState } from "react";
 import type { CliKind, RequirementCardRow } from "@kanban/ipc-schema";
 import { CLI_DOT_CLS, NEW_MENU_CLIS } from "../../lib/cli-catalog";
+import { CLI_NOT_INSTALLED_HINT, isCliUnavailable, useCliInstallStatus } from "../../lib/use-cli-status";
 import type { SessionView } from "../chat/chat-store";
 import { StatusBadge } from "../chat/components/StatusBadge";
 
@@ -36,6 +37,8 @@ function optionLabel(s: SessionView): string {
 export function RelatedSessionsArea({ card, sessions = [], sessionToReq = {}, actions }: RelatedSessionsAreaProps) {
   // 「＋新建会话」菜单开合（一次只开一个，与侧栏项目「＋」菜单同交互形态）
   const [menuOpen, setMenuOpen] = useState(false);
+  // #80：菜单打开时拉取 CLI 安装表（未装灰置；与侧栏菜单共享禁用逻辑）
+  const cliInstalled = useCliInstallStatus(menuOpen);
   // link 拒绝原因（null=无待展示；成功关联即清除）
   const [rejectReason, setRejectReason] = useState<string | null>(null);
 
@@ -118,21 +121,28 @@ export function RelatedSessionsArea({ card, sessions = [], sessionToReq = {}, ac
         </button>
         {menuOpen ? (
           <div className="absolute left-0 top-full z-10 mt-1 min-w-[190px] rounded-lg border border-border bg-muted p-1 shadow-[0_8px_24px_rgba(0,0,0,.5)]">
-            {NEW_MENU_CLIS.map(({ cli, label }) => (
-              <button
-                key={cli}
-                type="button"
-                data-testid={`new-session-item-${cli}`}
-                className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs hover:bg-card"
-                onClick={() => {
-                  setMenuOpen(false);
-                  actions.onCreateSession(cli, card);
-                }}
-              >
-                <span aria-hidden className={`inline-block h-2 w-2 flex-none rounded-full ${CLI_DOT_CLS[cli]}`} />
-                {label}
-              </button>
-            ))}
+            {NEW_MENU_CLIS.map(({ cli, label }) => {
+              // #80：未装灰置 + 「未安装」标注（标注形态沿用 PTY 项尾注先例），点击无效；fake/pty 恒可选不经探测
+              const unavailable = isCliUnavailable(cliInstalled, cli);
+              return (
+                <button
+                  key={cli}
+                  type="button"
+                  data-testid={`new-session-item-${cli}`}
+                  disabled={unavailable}
+                  title={unavailable ? CLI_NOT_INSTALLED_HINT : undefined}
+                  className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs enabled:hover:bg-card disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    actions.onCreateSession(cli, card);
+                  }}
+                >
+                  <span aria-hidden className={`inline-block h-2 w-2 flex-none rounded-full ${CLI_DOT_CLS[cli]}`} />
+                  {label}
+                  {unavailable ? <span className="ml-auto text-[11px] text-fg-faint">未安装</span> : null}
+                </button>
+              );
+            })}
             <button
               type="button"
               data-testid="new-session-item-pty"

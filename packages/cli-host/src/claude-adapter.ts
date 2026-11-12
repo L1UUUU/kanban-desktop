@@ -1,4 +1,4 @@
-// 用途：ClaudeAdapter —— C1 契约的真实 Claude 实现：stream-json 行协议直连（每会话一进程，poc-7 client 演进）、stdio 审批（can_use_tool 控制请求）、interrupt 归类已取消、--resume 跨重启恢复、--settings 会话级 hook 注入产生 verified SkillObservation（t0-02 裁决：无 SDK 备选路径）；listModels 暂未支持（#76 明确报错，#78 接入）
+// 用途：ClaudeAdapter —— C1 契约的真实 Claude 实现：stream-json 行协议直连（每会话一进程，poc-7 client 演进）、stdio 审批（can_use_tool 控制请求）、interrupt 归类已取消、--resume 跨重启恢复、--settings 会话级 hook 注入产生 verified SkillObservation（t0-02 裁决：无 SDK 备选路径）、listModels spawn 临时进程 initialize 握手读 models 数组（#78）
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,7 +14,8 @@ import { isAuthFailureStatus, isAuthFailureText } from "./session-error";
 
 /** 可注入的流客户端面（生产 ClaudeStreamClient；测试 Fake 手动驱动协议消息） */
 export interface ClaudeStreamClientLike {
-  start(): Promise<void>;
+  /** spawn + initialize 握手；返回初始化响应内层载荷（含 models 目录，listModels #78 数据源） */
+  start(): Promise<Record<string, unknown>>;
   sendUser(text: string): void;
   interrupt(): Promise<void>;
   respondControlRequest(requestId: string, response: unknown): void;
@@ -101,6 +102,8 @@ export class ClaudeAdapter implements CliAdapter {
   private readonly clientFactory: (options: ClaudeStreamOptions) => ClaudeStreamClientLike;
   private readonly log: (kind: LogKind, detail: string) => void;
   private exeCache: string | null = null;
+  /** 模型目录缓存（listModels #78：握手成功结果复用，进程生命周期内不重复握手；失败清空可重试） */
+  private modelsPromise: Promise<ModelEntry[]> | null = null;
 
   constructor(options: ClaudeAdapterOptions = {}) {
     this.log = options.log ?? (() => {});
@@ -156,10 +159,36 @@ export class ClaudeAdapter implements CliAdapter {
     return { sessionId, nativeSessionId, model: init.model }; // model 透传（--model spawn 参数；未指定 undefined=账号默认未知，issue #76）
   }
 
-  /** 模型目录（issue #76）：本票明确「暂未支持」——#78 以 spawn 临时进程 initialize 握手读 models 数组替换 */
-  async listModels(_input: ListModelsInput): Promise<ModelEntry[]> {
-    void _input;
-    throw new AdapterError("E_INTERNAL", "claude 模型目录暂未支持（待 initialize 握手 models 数组接入）");
+  /** 模型目录（issue #78 / spec #75）：spawn 临时进程 initialize 握手读响应 models 数组（映射规则见 mapInitModels），握手完成进程立即退出；结果 adapter 内缓存（失败不缓存可重试） */
+  async listModels(input: ListModelsInput): Promise<ModelEntry[]> {
+    if (!this.modelsPromise) {
+      this.modelsPromise = this.fetchModelCatalog(input.cwd).catch((e: unknown) => {
+        this.modelsPromise = null; // 失败不缓存：下次调用重新握手
+        throw e;
+      });
+    }
+    return this.modelsPromise;
+  }
+
+  /** 临时握手进程拉目录：无会话状态（不带 --session-id/--resume/--settings）；finally 确保进程退出不残留 */
+  private async fetchModelCatalog(cwd: string): Promise<ModelEntry[]> {
+    let wire: ClaudeStreamClientLike;
+    try {
+      wire = this.clientFactory({ cwd, args: [], log: this.log });
+    } catch (e) {
+      // #46 对齐 createSession：exe 解析失败协议级映射；其余包装目录拉取失败
+      if (e instanceof ExeNotFoundError) throw new AdapterError("E_SPAWN_NOT_FOUND", e.message);
+      if (e instanceof AdapterError) throw e;
+      throw new AdapterError("E_INTERNAL", `拉取 Claude 模型目录失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+    try {
+      return mapInitModels(await wire.start());
+    } catch (e) {
+      if (e instanceof AdapterError) throw e;
+      throw new AdapterError("E_INTERNAL", `拉取 Claude 模型目录失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      wire.stop(); // 成功/失败 alike：临时进程立即退出
+    }
   }
 
   /** 应用重启后的会话收养（#13 恢复编排的接入点）：按 DB 持久化的 native session id 重建状态（无进程；readHistory 直读 transcript，resume 后可续问） */
@@ -679,6 +708,31 @@ export class ClaudeAdapter implements CliAdapter {
 }
 
 /* ---------------- wire 映射工具 ---------------- */
+
+/** initialize 响应内层载荷 → 目录条目（claude 2.1.317 实测形状：models 数组项含 value/resolvedModel/displayName/description）：value→id；value 为 default 的占位项过滤（spec #75 避免「默认」字样）；isDefault 取 default 占位项的 resolvedModel（账号默认模型 id）与条目 value/resolvedModel 比对，无匹配则无默认项 */
+function mapInitModels(payload: Record<string, unknown>): ModelEntry[] {
+  const raw = payload.models;
+  if (!Array.isArray(raw)) {
+    throw new Error("initialize 响应不含 models 数组（claude 协议可能已变更，请报告）");
+  }
+  const items = raw as Array<Record<string, unknown> | null>;
+  const defaultEntry = items.find((m) => m?.value === "default");
+  const defaultId = typeof defaultEntry?.resolvedModel === "string" ? defaultEntry.resolvedModel : "";
+  const entries: ModelEntry[] = [];
+  for (const m of items) {
+    if (!m) continue;
+    const value = typeof m.value === "string" ? m.value : "";
+    if (!value || value === "default") continue;
+    const resolved = typeof m.resolvedModel === "string" && m.resolvedModel ? m.resolvedModel : value;
+    entries.push({
+      id: value,
+      displayName: typeof m.displayName === "string" && m.displayName ? m.displayName : value,
+      description: typeof m.description === "string" ? m.description : "",
+      isDefault: value === defaultId || resolved === defaultId,
+    });
+  }
+  return entries;
+}
 
 /** 统一审批决定 → can_use_tool wire 响应（SDK PermissionResult 形状；allow-always 原样回传 CLI 建议的 addRules 规则，语义不换写） */
 function approvalWire(decision: string, entry: PendingApproval): unknown {

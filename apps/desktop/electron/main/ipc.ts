@@ -1,7 +1,10 @@
-// 用途：Main 入站 IPC 处理器聚合 —— kanban:ipc（信封经共享工厂 + 25 子通道编译期穷尽查表，handler 按 feature 落 main/ipc/*.ts）与 memory/residue/diff/config 四个独立单通道路由（纯函数无 Electron 依赖：dialog 与 config 经 deps 注入）；#72 C1 Step2 自 775 行 route switch 巨石拆分
+// 用途：Main 入站 IPC 处理器聚合 —— kanban:ipc（信封经共享工厂 + 25 子通道编译期穷尽查表，handler 按 feature 落 main/ipc/*.ts）与 memory/residue/diff/config/cli:status 五个独立单通道路由（纯函数无 Electron 依赖：dialog 与 config 经 deps 注入）；#72 C1 Step2 自 775 行 route switch 巨石拆分
 import {
   IPC_CHANNELS,
   type AutoArchiveScanSummary,
+  type CliInstalledMap,
+  type CliStatusRequest,
+  type CliStatusResult,
   type ConfigRequest,
   type ConfigResult,
   type DiffRequest,
@@ -174,6 +177,39 @@ async function routeDiff(req: DiffRequest, deps: DiffIpcDeps): Promise<DiffResul
       // return await：让 readWorkspaceDiff 的拒绝进 catch（记日志后原样 rethrow），而非绕过 catch 直达调用方
       return await deps.readWorkspaceDiff(project.canonicalPath);
     }
+  }
+}
+
+// ============ #80 cli:status 通道（spec #75 实现决策 3/7：三真实 CLI 安装状态聚合；fake/pty 恒可用不经探测） ============
+
+/** cli:status 路由依赖：安装状态查询（生产 = index.ts 经 createCliStatusService 装配：已装进程内缓存、未装每次重探）；isShuttingDown?/log? 经 EnvelopeDeps 注入 */
+export interface CliStatusIpcDeps extends EnvelopeDeps {
+  cliStatus(): Promise<CliInstalledMap>;
+}
+
+/** 处理一条 cli:status 入站请求：信封经共享工厂（code 方言 + fail——探测意外异常返回明确错误不 rethrow，菜单不因此废掉） */
+export async function handleCliStatusIpc(deps: CliStatusIpcDeps, raw: unknown): Promise<CliStatusResult> {
+  return createChannelHandler<CliStatusRequest, CliStatusResult, CliStatusIpcDeps>(
+    {
+      scope: IPC_CHANNELS.cliStatus.name,
+      schema: IPC_CHANNELS.cliStatus.request,
+      dialect: codeEnvelope,
+      catchStyle: {
+        kind: "fail",
+        logMessage: (message) => `CLI 安装状态查询失败：${message}`,
+        toResult: (message) => ({ ok: false, error: { code: "E_INTERNAL", message: `CLI 安装状态查询失败：${message}` } }),
+      },
+    },
+    deps,
+    routeCliStatus,
+  )(raw);
+}
+
+/** cli:status 单通道路由主体 */
+async function routeCliStatus(req: CliStatusRequest, deps: CliStatusIpcDeps): Promise<CliStatusResult> {
+  switch (req.channel) {
+    case "cli:status":
+      return { ok: true, installed: await deps.cliStatus() };
   }
 }
 

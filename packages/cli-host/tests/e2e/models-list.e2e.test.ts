@@ -1,8 +1,9 @@
-// 用途：模型目录真实拉取冒烟（KANBAN_E2E=1 才跑，issue #76 / spec #75 B 类）—— codex 常驻 app-server 发 model/list（零推理成本）+ opencode acquire server → GET /config/providers 摊平（零推理成本）+ release 引用归零；环境探测清单（CLI 版本/凭据）见 docs/testing.md
+// 用途：模型目录真实拉取冒烟（KANBAN_E2E=1 才跑，issue #76/#78 / spec #75 B 类）—— codex 常驻 app-server 发 model/list（零推理成本）+ opencode acquire server → GET /config/providers 摊平（零推理成本）+ release 引用归零 + claude spawn 临时进程 initialize 握手读 models 数组（零推理成本，握手不产生模型调用）；环境探测清单（CLI 版本/凭据）见 docs/testing.md
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { ClaudeAdapter } from "../../src/claude-adapter";
 import { CodexAdapter } from "../../src/codex-adapter";
 import { OpenCodeAdapter } from "../../src/opencode-adapter";
 import { OpenCodeServerHost } from "../../src/opencode/server-host";
@@ -72,5 +73,18 @@ describe.skipIf(!E2E)("models:list 真实拉取冒烟（env-gated，零推理成
     expect(models.some((m) => m.id.includes("/"))).toBe(true); // 完整串摊平（provider 前缀）
     expect(models.filter((m) => m.isDefault).length).toBeLessThanOrEqual(1); // 与 /config 默认串比对：至多一条默认
     expect(await host.listChildPids()).toEqual([]); // release 后 server 已停（引用计数不泄漏）
+  });
+
+  it("claude：spawn 临时进程 initialize 握手读 models 数组（零推理成本）；default 占位被过滤；重复调用走缓存；临时进程不残留", async () => {
+    const adapter = new ClaudeAdapter({
+      log: (k, d) => process.env.KANBAN_E2E_DEBUG && console.error(`[claude:${k}] ${d}`),
+    });
+    const models = await adapter.listModels({ cwd: root });
+    expectEntryShape(models);
+    expect(models.some((m) => m.id === "default")).toBe(false); // default 占位项过滤
+    expect(models.some((m) => m.displayName === "Default (recommended)")).toBe(false);
+    const again = await adapter.listModels({ cwd: root });
+    expect(again).toBe(models); // adapter 内缓存：同实例不再握手
+    expect(await adapter.listChildPids()).toEqual([]); // 临时进程不落会话表、已退出
   });
 });

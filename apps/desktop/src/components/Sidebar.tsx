@@ -4,6 +4,7 @@ import type { AppInfo, CliKind, ProjectRow } from "@kanban/ipc-schema";
 import type { SessionView } from "../features/chat/chat-store";
 import { StatusBadge } from "../features/chat/components/StatusBadge";
 import { CLI_DOT_CLS, NEW_MENU_CLIS } from "../lib/cli-catalog";
+import { CLI_NOT_INSTALLED_HINT, isCliUnavailable, useCliInstallStatus } from "../lib/use-cli-status";
 import { DeleteSessionDialog } from "./DeleteSessionDialog";
 import { DirBadge } from "./DirBadge";
 
@@ -76,6 +77,8 @@ export function Sidebar({
 }: SidebarProps) {
   // 「＋」菜单开在哪个项目行上（一次只开一个）
   const [menuProjectId, setMenuProjectId] = useState<string | null>(null);
+  // #80：菜单打开时拉取 CLI 安装表（未装灰置；与详情面板菜单共享禁用逻辑）
+  const cliInstalled = useCliInstallStatus(menuProjectId !== null);
   // #62 待二次确认删除的会话行（null=确认弹窗关闭）
   const [deleteTarget, setDeleteTarget] = useState<SessionView | null>(null);
 
@@ -140,20 +143,27 @@ export function Sidebar({
             </button>
             {menuProjectId === p.id ? (
               <div className="absolute left-3.5 top-full z-10 mt-1 min-w-[150px] rounded-lg border border-border bg-muted p-1 shadow-[0_8px_24px_rgba(0,0,0,.5)]">
-                {NEW_MENU_CLIS.map(({ cli, label }) => (
-                  <button
-                    key={cli}
-                    type="button"
-                    className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] hover:bg-card"
-                    onClick={() => {
-                      setMenuProjectId(null);
-                      onCreateSession(p.id, cli);
-                    }}
-                  >
-                    <span className={`inline-block h-2 w-2 rounded-full ${CLI_DOT_CLS[cli]}`} />
-                    {label}
-                  </button>
-                ))}
+                {NEW_MENU_CLIS.map(({ cli, label }) => {
+                  // #80：未装灰置 + 「未安装」标注（悬停说明），点击无效；fake/pty 恒可选不经探测
+                  const unavailable = isCliUnavailable(cliInstalled, cli);
+                  return (
+                    <button
+                      key={cli}
+                      type="button"
+                      disabled={unavailable}
+                      title={unavailable ? CLI_NOT_INSTALLED_HINT : undefined}
+                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] enabled:hover:bg-card disabled:cursor-not-allowed disabled:opacity-50"
+                      onClick={() => {
+                        setMenuProjectId(null);
+                        onCreateSession(p.id, cli);
+                      }}
+                    >
+                      <span className={`inline-block h-2 w-2 rounded-full ${CLI_DOT_CLS[cli]}`} />
+                      {label}
+                      {unavailable ? <span className="ml-auto text-[11px] text-fg-faint">未安装</span> : null}
+                    </button>
+                  );
+                })}
                 <button
                   type="button"
                   className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] hover:bg-card"

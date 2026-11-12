@@ -1,5 +1,6 @@
-// 用途：顶层 IPC 通道名单源 —— 五个 :ipc 通道的名称 / wire 契约配对 / 错误方言描述符（main 侧 ipcMain.handle 与日志 scope、preload 侧 invoke 的通道名字符串唯一出处；纯常量零 Node 依赖，不建运行时注册表）
+// 用途：顶层 IPC 通道名单源 —— 七个通道（六个 :ipc 单通道 + cli:status）的名称 / wire 契约配对 / 错误方言描述符（main 侧 ipcMain.handle 与日志 scope、preload 侧 invoke 的通道名字符串唯一出处；纯常量零 Node 依赖，不建运行时注册表）
 import type { z } from "zod";
+import { cliStatusRequestSchema, cliStatusResultSchema } from "./cli-status";
 import { configRequestSchema, configResultSchema } from "./config";
 import { diffRequestSchema, diffResultSchema } from "./diff";
 import { ipcRequestSchema, ipcResultSchema } from "./ipc";
@@ -30,7 +31,8 @@ export const IPC_CHANNELS = {
   diff: { name: "diff:ipc", request: diffRequestSchema, result: diffResultSchema, errorShape: "code" },
   config: { name: "config:ipc", request: configRequestSchema, result: configResultSchema, errorShape: "code" },
   models: { name: "models:ipc", request: modelsRequestSchema, result: modelsResultSchema, errorShape: "code" },
+  cliStatus: { name: "cli:status", request: cliStatusRequestSchema, result: cliStatusResultSchema, errorShape: "code" },
 } as const satisfies Record<string, IpcChannelDef<string, unknown, unknown>>;
 
-/** 通道键名（"kanban" | "memory" | "residue" | "diff" | "config" | "models"） */
+/** 通道键名（"kanban" | "memory" | "residue" | "diff" | "config" | "models" | "cliStatus"） */
 export type IpcChannelName = keyof typeof IPC_CHANNELS;
