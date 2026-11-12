@@ -1,4 +1,4 @@
-// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc/memory:ipc/diff:ipc/residue:ipc/config:ipc 路由）、CliHost 托管（utilityProcess 优先，进程内回退）与事件转发/状态落库、TrackerEngine（SkillObservation 落库 + 重启恢复）、PTY 终端宿主（node-pty，main 进程直接使用，t0-03 实证）、有序退出与残留进程检测一次性通知（#49 app:event）、#51 单实例锁（二次启动转发聚焦 + 持锁失败立即退出）、#53 日志地基（Logger 二实例守卫后创建 + 启动横幅 + 崩溃兜底 + 9 处 console 迁移 + log:getPath/log:openDir）、#54 worker {log} 消息与 CLI stderr 汇聚（onWorkerLog→worker source；进程内回退同目标）；#64 自动归档引擎接线（启动后一次 + config:set 成功后经 onAutoArchiveSaved 触发，摘要缓存供设置区反馈）；初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
+// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc/memory:ipc/diff:ipc/residue:ipc/config:ipc/cli:status 路由）、CliHost 托管（utilityProcess 优先，进程内回退）与事件转发/状态落库、TrackerEngine（SkillObservation 落库 + 重启恢复）、PTY 终端宿主（node-pty，main 进程直接使用，t0-03 实证）、有序退出与残留进程检测一次性通知（#49 app:event）、#51 单实例锁（二次启动转发聚焦 + 持锁失败立即退出）、#53 日志地基（Logger 二实例守卫后创建 + 启动横幅 + 崩溃兜底 + 9 处 console 迁移 + log:getPath/log:openDir）、#54 worker {log} 消息与 CLI stderr 汇聚（onWorkerLog→worker source；进程内回退同目标）；#64 自动归档引擎接线（启动后一次 + config:set 成功后经 onAutoArchiveSaved 触发，摘要缓存供设置区反馈）；初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -30,9 +30,10 @@ import { defaultConfig, loadConfig, resolveEffectiveLevel, saveConfig, type AppC
 import { runAutoArchiveScan } from "./auto-archive";
 import { createAdapterEventHandler } from "./adapter-events";
 import { CliHostClient } from "./cli-host-client";
+import { createCliStatusService, createRealCliProbes, createSeededCliProbes } from "./cli-status-service";
 import { SQLITE_ENTRY, openDatabase } from "./db";
 import { createValidatedSender } from "./event-sender";
-import { handleIpc, handleConfigIpc, handleDiffIpc, handleMemoryIpc, handleResidueIpc, TRACKER_CLI_BY_APP, type IpcDeps } from "./ipc";
+import { handleIpc, handleCliStatusIpc, handleConfigIpc, handleDiffIpc, handleMemoryIpc, handleResidueIpc, TRACKER_CLI_BY_APP, type IpcDeps } from "./ipc";
 import { defaultGitDiffDeps, readWorkspaceDiff } from "./git-diff-service";
 import { handleLogWrite } from "./log-write";
 import { createLogger, registerCrashHandlers, resolveKindLog, type Logger } from "./logger";
@@ -403,6 +404,21 @@ app.whenReady().then(async () => {
       },
       raw,
     ),
+  );
+
+  // #80（spec #75 实现决策 7）：cli:status 单通道 —— 三真实 CLI exe 探测聚合（已装进程内缓存、未装每次重探：装完重开菜单即恢复）；
+  // e2e 经 KANBAN_TEST_CLI_STATUS_JSON 种子驱动（每次重读支持探测翻转），无种子走真实解析链（config 手动覆盖透传；DISABLE_* 回落 Fake 时点击有效不灰置）
+  const cliStatus = createCliStatusService(
+    process.env.KANBAN_TEST_CLI_STATUS_JSON
+      ? createSeededCliProbes(process.env.KANBAN_TEST_CLI_STATUS_JSON, (m) => logger.child("cli-status").log("warn", m))
+      : createRealCliProbes({
+          codexExe: appConfig.cliExe.codex,
+          claudeExe: appConfig.cliExe.claude,
+          opencodeExe: appConfig.cliExe.opencode,
+        }),
+  );
+  ipcMain.handle(IPC_CHANNELS.cliStatus.name, (_event, raw: unknown) =>
+    handleCliStatusIpc({ cliStatus, isShuttingDown: () => shutdown.isShuttingDown(), log: logger.log }, raw),
   );
 
   // #49 残留治理装配（spec #40 A/D/F 节）：检测 = exe 匹配三 CLI 解析链候选并集 + 排除 #44 活跃集合 +

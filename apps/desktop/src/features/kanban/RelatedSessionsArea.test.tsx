@@ -432,6 +432,68 @@ describe("详情面板关联区（#20；原型一致项 4 关联区）", () => {
   });
 });
 
+describe("「＋新建会话」菜单未装 CLI 灰置（#80：与侧栏菜单共享禁用逻辑）", () => {
+  const card = {
+    id: "REQ-003",
+    title: "灰置需求",
+    stage: "Design" as const,
+    stageBasis: null,
+    uncertain: false,
+    projectId: "p1",
+    sessions: [],
+  };
+
+  afterEach(() => {
+    window.api = undefined as unknown as typeof window.api;
+  });
+
+  it("未装项灰置 + 「未安装」标注 + 点击无效；已装项与 PTY 项恒可选", async () => {
+    window.api = {
+      invokeCliStatus: async () => ({ ok: true, installed: { codex: true, claude: false, opencode: true } }),
+    } as unknown as typeof window.api;
+    const onCreateSession = vi.fn();
+    render(
+      <RelatedSessionsArea
+        card={card}
+        actions={{ onUnlink: () => undefined, onLinkExisting: async () => null, onJumpToSession: () => undefined, onCreateSession }}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("new-session-menu"));
+
+    const claudeItem = await waitFor(() => {
+      const el = screen.getByTestId("new-session-item-claude") as HTMLButtonElement;
+      expect(el.disabled).toBe(true);
+      return el;
+    });
+    expect(claudeItem.textContent).toContain("未安装");
+    expect(claudeItem.getAttribute("title")).toContain("未安装"); // 悬停说明
+    fireEvent.click(claudeItem);
+    expect(onCreateSession).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("new-session-item-codex"));
+    expect(onCreateSession).toHaveBeenCalledWith("codex", card);
+    fireEvent.click(screen.getByTestId("new-session-menu")); // 重开（菜单在上一点击后已关）
+    fireEvent.click(screen.getByTestId("new-session-item-pty"));
+    expect(onCreateSession).toHaveBeenCalledWith("pty", card);
+  });
+
+  it("无 window.api（jsdom 降级）：菜单项全部可选不灰置", async () => {
+    const onCreateSession = vi.fn();
+    render(
+      <RelatedSessionsArea
+        card={card}
+        actions={{ onUnlink: () => undefined, onLinkExisting: async () => null, onJumpToSession: () => undefined, onCreateSession }}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("new-session-menu"));
+    const claudeItem = screen.getByTestId("new-session-item-claude") as HTMLButtonElement;
+    expect(claudeItem.disabled).toBe(false);
+    expect(claudeItem.textContent).not.toContain("未安装");
+    fireEvent.click(claudeItem);
+    expect(onCreateSession).toHaveBeenCalledWith("claude", card);
+  });
+});
+
 describe("link 拒绝原因直达呈现（三类，#20）", () => {
   /** 最小 SessionView fixture（轻量组件直挂，mock actions） */
   const fakeSession = (sessionId: string, projectId: string | null): SessionView => ({
