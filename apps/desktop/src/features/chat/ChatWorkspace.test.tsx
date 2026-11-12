@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AdapterEvent, CliKind, ErrorCode, IpcRequest, IpcResult, ModelEntry, ModelsRequest, ModelsResult, TerminalEvent } from "@kanban/ipc-schema";
+import type { AdapterEvent, CliKind, ErrorCode, IpcRequest, IpcResult, ModelEntry, ModelsRequest, ModelsResult, ProjectRow, SessionRow, TerminalEvent } from "@kanban/ipc-schema";
 import { AdapterError, FakeAdapter, VirtualClock, type CreateSessionInput, type ListModelsInput, type SendTurnInput } from "@kanban/cli-host";
 import { TrackerEngine } from "@kanban/tracker";
 import { openDatabase } from "../../../electron/main/db";
@@ -1833,6 +1833,7 @@ describe("模型目录全链（#77：combobox 就绪态/阻塞/手输/恢复派�
       permMode: "auto",
       status: "idle",
       lastActiveAt: "2026-11-01T00:00:00.000Z",
+      createdAt: "2026-11-01T00:00:00.000Z",
       archivedAt: null,
       dirIdentity: "none",
       worktreeName: null,
@@ -1842,5 +1843,212 @@ describe("模型目录全链（#77：combobox 就绪态/阻塞/手输/恢复派�
     await waitFor(() => expect(model.value).toBe("Fake 标准模型"));
     expect(model.value).not.toContain("默认模型"); // 无「默认模型」占位字样
     expect(t.ctl().activeSession?.model).toBeUndefined(); // 派生显示不写入 store
+  });
+});
+
+describe("启动自动选中（issue #86：回到当前项目最近会话，只选中不恢复）", () => {
+  let tmpRoot = "";
+
+  afterEach(() => {
+    cleanup();
+    for (const db of openDbs.splice(0)) db.close();
+    if (tmpRoot) {
+      rmSync(tmpRoot, { recursive: true, force: true });
+      tmpRoot = "";
+    }
+  });
+  /** 构造 stub 项目行（name/canonicalPath 取 id，可读即可） */
+  const proj = (id: string): ProjectRow => ({ id, name: id, canonicalPath: `C:\\${id}`, status: "ok", createdAt: "2026-11-01T00:00:00.000Z" });
+
+  /** 构造 stub wire 会话行（title 取 id 便于侧栏定位；其余合法缺省） */
+  function sess(id: string, over: Partial<SessionRow> = {}): SessionRow {
+    return {
+      id,
+      kind: "structured",
+      cli: "claude",
+      nativeSessionId: null,
+      projectId: "p-1",
+      title: id,
+      cwd: "C:\\repo",
+      permMode: "auto",
+      status: "disconnected",
+      lastActiveAt: null,
+      createdAt: "2026-11-01T00:00:00.000Z",
+      archivedAt: null,
+      dirIdentity: "none",
+      worktreeName: null,
+      ...over,
+    };
+  }
+
+  /** stub transport：精确控制 project:list / session:list 启动应答（gate 给定时 session:list 挂起至释放，驱动先手让位）；其余通道兜底 ok */
+  function makeBootStub(opts: { projects: ProjectRow[]; currentProjectId: string | null; sessions: SessionRow[]; gate?: Promise<void> }): { transport: ChatTransport; seen: IpcRequest[] } {
+    const seen: IpcRequest[] = [];
+    const transport: ChatTransport = {
+      invoke: async (req: IpcRequest): Promise<IpcResult> => {
+        seen.push(req);
+        if (req.channel === "project:list") {
+          return { ok: true, projects: opts.projects, currentProjectId: opts.currentProjectId };
+        }
+        if (req.channel === "session:list") {
+          if (opts.gate) await opts.gate;
+          return { ok: true, sessions: opts.sessions };
+        }
+        return { ok: true };
+      },
+      onEvent: () => () => undefined,
+      onTerminalEvent: () => () => undefined,
+      onTrackerEvent: () => () => undefined,
+      invokeModels: async () => STUB_MODELS,
+    };
+    return { transport, seen };
+  }
+
+  it("自动选中：当前项目下最近活跃的结构化会话被选中（侧栏行高亮、恢复横幅常驻、只选中不恢复、不开演示草稿）", async () => {
+    const { transport, seen } = makeBootStub({
+      projects: [proj("p-1")],
+      currentProjectId: "p-1",
+      sessions: [
+        sess("s-old", { lastActiveAt: "2026-11-10T08:00:00.000Z", createdAt: "2026-11-02T00:00:00.000Z" }),
+        sess("s-new", { lastActiveAt: "2026-11-12T09:30:00.000Z", createdAt: "2026-11-01T00:00:00.000Z" }),
+      ],
+    });
+    const t = mount(transport);
+    await t.flush();
+    expect(t.ctl().activeId).toBe("s-new"); // 最近活跃者（不是最新创建者）
+    // 侧栏对应行高亮
+    const activeRow = screen.getAllByTestId("session-row").find((r) => r.textContent?.includes("s-new"));
+    expect(activeRow?.getAttribute("data-active")).toBe("true");
+    // 只选中不恢复：断开态恢复横幅常驻，且不读历史、不 resume
+    expect(screen.getByTestId("resume-banner").textContent).toContain("s-new");
+    expect(seen.some((r) => r.channel === "session:readHistory" || r.channel === "session:resume")).toBe(false);
+    // 有会话：不开演示草稿
+    expect(t.ctl().draft).toBeNull();
+  });
+
+  it("PTY 排除：PTY 会话更近活跃也不选，仍选结构化会话", async () => {
+    const { transport } = makeBootStub({
+      projects: [proj("p-1")],
+      currentProjectId: "p-1",
+      sessions: [
+        sess("s-pty", { kind: "pty", cli: "pty", title: "终端 · pwsh", lastActiveAt: "2026-11-12T10:00:00.000Z" }),
+        sess("s-str", { lastActiveAt: "2026-11-10T08:00:00.000Z" }),
+      ],
+    });
+    const t = mount(transport);
+    await t.flush();
+    expect(t.ctl().activeId).toBe("s-str");
+  });
+
+  it("多项目过滤：只看当前项目会话，他项目更近活跃者不干扰", async () => {
+    const { transport } = makeBootStub({
+      projects: [proj("pA"), proj("pB")],
+      currentProjectId: "pB",
+      sessions: [
+        sess("s-a", { projectId: "pA", lastActiveAt: "2026-11-12T10:00:00.000Z" }),
+        sess("s-b", { projectId: "pB", lastActiveAt: "2026-11-10T08:00:00.000Z" }),
+      ],
+    });
+    const t = mount(transport);
+    await t.flush();
+    expect(t.ctl().activeId).toBe("s-b");
+  });
+
+  it("先手让位：启动期间已开结构化草稿 → 跳过自动选中，草稿保留", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const { transport } = makeBootStub({
+      projects: [proj("p-1")],
+      currentProjectId: "p-1",
+      sessions: [sess("s-new", { lastActiveAt: "2026-11-12T09:30:00.000Z" })],
+      gate,
+    });
+    const t = mount(transport);
+    await t.flush(); // project:list 已就位；bootstrap 等 session:list 挂起中
+    await act(async () => {
+      const r = t.ctl().openSessionDraft({ projectId: "p-1", cli: "claude" }); // 用户先手开草稿
+      expect(r.ok).toBe(true);
+    });
+    await act(async () => {
+      release();
+    });
+    await t.flush();
+    expect(t.ctl().activeId).toBeNull(); // 让位：不自动选中
+    expect(t.ctl().draft?.kind).toBe("structured"); // 草稿保留未被顶掉
+  });
+
+  it("先手让位（PTY 草稿）：启动期间已开终端草稿 → 同样跳过自动选中", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const { transport } = makeBootStub({
+      projects: [proj("p-1")],
+      currentProjectId: "p-1",
+      sessions: [sess("s-new", { lastActiveAt: "2026-11-12T09:30:00.000Z" })],
+      gate,
+    });
+    const t = mount(transport);
+    await t.flush();
+    await act(async () => {
+      const r = t.ctl().openSessionDraft({ projectId: "p-1", cli: "pty" }); // 用户先手开 PTY 终端草稿
+      expect(r.ok).toBe(true);
+    });
+    await act(async () => {
+      release();
+    });
+    await t.flush();
+    expect(t.ctl().activeId).toBeNull();
+    expect(t.ctl().draft?.kind).toBe("pty"); // PTY 草稿保留
+  });
+
+  it("演示草稿：无项目且无会话 → 维持演示草稿现状（不选中、无恢复横幅）", async () => {
+    const { transport } = makeBootStub({ projects: [], currentProjectId: null, sessions: [] });
+    const t = mount(transport);
+    await t.flush();
+    expect(screen.getByTestId("draft-hint").textContent).toContain("演示会话 · Fake");
+    expect(t.ctl().activeId).toBeNull();
+    expect(screen.queryByTestId("resume-banner")).toBeNull();
+  });
+
+  it("自动选中（真实链路）：FakeAdapter+DB 重启后回到当前项目最近活跃会话（lastActiveAt/createdAt 落库→wire→选中）", async () => {
+    // 临时项目 fixture（同 makeProjectFixture 模式；clock 暴露供推进 turn）
+    tmpRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "kb-ws-startup-")));
+    const projDir = join(tmpRoot, "demo-repo");
+    mkdirSync(join(projDir, ".git"), { recursive: true });
+    const dbPath = join(tmpRoot, "state.db");
+    const statePath = join(tmpRoot, "app-state.json");
+
+    // 第一次运行：注册项目 + 两个会话各跑一个 turn（后者的 lastActiveAt/createdAt 均更近）
+    const clock1 = new VirtualClock();
+    const t1 = mount(makeTransport(new FakeAdapter({ clock: clock1 }), { dbPath, statePath, pick: async () => projDir }));
+    await t1.flush();
+    const projectId = await registerProject(t1, projDir);
+    await act(async () => {
+      await createViaDraft(t1.ctl, "fake", { projectId }, "第一个会话");
+    });
+    act(() => {
+      clock1.runToIdle();
+    });
+    const firstId = t1.ctl().activeId;
+    await act(async () => {
+      await createViaDraft(t1.ctl, "fake", { projectId }, "第二个会话");
+    });
+    act(() => {
+      clock1.runToIdle();
+    });
+    const secondId = t1.ctl().activeId;
+    expect(firstId).toBeTruthy();
+    expect(secondId).not.toBe(firstId);
+
+    // 重启（同 db/状态文件）：自动选中最近活跃的第二个会话（断开态 + 恢复横幅常驻，无需点击）
+    cleanup();
+    const t2 = mount(makeTransport(new FakeAdapter({ clock: new VirtualClock() }), { dbPath, statePath, pick: async () => null }));
+    await t2.flush();
+    expect(t2.ctl().activeId).toBe(secondId);
+    expect(screen.getByTestId("resume-banner")).toBeTruthy();
+    expect(t2.ctl().draft).toBeNull(); // 已有会话：不开演示草稿
   });
 });

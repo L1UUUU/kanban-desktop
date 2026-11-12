@@ -1,5 +1,5 @@
 // 用途：自动归档引擎（#64 spec #57）—— 判定为纯函数（会话集合 + 配置 + 当前时间 → 待归档 id 列表，便于密封测试）+ 执行器（逐条容错 allSettled 全部尝试，参照退出序列范式；归档编排经 session-lifecycle 唯一写者（#70 C2），与 session:archive 通道共用同一实例，不另起平行实现）+ 扫描摘要（设置区反馈数据源）
-import type { AutoArchiveConfig, AutoArchiveScanSummary, SessionStatus } from "@kanban/ipc-schema";
+import { activityBasisMs, type AutoArchiveConfig, type AutoArchiveScanSummary, type SessionStatus } from "@kanban/ipc-schema";
 import type { LogFn } from "./logger";
 import type { PtyHost } from "./pty-host";
 import type { SessionLifecycle } from "./session-lifecycle";
@@ -35,8 +35,8 @@ export function selectAutoArchiveIds(
     if (s.archivedAt != null) continue;
     if (s.status === "running" || s.status === "waiting") continue;
     if (s.processAlive) continue;
-    const basis = Date.parse(s.lastActiveAt ?? s.createdAt ?? "");
-    if (Number.isNaN(basis)) continue;
+    const basis = activityBasisMs(s.lastActiveAt, s.createdAt);
+    if (basis === null) continue; // 基准不可解析保守跳过（单源 activityBasisMs，#86 启动自动选中同口径）
     if (now.getTime() - basis >= cutoffMs) ids.push(s.id);
   }
   return ids;

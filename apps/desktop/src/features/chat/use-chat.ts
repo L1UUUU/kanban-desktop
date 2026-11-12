@@ -4,6 +4,7 @@ import type { AdapterEvent, ApprovalDecision, ChatEvent, CliKind, IpcResult, Mod
 import type { ChatTransport } from "../../lib/kanban-api";
 import { createScopedLogger } from "../../lib/logger";
 import { ChatStore, type DraftSession, type SessionMeta, type SessionView } from "./chat-store";
+import { selectStartupSessionId } from "./startup-select";
 import { ModelCatalog } from "./model-catalog";
 import { TerminalDraftController, type TerminalDraftSnapshot } from "../terminal/terminal-draft";
 import { TerminalManager } from "../terminal/TerminalManager";
@@ -380,10 +381,10 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
     });
     if (!bootRef.current && demoCwd !== null) {
       bootRef.current = true;
-      void bootstrap(transport, store, demoCwd);
+      void bootstrap(transport, store, drafts, demoCwd);
     }
     return off;
-  }, [transport, store, demoCwd]);
+  }, [transport, store, drafts, demoCwd]);
 
   // terminal:event 订阅：data/横幅进 manager；started/exit 同步会话状态徽标（store 内部自用直调）
   useEffect(() => {
@@ -516,14 +517,25 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
   };
 }
 
-/** 启动自举：恢复 DB 历史会话（统一断开态）；无项目且无会话时打开 Fake 演示草稿（#59：不落库，发第一条消息才成会话） */
-async function bootstrap(transport: ChatTransport, store: ChatStore, demoCwd: string): Promise<void> {
+/**
+ * 启动自举：恢复 DB 历史会话（统一断开态）；自动选中当前项目（issue #86：无=无项目会话）下最近活跃的
+ * 未归档结构化会话——只选中不恢复（不读历史、不拉起 CLI 进程，恢复横幅常驻），用户先手（已选中会话/已开
+ * 任一类草稿）则让位跳过；无项目且无会话时打开 Fake 演示草稿（#59：不落库，发第一条消息才成会话）
+ */
+async function bootstrap(transport: ChatTransport, store: ChatStore, drafts: TerminalDraftController, demoCwd: string): Promise<void> {
   const [projRes, sessRes] = await Promise.all([
     transport.invoke({ channel: "project:list" }),
     transport.invoke({ channel: "session:list" }),
   ]);
   if (sessRes.ok && sessRes.sessions) {
     for (const row of sessRes.sessions) store.registerRestored(row);
+  }
+  // issue #86 自动选中：先手让位守卫（自举在途用户已选中会话/已开结构化或 PTY 草稿 → 不动用户焦点）
+  const snap = store.getSnapshot();
+  if (snap.activeId === null && snap.draft === null && drafts.getSnapshot() === null) {
+    const currentProjectId = projRes.ok ? (projRes.currentProjectId ?? null) : null;
+    const target = selectStartupSessionId(sessRes.ok ? sessRes.sessions ?? [] : [], currentProjectId);
+    if (target) store.setActive(target);
   }
   const hasProjects = projRes.ok && (projRes.projects?.length ?? 0) > 0;
   if (!hasProjects && store.getSnapshot().sessions.length === 0) {

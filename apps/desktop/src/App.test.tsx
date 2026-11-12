@@ -108,6 +108,7 @@ describe("设置面板取消归档 → 侧栏行回默认列表（#63 AppShell �
       permMode: null,
       status: null,
       lastActiveAt: null,
+      createdAt: "2026-11-09T00:00:00.000Z",
       archivedAt: "2026-11-10T08:00:00.000Z",
       dirIdentity: "none",
       worktreeName: null,
