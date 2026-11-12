@@ -29,6 +29,8 @@ class FakeServerClient implements OpenCodeServerClientLike {
   onPrompt: ((nativeId: string, text: string) => void) | null = null;
   /** 测试替换 api 行为（审批 POST 失败等） */
   apiOverride: ((method: string, path: string, body?: unknown) => OpenCodeApiResponse | null) | null = null;
+  /** GET /config/providers 返回（listModels 摊平驱动，issue #76；null=未脚本化按 404 处理） */
+  providers: { providers: Array<{ id: string; name?: string; models: Record<string, { name?: string } | undefined> }> } | null = null;
   private readonly eventFns = new Set<(ev: OpenCodeSseEvent) => void>();
   private readonly deadFns = new Set<(err: Error) => void>();
 
@@ -47,6 +49,7 @@ class FakeServerClient implements OpenCodeServerClientLike {
       return this.ok({ id: `ses_${this.port}_${this.sessionSeq}` });
     }
     if (method === "GET" && path === "/config") return this.ok({ model: "magpie/192-168-4-61-3000/aim_glm-5.3" });
+    if (method === "GET" && path === "/config/providers" && this.providers) return this.ok(this.providers);
     if (method === "GET" && path === "/command") return this.ok({ items: this.commands });
     if (method === "POST" && path.endsWith("/prompt_async")) {
       this.onPrompt?.(path.split("/")[2] ?? "", String((body as { parts?: Array<{ text?: string }> })?.parts?.[0]?.text ?? ""));
@@ -153,6 +156,45 @@ function makeAdapter(extra?: Partial<ConstructorParameters<typeof OpenCodeAdapte
 }
 
 const CWD = "C:\\demo";
+
+describe("OpenCodeAdapter：listModels 模型目录（issue #76 / spec #75）", () => {
+  it("GET /config/providers 摊平为 providerID/modelID 完整串；isDefault 与 GET /config 的 model 串比对；无 name 回退完整 id", async () => {
+    const { adapter, host } = makeAdapter();
+    const cwd = "C:\\op-models";
+    await adapter.createSession({ cwd }); // 预热：拉起 server（listModels 复用同 client）
+    host.serverOf(cwd)!.providers = {
+      providers: [
+        { id: "openai", name: "OpenAI", models: { "gpt-5.4": { name: "GPT-5.4" }, "gpt-5.5": undefined } },
+        { id: "magpie", name: "magpie", models: { "192-168-4-61-3000/aim_glm-5.3": { name: "GLM 5.3" } } },
+      ],
+    };
+    const models = await adapter.listModels({ cwd });
+    expect(models.map((m) => m.id)).toEqual(["openai/gpt-5.4", "openai/gpt-5.5", "magpie/192-168-4-61-3000/aim_glm-5.3"]);
+    expect(models.find((m) => m.isDefault)?.id).toBe("magpie/192-168-4-61-3000/aim_glm-5.3"); // /config model 串
+    expect(models.filter((m) => m.isDefault)).toHaveLength(1);
+    expect(models.find((m) => m.id === "openai/gpt-5.5")?.displayName).toBe("openai/gpt-5.5"); // 无 name 回退
+    expect(models.find((m) => m.id === "openai/gpt-5.4")?.displayName).toBe("GPT-5.4");
+    expect(host.refCount(cwd)).toBe(1); // 会话引用保留，models 引用已释放（引用计数不泄漏）
+  });
+
+  it("失败路径必调 release：全新 cwd 拉取失败后引用归零、server 停止", async () => {
+    const { adapter, host } = makeAdapter();
+    const cwd = "C:\\op-models-fail";
+    await expect(adapter.listModels({ cwd })).rejects.toMatchObject({ code: "E_INTERNAL" }); // providers 未脚本化 → 404
+    expect(host.refCount(cwd)).toBe(0);
+    expect(host.stoppedCwds).toContain(cwd); // 引用归零触发 server 停止（无泄漏）
+  });
+
+  it("createSession 返回实际 model：显式值透传；未指定回 GET /config 默认串", async () => {
+    const a = makeAdapter();
+    const r1 = await a.adapter.createSession({ cwd: "C:\\op-m1", model: "openai/gpt-5.4" });
+    expect(r1.model).toBe("openai/gpt-5.4");
+    const b = makeAdapter();
+    const r2 = await b.adapter.createSession({ cwd: "C:\\op-m2" });
+    expect(r2.model).toBe("magpie/192-168-4-61-3000/aim_glm-5.3"); // FakeServerClient /config 默认
+  });
+});
+
 
 /** 工具 part 帧（含审批绑定场景的非终态帧） */
 function toolPartFrame(nativeId: string, msgId: string, partId: string, state: Record<string, unknown>): { sessionID: string; part: Record<string, unknown> } {

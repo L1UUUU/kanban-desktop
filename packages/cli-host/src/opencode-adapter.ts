@@ -1,9 +1,9 @@
-// 用途：OpenCodeAdapter —— C1 契约的真实 OpenCode 实现：HTTP+SSE 直连（poc-3 client 演进）、server-per-project（经 OpenCodeServerHost）、审批轮询 GET /permission + SSE replied 兜底、/command 路由 self_reported SkillObservation、abort 归类已取消、按 native session id 跨重启恢复 + readTranscript message API 双视角（#28）
+// 用途：OpenCodeAdapter —— C1 契约的真实 OpenCode 实现：HTTP+SSE 直连（poc-3 client 演进）、server-per-project（经 OpenCodeServerHost）、审批轮询 GET /permission + SSE replied 兜底、/command 路由 self_reported SkillObservation、abort 归类已取消、按 native session id 跨重启恢复 + readTranscript message API 双视角（#28）+ listModels providers 摊平（#76）
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { LogKind, AdapterEvent, ApprovalDecision, ApprovalSuggestion, ChatEvent, ChatEventSeed, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
-import { AdapterError, ExeNotFoundError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
+import type { LogKind, AdapterEvent, ApprovalDecision, ApprovalSuggestion, ChatEvent, ChatEventSeed, ModelEntry, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
+import { AdapterError, ExeNotFoundError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
 import type { OpenCodeSseEvent, OpenCodeServerClientLike } from "./opencode/client";
 import { OpenCodeServerHost, type OpenCodeServerHostLike, type OpenCodeServerHostOptions } from "./opencode/server-host";
 import { isAuthFailureStatus, isAuthFailureText, isProtocolDisconnectText } from "./session-error";
@@ -114,9 +114,9 @@ export class OpenCodeAdapter implements CliAdapter {
   private readonly stuckConfirmMs: number;
   private pollTimer: NodeJS.Timeout | null = null;
   private pollBusy = false;
-  /** server 客户端级缓存：command 名单 / 默认模型 */
+  /** server 客户端级缓存：command 名单 / 默认模型完整串（GET /config 的 model；issue #76 起 resolveModelWire 与 listModels isDefault 比对共用） */
   private readonly commandCache = new Map<OpenCodeServerClientLike, Set<string>>();
-  private readonly modelCache = new Map<OpenCodeServerClientLike, { providerID: string; modelID: string } | null>();
+  private readonly defaultModelCache = new Map<OpenCodeServerClientLike, string | null>();
 
   constructor(options: OpenCodeAdapterOptions = {}) {
     this.log = options.log ?? (() => {});
@@ -137,7 +137,7 @@ export class OpenCodeAdapter implements CliAdapter {
     }
   }
 
-  async createSession(init: CreateSessionInput): Promise<{ sessionId: string; nativeSessionId?: string | null }> {
+  async createSession(init: CreateSessionInput): Promise<{ sessionId: string; nativeSessionId?: string | null; model?: string | null }> {
     const sessionId = `s-${randomUUID().slice(0, 8)}`;
     // 权限档位缺省=⚡自动（spec B 默认档）：undefined 不落在原生默认（无注入=全放行），保证审批语义一致
     const mode = init.permMode ?? "auto";
@@ -162,12 +162,51 @@ export class OpenCodeAdapter implements CliAdapter {
       await this.host.release(init.cwd, sessionId).catch(() => {});
       throw new AdapterError("E_INTERNAL", e instanceof Error ? e.message : String(e));
     }
-    const s: SessionState = this.newState(sessionId, nativeId, { ...init, permMode: mode });
+    // 本会话实际采用的 model（issue #76）：显式值或 /config 默认串（创建期不绑模型，首 prompt 生效——spec #75 决策）
+    const model = init.model ?? (await this.defaultModelString(client));
+    const s: SessionState = this.newState(sessionId, nativeId, { ...init, model: model ?? undefined, permMode: mode });
     this.attachServer(s, client);
     this.sessions.set(sessionId, s);
     this.byNative.set(nativeId, s);
     this.emit(s, { type: "session_status", status: "idle" });
-    return { sessionId, nativeSessionId: nativeId };
+    return { sessionId, nativeSessionId: nativeId, model: model ?? undefined };
+  }
+
+  /** 模型目录（issue #76 / spec #75）：acquire server → GET /config/providers 摊平 provider→models（id 为 providerID/modelID 完整串，isDefault 与 GET /config 的 model 串比对）→ try/finally release（防引用计数泄漏） */
+  async listModels(input: ListModelsInput): Promise<ModelEntry[]> {
+    const ownerKey = `models-${randomUUID().slice(0, 8)}`; // 独立引用键（不复用会话 id，release 即归零）
+    let client: OpenCodeServerClientLike;
+    try {
+      client = await this.host.acquire(input.cwd, "auto", ownerKey);
+    } catch (e) {
+      // #46 对齐 createSession：exe 解析失败协议级映射；其余包装目录拉取失败
+      if (e instanceof ExeNotFoundError) throw new AdapterError("E_SPAWN_NOT_FOUND", e.message);
+      if (e instanceof AdapterError) throw e;
+      throw new AdapterError("E_INTERNAL", e instanceof Error ? e.message : String(e));
+    }
+    try {
+      const r = await client.api("GET", "/config/providers");
+      if (!r.ok) throw new Error(`HTTP ${r.status} ${r.text.slice(0, 160)}`);
+      const json = (r.json ?? {}) as { providers?: unknown };
+      const providers = Array.isArray(json.providers) ? (json.providers as Array<Record<string, unknown> | null>) : [];
+      const defaultModel = await this.defaultModelString(client); // isDefault 比对数据源（GET /config 的 model 串）
+      const entries: ModelEntry[] = [];
+      for (const p of providers) {
+        const providerID = typeof p?.id === "string" ? p.id : "";
+        const models = p?.models;
+        if (!providerID || !models || typeof models !== "object") continue;
+        for (const [modelID, raw] of Object.entries(models as Record<string, unknown>)) {
+          const id = `${providerID}/${modelID}`; // 完整串（magpie 网关模型 ID 自带斜杠，poc-3 §10.1）
+          const name = typeof (raw as { name?: unknown } | null)?.name === "string" && (raw as { name: string }).name ? (raw as { name: string }).name : "";
+          entries.push({ id, displayName: name || id, description: "", isDefault: id === defaultModel });
+        }
+      }
+      return entries;
+    } catch (e) {
+      throw new AdapterError("E_INTERNAL", `拉取 OpenCode 模型目录失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      await this.host.release(input.cwd, ownerKey).catch(() => {});
+    }
   }
 
   /** 应用重启后的会话收养（#13 恢复编排接入点）：登记 native id（无连接；readHistory/resume 按需拉起 server） */
@@ -671,22 +710,27 @@ export class OpenCodeAdapter implements CliAdapter {
 
   /* ---------------- 内部：turn 驱动与终态 ---------------- */
 
-  /** model 解析：显式含斜杠 → 切分；否则 GET /config 默认模型；无默认 → 省略（server 自选） */
+  /** model 解析：显式含斜杠 → 切分；否则 GET /config 默认模型（完整串缓存）；无默认/不含斜杠 → 省略（server 自选） */
   private async resolveModelWire(s: SessionState): Promise<Record<string, string> | undefined> {
     if (s.model && s.model.includes("/")) return splitModelId(s.model);
-    const client = s.client!;
-    if (!this.modelCache.has(client)) {
+    const def = await this.defaultModelString(s.client!);
+    return def && def.includes("/") ? splitModelId(def) : undefined;
+  }
+
+  /** GET /config 默认模型完整串（client 级缓存；读取失败/无默认为 null）——会话实际 model 回显与目录 isDefault 比对的单一数据源（issue #76） */
+  private async defaultModelString(client: OpenCodeServerClientLike): Promise<string | null> {
+    if (!this.defaultModelCache.has(client)) {
       let def: string | null = null;
       try {
         const r = await client.api("GET", "/config");
         const m = (r.json as { model?: unknown } | null)?.model;
-        if (typeof m === "string" && m.includes("/")) def = m;
+        if (typeof m === "string" && m) def = m;
       } catch {
-        /* 配置读取失败：省略 model */
+        /* 配置读取失败：无默认 */
       }
-      this.modelCache.set(client, def ? splitModelId(def) : null);
+      this.defaultModelCache.set(client, def);
     }
-    return this.modelCache.get(client) ?? undefined;
+    return this.defaultModelCache.get(client) ?? null;
   }
 
   /** 已知 command 名单（GET /command，client 级缓存；miss 时刷新一次） */

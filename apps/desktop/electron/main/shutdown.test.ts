@@ -17,6 +17,7 @@ function makeFakeAdapter(hooks: { onInterrupt?: (id: string) => void; failInterr
     createSession: async () => {
       throw new Error("测试不使用");
     },
+    listModels: async () => [],
     sendTurn: async () => {},
     interruptTurn: async (id) => {
       calls.push(`interrupt:${id}`);
@@ -224,6 +225,7 @@ describe("重开恢复编排（#13；#70 起经 session-lifecycle.adoptRestored�
       createSession: async () => {
         throw new Error("unused");
       },
+      listModels: async () => [],
       sendTurn: async () => {},
       interruptTurn: async () => {},
       resolveApproval: async () => {},

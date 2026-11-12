@@ -31,6 +31,7 @@ const allKinds = [
   "listChildPids",
   "runOnce",
   "cancelRunOnce",
+  "listModels",
 ] as const satisfies readonly HostCommand["kind"][];
 
 /** 编译期双向相等断言（Equal 惯用法）：清单缺 kind → false 不可赋给 true 字面量 → 编译红 */
@@ -105,14 +106,15 @@ describe("wire 契约 roundtrip（issue #73）", () => {
     expect(allKinds).toContain("cancelRunOnce");
   });
 
-  it("createSession：报文 {kind,payload}；返回值直传（nativeSessionId 归一化 null）；事件经 {event} 同步回流", async () => {
+  it("createSession：报文 {kind,payload}；返回值直传（nativeSessionId 归一化 null；model 实际采用值回传）；事件经 {event} 同步回流", async () => {
     const { proc, client } = makeWire();
     const events: AdapterEvent[] = [];
     client.subscribe((e) => events.push(e));
-    const s = await client.createSession({ cwd: "C:\\wire", cli: "fake" });
+    const s = await client.createSession({ cwd: "C:\\wire", cli: "fake", model: "fake-standard" });
     expect(s.sessionId).toMatch(/^s-/);
     expect(s.nativeSessionId).toBeNull();
-    expect(proc.posted[0]).toEqual({ id: 1, cmd: { kind: "createSession", payload: { cwd: "C:\\wire", cli: "fake" } } });
+    expect(s.model).toBe("fake-standard"); // issue #76：实际采用 model 经 wire 回传
+    expect(proc.posted[0]).toEqual({ id: 1, cmd: { kind: "createSession", payload: { cwd: "C:\\wire", cli: "fake", model: "fake-standard" } } });
     expect(events.some((e) => "type" in e && e.type === "session_status" && (e as { sessionId: string }).sessionId === s.sessionId)).toBe(true);
   });
 
@@ -197,5 +199,17 @@ describe("wire 契约 roundtrip（issue #73）", () => {
     expect(cmdOf(proc.posted.at(-1))).toEqual({ kind: "cancelRunOnce", payload: "w-2" });
     expect(await p).toMatchObject({ status: "cancelled" });
     await expect(client.cancelRunOnce("nope")).resolves.toBeUndefined();
+  });
+
+  it("listModels：payload 即 ListModelsInput（cli 缺省显式补 fake）；返回值直传 ModelEntry[]（Fake 两条、首条默认，issue #76）", async () => {
+    const { proc, client } = makeWire();
+    const models = await client.listModels({ cwd: "C:\\wire" });
+    expect(models).toHaveLength(2);
+    expect(models[0].isDefault).toBe(true);
+    expect(models[1].isDefault).toBe(false);
+    expect(cmdOf(proc.posted[0])).toEqual({ kind: "listModels", payload: { cwd: "C:\\wire", cli: "fake" } });
+    const withCli = await client.listModels({ cwd: "C:\\wire", cli: "fake" });
+    expect(cmdOf(proc.posted.at(-1))).toEqual({ kind: "listModels", payload: { cwd: "C:\\wire", cli: "fake" } });
+    expect(withCli).toHaveLength(2);
   });
 });

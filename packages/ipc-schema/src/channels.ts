@@ -1,10 +1,11 @@
-// 用途：顶层 IPC 通道名单源 —— 六个通道（五个 :ipc 单通道 + cli:status）的名称 / wire 契约配对 / 错误方言描述符（main 侧 ipcMain.handle 与日志 scope、preload 侧 invoke 的通道名字符串唯一出处；纯常量零 Node 依赖，不建运行时注册表）
+// 用途：顶层 IPC 通道名单源 —— 七个通道（六个 :ipc 单通道 + cli:status）的名称 / wire 契约配对 / 错误方言描述符（main 侧 ipcMain.handle 与日志 scope、preload 侧 invoke 的通道名字符串唯一出处；纯常量零 Node 依赖，不建运行时注册表）
 import type { z } from "zod";
 import { cliStatusRequestSchema, cliStatusResultSchema } from "./cli-status";
 import { configRequestSchema, configResultSchema } from "./config";
 import { diffRequestSchema, diffResultSchema } from "./diff";
 import { ipcRequestSchema, ipcResultSchema } from "./ipc";
 import { memoryRequestSchema, memoryResultSchema } from "./memory";
+import { modelsRequestSchema, modelsResultSchema } from "./models";
 import { residueRequestSchema, residueResultSchema } from "./residue";
 
 /** 信封错误方言标记（wire 形状不变，仅 main 侧信封工厂参数化依据）：code={ok:false,error:{code,message}}｜reason={ok:false,reason,detail?} */
@@ -29,8 +30,9 @@ export const IPC_CHANNELS = {
   residue: { name: "residue:ipc", request: residueRequestSchema, result: residueResultSchema, errorShape: "reason" },
   diff: { name: "diff:ipc", request: diffRequestSchema, result: diffResultSchema, errorShape: "code" },
   config: { name: "config:ipc", request: configRequestSchema, result: configResultSchema, errorShape: "code" },
+  models: { name: "models:ipc", request: modelsRequestSchema, result: modelsResultSchema, errorShape: "code" },
   cliStatus: { name: "cli:status", request: cliStatusRequestSchema, result: cliStatusResultSchema, errorShape: "code" },
 } as const satisfies Record<string, IpcChannelDef<string, unknown, unknown>>;
 
-/** 通道键名（"kanban" | "memory" | "residue" | "diff" | "config" | "cliStatus"） */
+/** 通道键名（"kanban" | "memory" | "residue" | "diff" | "config" | "models" | "cliStatus"） */
 export type IpcChannelName = keyof typeof IPC_CHANNELS;

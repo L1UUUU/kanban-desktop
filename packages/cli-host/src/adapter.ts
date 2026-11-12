@@ -5,6 +5,7 @@ import type {
   AdapterEvent,
   ChatEvent,
   ErrorCode,
+  ModelEntry,
   PermMode,
   TranscriptEvent,
 } from "@kanban/ipc-schema";
@@ -41,6 +42,13 @@ export interface ResolveApprovalInput {
 
 export interface DisposeInput {
   sessionId?: string;
+}
+
+/** listModels 输入（issue #76 / spec #75）：cwd 供 server-per-project CLI（opencode）拉起 server；cli 供 AdapterRouter 分发，单实现忽略 */
+export interface ListModelsInput {
+  cwd: string;
+  /** 目标 CLI（AdapterRouter 按 CLI 分发；单 Adapter 实现忽略） */
+  cli?: string;
 }
 
 /** 会话收养输入（#13 恢复编排）：按 DB 持久化的 native id 重建会话状态（登记 disconnected，无进程；readHistory/resume 按需拉起） */
@@ -91,8 +99,8 @@ export class AdapterError extends Error {
  */
 export interface CliAdapter {
   readonly capabilities: AdapterCapabilities;
-  /** nativeSessionId 为各 CLI 原生会话 id（Codex thread id 等；Fake 无则为 undefined/null），宿主据此回填 sessions 表 */
-  createSession(init: CreateSessionInput): Promise<{ sessionId: string; nativeSessionId?: string | null }>;
+  /** nativeSessionId 为各 CLI 原生会话 id（Codex thread id 等；Fake 无则为 undefined/null），宿主据此回填 sessions 表；model 为该会话实际采用的模型（spec #75：codex=探测结果、opencode=显式值或 /config 默认、fake/claude 透传请求值；undefined=未指定且未知） */
+  createSession(init: CreateSessionInput): Promise<{ sessionId: string; nativeSessionId?: string | null; model?: string | null }>;
   sendTurn(input: SendTurnInput): Promise<void>;
   interruptTurn(sessionId: string): Promise<void>;
   resolveApproval(input: ResolveApprovalInput): Promise<void>;
@@ -122,8 +130,14 @@ export interface CliAdapter {
   runOnce?(input: RunOnceInput): Promise<RunOnceResult>;
   /** 取消进行中的一次性执行（与 runOnce 同门能力；未实现即缺席，调用方按无此能力处理） */
   cancelRunOnce?(runId: string): Promise<void>;
+  /**
+   * 模型目录查询（issue #76 / spec #75）：返回该 CLI 当前可用的模型目录（统一 ModelEntry 四字段条目；
+   * 默认项由 isDefault 派生，无独立 defaultModel 字段）。进程握手/缓存/摊平隐藏在各 adapter 内；
+   * 不可用（未安装/未登录/协议失败）抛 AdapterError。
+   */
+  listModels(input: ListModelsInput): Promise<ModelEntry[]>;
   /** 订阅归一化事件流（ChatEvent ∪ SkillObservation），返回退订函数 */
   subscribe(handler: (event: AdapterEvent) => void): () => void;
 }
 
-export type { ApprovalDecision, ApprovalSuggestion, AdapterEvent, ChatEvent, PermMode, TranscriptEvent };
+export type { ApprovalDecision, ApprovalSuggestion, AdapterEvent, ChatEvent, ModelEntry, PermMode, TranscriptEvent };

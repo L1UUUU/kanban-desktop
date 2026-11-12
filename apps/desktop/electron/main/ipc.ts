@@ -13,6 +13,8 @@ import {
   type IpcResult,
   type MemoryRequest,
   type MemoryResult,
+  type ModelsRequest,
+  type ModelsResult,
   type ResidueProcess,
   type ResidueRequest,
   type ResidueResult,
@@ -268,5 +270,29 @@ async function routeConfig(req: ConfigRequest, deps: ConfigIpcDeps): Promise<Con
       }
       return { ok: true, autoArchive: current.autoArchive, lastScan };
     }
+  }
+}
+
+// ============ #76 models:ipc 通道（spec #75 模型目录：models:list 按 cli 经 adapter 分发；默认项由 isDefault 派生） ============
+
+/** models:ipc 路由依赖：adapter（生产 = CliHostClient/AdapterRouter，按 cli 分发到各实现）；isShuttingDown?/log? 经 EnvelopeDeps 注入 */
+export interface ModelsIpcDeps extends EnvelopeDeps {
+  adapter: CliAdapter;
+}
+
+/** 处理一条 models:ipc 入站请求：信封经共享工厂（code 方言 + adapter-passthrough——AdapterError 错误码透传，如 claude 暂未支持 E_INTERNAL、exe 未装 E_SPAWN_NOT_FOUND） */
+export async function handleModelsIpc(deps: ModelsIpcDeps, raw: unknown): Promise<ModelsResult> {
+  return createChannelHandler<ModelsRequest, ModelsResult, ModelsIpcDeps>(
+    { scope: IPC_CHANNELS.models.name, schema: IPC_CHANNELS.models.request, dialect: codeEnvelope, catchStyle: { kind: "adapter-passthrough", toError: codeEnvelope.toError } },
+    deps,
+    routeModels,
+  )(raw);
+}
+
+/** models 单通道路由主体 */
+async function routeModels(req: ModelsRequest, deps: ModelsIpcDeps): Promise<ModelsResult> {
+  switch (req.channel) {
+    case "models:list":
+      return { ok: true, models: await deps.adapter.listModels({ cli: req.cli, cwd: req.cwd }) };
   }
 }

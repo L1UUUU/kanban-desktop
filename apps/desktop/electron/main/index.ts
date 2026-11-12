@@ -1,4 +1,4 @@
-// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc/memory:ipc/diff:ipc/residue:ipc/config:ipc/cli:status 路由）、CliHost 托管（utilityProcess 优先，进程内回退）与事件转发/状态落库、TrackerEngine（SkillObservation 落库 + 重启恢复）、PTY 终端宿主（node-pty，main 进程直接使用，t0-03 实证）、有序退出与残留进程检测一次性通知（#49 app:event）、#51 单实例锁（二次启动转发聚焦 + 持锁失败立即退出）、#53 日志地基（Logger 二实例守卫后创建 + 启动横幅 + 崩溃兜底 + 9 处 console 迁移 + log:getPath/log:openDir）、#54 worker {log} 消息与 CLI stderr 汇聚（onWorkerLog→worker source；进程内回退同目标）；#64 自动归档引擎接线（启动后一次 + config:set 成功后经 onAutoArchiveSaved 触发，摘要缓存供设置区反馈）；初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
+// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc/memory:ipc/diff:ipc/residue:ipc/config:ipc/models:ipc/cli:status 路由）、CliHost 托管（utilityProcess 优先，进程内回退）与事件转发/状态落库、TrackerEngine（SkillObservation 落库 + 重启恢复）、PTY 终端宿主（node-pty，main 进程直接使用，t0-03 实证）、有序退出与残留进程检测一次性通知（#49 app:event）、#51 单实例锁（二次启动转发聚焦 + 持锁失败立即退出）、#53 日志地基（Logger 二实例守卫后创建 + 启动横幅 + 崩溃兜底 + 9 处 console 迁移 + log:getPath/log:openDir）、#54 worker {log} 消息与 CLI stderr 汇聚（onWorkerLog→worker source；进程内回退同目标）；#64 自动归档引擎接线（启动后一次 + config:set 成功后经 onAutoArchiveSaved 触发，摘要缓存供设置区反馈）；初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -33,7 +33,7 @@ import { CliHostClient } from "./cli-host-client";
 import { createCliStatusService, createRealCliProbes, createSeededCliProbes } from "./cli-status-service";
 import { SQLITE_ENTRY, openDatabase } from "./db";
 import { createValidatedSender } from "./event-sender";
-import { handleIpc, handleCliStatusIpc, handleConfigIpc, handleDiffIpc, handleMemoryIpc, handleResidueIpc, TRACKER_CLI_BY_APP, type IpcDeps } from "./ipc";
+import { handleIpc, handleCliStatusIpc, handleConfigIpc, handleDiffIpc, handleMemoryIpc, handleModelsIpc, handleResidueIpc, TRACKER_CLI_BY_APP, type IpcDeps } from "./ipc";
 import { defaultGitDiffDeps, readWorkspaceDiff } from "./git-diff-service";
 import { handleLogWrite } from "./log-write";
 import { createLogger, registerCrashHandlers, resolveKindLog, type Logger } from "./logger";
@@ -364,6 +364,10 @@ app.whenReady().then(async () => {
     }),
   );
   ipcMain.handle(IPC_CHANNELS.kanban.name, (_event, raw: unknown) => handleIpc(deps, raw));
+  // #76（spec #75 模型目录）：models:ipc 单通道 —— models:list 按 cli 经 adapter 分发（AdapterError 原码透传：claude 暂未支持/exe 未装）
+  ipcMain.handle(IPC_CHANNELS.models.name, (_event, raw: unknown) =>
+    handleModelsIpc({ adapter, isShuttingDown: () => shutdown.isShuttingDown(), log: logger.log }, raw),
+  );
   // #31：memory:ipc 单通道（入站 zod 强制校验 + 业务拒绝 ok:false+reason，spec #27 H 节）
   ipcMain.handle(IPC_CHANNELS.memory.name, (_event, raw: unknown) =>
     handleMemoryIpc({ memory: memoryService, isShuttingDown: () => shutdown.isShuttingDown(), log: logger.log }, raw),

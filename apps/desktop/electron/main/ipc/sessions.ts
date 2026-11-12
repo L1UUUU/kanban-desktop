@@ -91,7 +91,7 @@ export const sessionHandlers: SubChannelHandlers<SessionRequest, IpcResult, IpcD
     return { ok: true };
   },
   "session:create": async (req, deps) => {
-    const { sessionId, nativeSessionId } = await deps.adapter.createSession({
+    const { sessionId, nativeSessionId, model } = await deps.adapter.createSession({
       cwd: req.cwd,
       model: req.model,
       permMode: req.permMode,
@@ -139,6 +139,8 @@ export const sessionHandlers: SubChannelHandlers<SessionRequest, IpcResult, IpcD
       sessionId,
       cli: req.cli,
       title,
+      // issue #76（spec #75）：会话实际采用的 model（codex=探测结果、opencode=显式或 /config 默认、fake/claude 透传；供调用方回显）
+      ...(model !== undefined && model !== null ? { model } : {}),
       dirIdentity: identity.kind,
       worktreeName: identity.kind === "worktree" ? identity.name : null,
       ...linkedResult, // 无 requirementId 时为 undefined，展开为空（响应不含 linked/reason 字段，保持既有形状）

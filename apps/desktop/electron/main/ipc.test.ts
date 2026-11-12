@@ -9,7 +9,7 @@ import { trackerChangeSchema } from "@kanban/ipc-schema";
 import { TrackerEngine, type TrackerChange } from "@kanban/tracker";
 import { openDatabase } from "./db";
 import { defaultConfig, loadConfig, saveConfig, type AppConfig } from "./config";
-import { handleCliStatusIpc, handleConfigIpc, handleDiffIpc, handleIpc, type ConfigIpcDeps, type DiffIpcDeps, type IpcDeps } from "./ipc";
+import { handleCliStatusIpc, handleConfigIpc, handleDiffIpc, handleIpc, handleModelsIpc, type ConfigIpcDeps, type DiffIpcDeps, type IpcDeps, type ModelsIpcDeps } from "./ipc";
 import { openMemoryService } from "./memory-service";
 import type { LogFn, LogLevel } from "./logger";
 import type { PtyHost } from "./pty-host";
@@ -118,6 +118,13 @@ describe("Main 入站强制校验", () => {
       expect(res.cli).toBe("fake");
       expect(res.title).toBe("演示会话");
     }
+  });
+
+  it("session:create 附实际采用 model（issue #76：fake 透传请求值）", async () => {
+    const { handle } = makeRouter();
+    const res = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p", model: "fake-standard" });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.model).toBe("fake-standard");
   });
 
   it("session:send / interrupt / resolveApproval 路由成功（ok:true）", async () => {
@@ -1252,6 +1259,7 @@ function spyAdapter(
   const adapter: CliAdapter = {
     capabilities: base.capabilities,
     createSession: (i) => base.createSession(i),
+    listModels: (i) => base.listModels(i),
     sendTurn: (i) => base.sendTurn(i),
     interruptTurn: async (id) => {
       calls.push(`interrupt:${id}`);
@@ -1770,6 +1778,58 @@ describe("cli:status 通道（#80 spec #75 实现决策 3/7：三 CLI 安装状�
     );
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error.code).toBe("E_INTERNAL");
+  });
+});
+
+describe("models:ipc 通道（#76 spec #75：models:list 按 cli 经 adapter 分发；默认项由 isDefault 派生）", () => {
+  /** models 通道 deps：注入可换 adapter（缺省 FakeAdapter 演示链路） */
+  function makeModelsDeps(adapter: CliAdapter = new FakeAdapter()): ModelsIpcDeps {
+    return { adapter, isShuttingDown: () => false };
+  }
+
+  it("models:list 经 adapter 返回目录（fake 两条、首条默认）；无独立 defaultModel 字段", async () => {
+    const handle = (raw: unknown) => handleModelsIpc(makeModelsDeps(), raw);
+    const res = await handle({ channel: "models:list", cli: "fake", cwd: "C:\\p" });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.models).toHaveLength(2);
+      expect(res.models[0].isDefault).toBe(true);
+      expect(res.models[1].isDefault).toBe(false);
+      expect("defaultModel" in res).toBe(false); // 单一事实源：默认项由 isDefault 派生
+    }
+  });
+
+  it("AdapterError 原码透传（E_SPAWN_NOT_FOUND 未装 / E_INTERNAL 暂未支持）", async () => {
+    class SpawnFailModelsAdapter extends FakeAdapter {
+      override async listModels(): Promise<never[]> {
+        throw new AdapterError("E_SPAWN_NOT_FOUND", "未找到 CLI 可执行文件");
+      }
+    }
+    class UnsupportedModelsAdapter extends FakeAdapter {
+      override async listModels(): Promise<never[]> {
+        throw new AdapterError("E_INTERNAL", "claude 模型目录暂未支持");
+      }
+    }
+    const a = await handleModelsIpc(makeModelsDeps(new SpawnFailModelsAdapter()), { channel: "models:list", cli: "codex", cwd: "C:\\p" });
+    expect(a).toMatchObject({ ok: false, error: { code: "E_SPAWN_NOT_FOUND" } });
+    const b = await handleModelsIpc(makeModelsDeps(new UnsupportedModelsAdapter()), { channel: "models:list", cli: "claude", cwd: "C:\\p" });
+    expect(b).toMatchObject({ ok: false, error: { code: "E_INTERNAL", message: expect.stringContaining("暂未支持") } });
+  });
+
+  it("非法请求 E_SCHEMA（未知 cli / 空 cwd / 非法通道 / 非对象）", async () => {
+    const handle = (raw: unknown) => handleModelsIpc(makeModelsDeps(), raw);
+    for (const raw of [null, "models:list", { channel: "models:list", cli: "grok", cwd: "C:\\p" }, { channel: "models:list", cli: "fake", cwd: "" }, { channel: "models:nuke", cli: "fake", cwd: "C:\\p" }]) {
+      const res = await handle(raw);
+      expect(res).toMatchObject({ ok: false, error: { code: "E_SCHEMA" } });
+    }
+  });
+
+  it("退出门闸：shuttingDown 拒绝新请求（E_INTERNAL）", async () => {
+    const res = await handleModelsIpc(
+      { adapter: new FakeAdapter(), isShuttingDown: () => true },
+      { channel: "models:list", cli: "fake", cwd: "C:\\p" },
+    );
+    expect(res).toMatchObject({ ok: false, error: { code: "E_INTERNAL", message: expect.stringContaining("退出") } });
   });
 });
 

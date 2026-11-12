@@ -1,4 +1,4 @@
-// 用途：Codex 模型可用性探测与回退 —— model/list 不可信（poc-1 发现 2），用 ephemeral thread + 最小 turn 真试探，候选链：显式→env 偏好白名单→缓存→最近 rollout→model/list；探测结果落盘缓存（env 偏好命中除外）
+// 用途：Codex 模型可用性探测与回退 —— model/list 不可信（poc-1 发现 2），用 ephemeral thread + 最小 turn 真试探；显式 requested 直试探（绕缓存、失败不回退，spec #75）；未指定走：env 偏好白名单→内存/磁盘缓存→最近 rollout→model/list；探测结果落盘缓存（env 偏好命中除外）
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
@@ -41,9 +41,19 @@ export function createDefaultModelResolver(options: { exe?: string | null; versi
   const preferred = options.preferredModels ?? preferredModelsFromEnv(process.env[ENV_MODEL_PREFERENCE]);
 
   return async (requested, client) => {
-    // 0) 内存缓存
+    // 1) 显式 requested（spec #75 存量 bug 修正）：绕过内存/磁盘缓存直接试探；失败抛错含模型名，不回退任何候选；
+    //    成功回写缓存（与旧候选链命中语义一致，未指定会话继续受益）
+    if (typeof requested === "string" && requested) {
+      if (await probeModelWithMinimalTurn(client, requested).catch(() => false)) {
+        cachedModel = requested;
+        writeCache(cachePath, { model: requested, version: options.version ?? null, probedAt: new Date().toISOString() });
+        return requested;
+      }
+      throw new Error(`显式指定的模型不可用：${requested}（已直接试探失败，未回退其他候选）。请确认模型 id 可用后重试。`);
+    }
+    // 0) 内存缓存（仅未指定生效）
     if (cachedModel) return cachedModel;
-    // 1) env 偏好白名单：候选 = 显式 + 偏好链，不读磁盘缓存/rollout/model-list（历史缓存里的昂贵模型不得劫持白名单）；
+    // 2) env 偏好白名单（显式已在入口直试探，此分支仅见未指定）：候选 = 偏好链，不读磁盘缓存/rollout/model-list（历史缓存里的昂贵模型不得劫持白名单）；
     //    命中只进内存缓存、不落盘（不设 env 的进程行为完全不变）；全败直接报错——宁可失败不回退昂贵模型（成本控制）
     if (preferred.length) {
       const whitelist: string[] = [];
@@ -60,22 +70,21 @@ export function createDefaultModelResolver(options: { exe?: string | null; versi
       }
       throw new Error(`${ENV_MODEL_PREFERENCE} 偏好模型均不可用（已尝试：${failed.join("、")}）；为控制成本已拒绝回退到缓存/最近使用/账号默认模型。请确认模型 id 可用，或去掉该环境变量。`);
     }
-    // 2) 磁盘缓存
+    // 3) 磁盘缓存
     const disk = readCache(cachePath);
     if (disk) {
       cachedModel = disk.model;
       return disk.model;
     }
-    // 3) 候选链（去重保序）：显式 → 最近 rollout → model/list 前 N
+    // 4) 候选链（去重保序）：最近 rollout → model/list 前 N（显式已前置直试探，不再入链）
     const candidates: string[] = [];
     const push = (m: string | undefined | null) => {
       if (typeof m === "string" && m && !candidates.includes(m)) candidates.push(m);
     };
-    push(requested);
     push(options.rolloutModel !== undefined ? options.rolloutModel : latestRolloutModel());
     for (const m of await listModels(client).catch(() => [])) push(m);
-    const limited = candidates.slice(0, Math.max(candidates.indexOf(requested ?? "\0") + 1, MAX_LIST_CANDIDATES) || MAX_LIST_CANDIDATES);
-    // 4) 逐个试探（真 turn：400 拒绝不产生推理成本，poc-1 实证）
+    const limited = candidates.slice(0, MAX_LIST_CANDIDATES);
+    // 5) 逐个试探（真 turn：400 拒绝不产生推理成本，poc-1 实证）
     const failures: string[] = [];
     for (const model of limited.length ? limited : candidates) {
       const ok = await probeModelWithMinimalTurn(client, model).catch(() => false);
