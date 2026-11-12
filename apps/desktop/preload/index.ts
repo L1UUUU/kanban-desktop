@@ -1,6 +1,6 @@
-// 用途：contextBridge 薄层 —— 向 renderer 暴露最小 IPC 面（app:getInfo + kanban:ipc/memory:ipc/residue:ipc/diff:ipc/config:ipc/models:ipc 单通道 invoke + chat:event/terminal:event/tracker:event/memory:event/app:event/app:shutdown 订阅 + log:write 单向日志/log:getPath/log:openDir）；全部通道形状由 @kanban/ipc-schema 契约化，通道名经 IPC_CHANNELS 单源（#72 Step4），preload 不做校验（两端校验，spec E）
+// 用途：contextBridge 薄层 —— 向 renderer 暴露最小 IPC 面（app:getInfo + kanban:ipc/memory:ipc/residue:ipc/diff:ipc/config:ipc/models:ipc/cli:status 单通道 invoke + chat:event/terminal:event/tracker:event/memory:event/app:event/app:shutdown 订阅 + log:write 单向日志/log:getPath/log:openDir）；全部通道形状由 @kanban/ipc-schema 契约化，通道名经 IPC_CHANNELS 单源（#72 Step4），preload 不做校验（两端校验，spec E）
 import { contextBridge, ipcRenderer } from "electron";
-import { IPC_CHANNELS, type AdapterEvent, type AppEventWire, type AppInfo, type ConfigRequest, type ConfigResult, type DiffRequest, type DiffResult, type IpcRequest, type IpcResult, type LogCtx, type LogLevel, type MemoryEventWire, type MemoryRequest, type MemoryResult, type ModelsRequest, type ModelsResult, type ResidueRequest, type ResidueResult, type ShutdownNotice, type TerminalEvent, type TrackerChangeWire } from "@kanban/ipc-schema";
+import { IPC_CHANNELS, type AdapterEvent, type AppEventWire, type AppInfo, type CliStatusRequest, type CliStatusResult, type ConfigRequest, type ConfigResult, type DiffRequest, type DiffResult, type IpcRequest, type IpcResult, type LogCtx, type LogLevel, type MemoryEventWire, type MemoryRequest, type MemoryResult, type ModelsRequest, type ModelsResult, type ResidueRequest, type ResidueResult, type ShutdownNotice, type TerminalEvent, type TrackerChangeWire } from "@kanban/ipc-schema";
 
 const api = {
   /** 拉取应用运行信息（名称/版本/平台/SQLite 入口），用于骨架冒烟展示 */
@@ -17,6 +17,8 @@ const api = {
   invokeConfig: (req: ConfigRequest) => ipcRenderer.invoke(IPC_CHANNELS.config.name, req) as Promise<ConfigResult>,
   /** #76：发送一条 models:ipc 请求（models:list 按 CLI 拉取模型目录，schema 见 modelsRequestSchema） */
   invokeModels: (req: ModelsRequest) => ipcRenderer.invoke(IPC_CHANNELS.models.name, req) as Promise<ModelsResult>,
+  /** #80：发送一条 cli:status 请求（三真实 CLI 安装状态查询，「＋」新建菜单禁用态数据源） */
+  invokeCliStatus: (req: CliStatusRequest) => ipcRenderer.invoke(IPC_CHANNELS.cliStatus.name, req) as Promise<CliStatusResult>,
   /**
    * #55：发送一条 renderer 日志（fire-and-forget：send 不等待回执，不用 invoke；Main 侧强制 source=renderer、
    * 落盘 ts 由 Main 生成，两者不信自报；jsdom 无桥时调用方以 window.api?.log?.() 可选链降级）

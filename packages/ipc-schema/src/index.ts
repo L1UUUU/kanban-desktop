@@ -2,6 +2,7 @@
 export * from "./app-info";
 export * from "./channels";
 export * from "./chat";
+export * from "./cli-status";
 export * from "./config";
 export * from "./diff";
 export * from "./ipc";

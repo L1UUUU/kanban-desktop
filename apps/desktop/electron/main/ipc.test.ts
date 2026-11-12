@@ -9,7 +9,7 @@ import { trackerChangeSchema } from "@kanban/ipc-schema";
 import { TrackerEngine, type TrackerChange } from "@kanban/tracker";
 import { openDatabase } from "./db";
 import { defaultConfig, loadConfig, saveConfig, type AppConfig } from "./config";
-import { handleConfigIpc, handleDiffIpc, handleIpc, handleModelsIpc, type ConfigIpcDeps, type DiffIpcDeps, type IpcDeps, type ModelsIpcDeps } from "./ipc";
+import { handleCliStatusIpc, handleConfigIpc, handleDiffIpc, handleIpc, handleModelsIpc, type ConfigIpcDeps, type DiffIpcDeps, type IpcDeps, type ModelsIpcDeps } from "./ipc";
 import { openMemoryService } from "./memory-service";
 import type { LogFn, LogLevel } from "./logger";
 import type { PtyHost } from "./pty-host";
@@ -1732,6 +1732,52 @@ describe("config:ipc × 自动归档引擎接线（#64 spec #57：保存成功�
     expect(res).toEqual({ ok: true, autoArchive: { enabled: true, days: 7 }, lastScan: null });
     expect(config.autoArchive).toEqual({ enabled: true, days: 7 }); // 保存仍生效
     expect(entries.some((e) => e.level === "error" && e.message.includes("扫描炸了"))).toBe(true);
+  });
+});
+
+describe("cli:status 通道（#80 spec #75 实现决策 3/7：三 CLI 安装状态聚合，注入 service 观察分发与错误形状）", () => {
+  it("cli:status 分发到注入的探测服务：应答携带三 CLI 安装表（装/未装两态原样透传）", async () => {
+    const res = await handleCliStatusIpc(
+      { cliStatus: async () => ({ codex: true, claude: false, opencode: true }) },
+      { channel: "cli:status" },
+    );
+    expect(res).toEqual({ ok: true, installed: { codex: true, claude: false, opencode: true } });
+  });
+
+  it("非法请求被拒：E_SCHEMA + 可读摘要（信封经共享工厂）", async () => {
+    const res = await handleCliStatusIpc({ cliStatus: async () => ({ codex: true, claude: true, opencode: true }) }, {
+      channel: "cli:nonsense",
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.code).toBe("E_SCHEMA");
+      expect(res.error.message.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("探测服务意外异常返回明确错误（ok:false E_INTERNAL 不 rethrow），日志可查", async () => {
+    const entries: Array<{ level: string; message: string }> = [];
+    const res = await handleCliStatusIpc(
+      {
+        cliStatus: async () => {
+          throw new Error("探测炸了");
+        },
+        log: (level, _scope, message) => entries.push({ level, message }),
+      },
+      { channel: "cli:status" },
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.code).toBe("E_INTERNAL");
+    expect(entries.some((e) => e.message.includes("探测炸了"))).toBe(true);
+  });
+
+  it("退出中拒新请求（退出门闸与其它通道一致）", async () => {
+    const res = await handleCliStatusIpc(
+      { cliStatus: async () => ({ codex: true, claude: true, opencode: true }), isShuttingDown: () => true },
+      { channel: "cli:status" },
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.code).toBe("E_INTERNAL");
   });
 });
 

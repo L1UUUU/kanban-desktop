@@ -1,5 +1,5 @@
 // 用途：侧栏组件测试 —— 空态引导/项目行（切换、missing、悬浮「＋」菜单四项与 PTY 占位）/会话行（目录身份徽标、当前项目过滤）（工单 #7 验收第 1/2 条，原型一致项 2/3）
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProjectRow } from "@kanban/ipc-schema";
 import type { SessionView } from "../features/chat/chat-store";
@@ -250,6 +250,62 @@ describe("侧栏会话行 hover「删除」+ 二次确认弹窗（#62 spec #57 /
     fireEvent.click(screen.getByTestId("delete-session-confirm"));
     expect(h.onDeleteSession).toHaveBeenCalledWith("tty-1");
     expect(screen.queryByTestId("delete-session-dialog")).toBeNull(); // 确认后关闭
+  });
+});
+
+describe("「＋」菜单未装 CLI 灰置（#80 spec #75：与详情面板菜单共享禁用逻辑）", () => {
+  afterEach(() => {
+    window.api = undefined as unknown as typeof window.api;
+  });
+
+  /** fake 桥：只接 invokeCliStatus（其余面本组件不用）；flip 改写应答驱动「模拟装完」 */
+  function fakeBridge(initial: { codex: boolean; claude: boolean; opencode: boolean }) {
+    let installed = initial;
+    window.api = {
+      invokeCliStatus: async () => ({ ok: true, installed }),
+    } as unknown as typeof window.api;
+    return { flip: (next: typeof installed) => { installed = next; } };
+  }
+
+  it("未装项灰置 + 「未安装」标注 + 悬停说明，点击无效；已装项与 PTY 项不受影响", async () => {
+    fakeBridge({ codex: true, claude: false, opencode: true });
+    const h = mount({ projects: [P1], currentProjectId: "p-1" });
+    fireEvent.click(screen.getByRole("button", { name: "＋" }));
+
+    const claudeItem = await waitFor(() => {
+      const el = screen.getByRole("button", { name: "Claude未安装" }) as HTMLButtonElement;
+      expect(el.disabled).toBe(true);
+      return el;
+    });
+    expect(claudeItem.getAttribute("title")).toContain("未安装"); // spec：可悬停查看说明
+    fireEvent.click(claudeItem);
+    expect(h.onCreateSession).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Codex" }));
+    expect(h.onCreateSession).toHaveBeenCalledWith("p-1", "codex");
+    fireEvent.click(screen.getByRole("button", { name: "＋" })); // 重开验证 PTY 恒可选
+    fireEvent.click(screen.getByRole("button", { name: /PTY 终端/ }));
+    expect(h.onCreatePtySession).toHaveBeenCalledWith("p-1");
+  });
+
+  it("探测翻转（模拟装完）：重开菜单恢复可选并创建会话，无需重启", async () => {
+    const { flip } = fakeBridge({ codex: true, claude: false, opencode: true });
+    const h = mount({ projects: [P1], currentProjectId: "p-1" });
+    fireEvent.click(screen.getByRole("button", { name: "＋" }));
+    await waitFor(() => {
+      expect((screen.getByRole("button", { name: "Claude未安装" }) as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    flip({ codex: true, claude: true, opencode: true }); // 模拟装完 CLI
+    fireEvent.click(screen.getByRole("button", { name: "＋" })); // 关菜单
+    fireEvent.click(screen.getByRole("button", { name: "＋" })); // 重开即重探（未装不缓存）
+    const claudeItem = await waitFor(() => {
+      const el = screen.getByRole("button", { name: "Claude" }) as HTMLButtonElement;
+      expect(el.disabled).toBe(false);
+      return el;
+    });
+    fireEvent.click(claudeItem);
+    expect(h.onCreateSession).toHaveBeenCalledWith("p-1", "claude");
   });
 });
 
