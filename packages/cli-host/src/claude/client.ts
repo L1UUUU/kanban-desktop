@@ -46,7 +46,7 @@ export function assertApprovalFlag(args: readonly string[]): void {
 }
 
 /**
- * 单会话 stream-json 客户端。生命周期：start() 完成 initialize 握手并返回 native session id；
+ * 单会话 stream-json 客户端。生命周期：start() 完成 initialize 握手并返回初始化响应载荷（含 models 目录等，#78 listModels 数据源）；
  * 进程退出后 dead=true、消息监听器保留（Adapter 据死讯发 session_exit；resume 由 Adapter 换新实例完成）。
  * wire 备注（PoC 7 发现，防踩坑）：CLI→host 的 control_request 的 request_id 在顶层；
  * host→CLI 的 control_response 的 request_id 嵌套在 response 对象内。
@@ -65,18 +65,18 @@ export class ClaudeStreamClient {
     this.log = options.log ?? (() => {});
   }
 
-  /** spawn + initialize 握手（control_response success 即完成）；system/init 由 CLI 懒发射（首条 user 消息后才到，实测 2.1.317），native session id 经 --session-id 由 Adapter 预指定，不依赖 init */
-  async start(): Promise<void> {
+  /** spawn + initialize 握手（control_response success 即完成），返回响应内层载荷（commands/models/account 等，2.1.317 实测双层嵌套）；system/init 由 CLI 懒发射（首条 user 消息后才到，实测 2.1.317），native session id 经 --session-id 由 Adapter 预指定，不依赖 init */
+  async start(): Promise<Record<string, unknown>> {
     const exePath = this.options.exe;
     if (!exePath) throw new Error("ClaudeStreamClient 缺少 exe（须经 resolveClaudeExe 显式解析，不走 PATH 兜底）");
     assertApprovalFlag([...CLAUDE_BASE_ARGS, ...(this.options.args ?? [])]);
-    return new Promise<void>((resolve, reject) => {
+    return new Promise<Record<string, unknown>>((resolve, reject) => {
       let settled = false;
-      const finishOk = () => {
+      const finishOk = (payload: Record<string, unknown>) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        resolve();
+        resolve(payload);
       };
       const fail = (err: Error) => {
         if (settled) return;
@@ -110,12 +110,13 @@ export class ClaudeStreamClient {
       );
       this.pendingControl.set(initId, {
         resolve: (resp) => {
-          const subtype = (resp as { response?: { subtype?: string } })?.response?.subtype;
-          if (subtype !== "success") {
+          const outer = (resp as { response?: { subtype?: string; response?: unknown } })?.response;
+          if (outer?.subtype !== "success") {
             fail(new Error(`initialize 失败：${JSON.stringify(resp).slice(0, 300)}`));
             return;
           }
-          finishOk();
+          // 内层载荷（协议漂移缺内层对象时兜底空对象，调用方按缺字段自行报错）
+          finishOk(outer.response && typeof outer.response === "object" ? (outer.response as Record<string, unknown>) : {});
         },
         reject: fail,
       });

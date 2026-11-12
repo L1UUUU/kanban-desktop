@@ -19,14 +19,22 @@ class FakeStream implements ClaudeStreamClientLike {
   readonly sentUsers: string[] = [];
   readonly sentControlResponses: Array<{ requestId: string; response: unknown }> = [];
   interruptCalls = 0;
+  /** initialize 握手响应载荷（listModels #78 数据源；缺省空对象） */
+  initPayload: Record<string, unknown> = {};
+  /** 模拟 initialize 握手失败（start 抛错） */
+  failStart: Error | null = null;
+  /** stop() 调用计数（listModels 临时进程退出断言用） */
+  stopCalls = 0;
   private readonly msgFns = new Set<(msg: Record<string, unknown>) => void>();
   private readonly deadFns = new Set<(err: Error) => void>();
 
   constructor(options: ClaudeStreamOptions) {
     this.options = options;
   }
-  async start(): Promise<void> {
+  async start(): Promise<Record<string, unknown>> {
     FakeStream.seq += 1; // native id 现由 Adapter 预生成（--session-id），start 仅表达握手完成
+    if (this.failStart) throw this.failStart;
+    return this.initPayload;
   }
   sendUser(text: string): void {
     this.sentUsers.push(text);
@@ -51,6 +59,7 @@ class FakeStream implements ClaudeStreamClientLike {
     };
   }
   stop(): void {
+    this.stopCalls += 1;
     this.simulateExit(null);
   }
 
@@ -193,13 +202,100 @@ describe("ClaudeAdapter：createSession 与启动自检", () => {
   });
 });
 
-describe("ClaudeAdapter：listModels（issue #76：本票明确暂未支持）", () => {
-  it("listModels 抛 AdapterError 明确「暂未支持」（#78 接入 initialize 握手 models 数组后替换）", async () => {
-    const ctx = makeAdapter();
-    hookRoots.push(ctx.hookDir);
+describe("ClaudeAdapter：listModels（issue #78：spawn 临时进程 initialize 握手读 models 数组）", () => {
+  /** listModels 用 Fake 工厂：按 spawn 顺序供给 initialize 响应载荷（Error 模拟握手失败） */
+  function makeModelsAdapter(initPayloads: Array<Record<string, unknown> | Error>) {
+    const hookDir = mkdtempSync(path.join(tmpdir(), "kb-claude-hook-"));
+    hookRoots.push(hookDir);
+    const streams: FakeStream[] = [];
+    let next = 0;
+    const adapter = new ClaudeAdapter({
+      hookDir,
+      clientFactory: (options) => {
+        const s = new FakeStream(options);
+        const payload = initPayloads[Math.min(next, initPayloads.length - 1)];
+        next += 1;
+        if (payload instanceof Error) s.failStart = payload;
+        else s.initPayload = payload;
+        streams.push(s);
+        return s;
+      },
+    });
+    return { adapter, streams, stream: () => streams.at(-1)! };
+  }
+
+  // 真实 2.1.317 initialize 响应内层载荷缩影（实测：models 数组项含 value/resolvedModel/displayName/description；default 占位项在首位，resolvedModel=账号默认模型 id）
+  const initPayload = {
+    models: [
+      { value: "default", resolvedModel: "gw/sonnet-x", displayName: "Default (recommended)", description: "Use the default model (currently gw/sonnet-x)" },
+      { value: "sonnet", resolvedModel: "gw/sonnet-x", displayName: "Sonnet", description: "Sonnet 模型" },
+      { value: "gw/opus-max", resolvedModel: "gw/opus-max", displayName: "Opus", description: "" },
+      { value: "haiku", resolvedModel: "gw/haiku" }, // displayName 缺失 → 回退 id
+    ],
+  };
+
+  it("models 数组映射：value→id + displayName/description；default 占位项被过滤；isDefault 与 default 项 resolvedModel 比对", async () => {
+    const ctx = makeModelsAdapter([initPayload]);
+    const models = await ctx.adapter.listModels({ cwd: CWD });
+    expect(models).toEqual([
+      { id: "sonnet", displayName: "Sonnet", description: "Sonnet 模型", isDefault: true },
+      { id: "gw/opus-max", displayName: "Opus", description: "", isDefault: false },
+      { id: "haiku", displayName: "haiku", description: "", isDefault: false },
+    ]);
+  });
+
+  it("握手完成后临时进程立即退出；spawn 参数不带会话状态（无 --session-id/--resume/--model）", async () => {
+    const ctx = makeModelsAdapter([initPayload]);
+    await ctx.adapter.listModels({ cwd: CWD });
+    expect(ctx.streams).toHaveLength(1);
+    expect(ctx.stream().stopCalls).toBe(1);
+    expect(ctx.stream().dead).toBe(true);
+    const args = ctx.stream().options.args ?? [];
+    expect(args).not.toContain("--session-id");
+    expect(args).not.toContain("--resume");
+    expect(args).not.toContain("--model");
+  });
+
+  it("同一 adapter 生命周期内重复调用走缓存不再 spawn", async () => {
+    const ctx = makeModelsAdapter([initPayload]);
+    const first = await ctx.adapter.listModels({ cwd: CWD });
+    const second = await ctx.adapter.listModels({ cwd: CWD });
+    expect(second).toBe(first); // 同一数组实例（缓存命中）
+    expect(ctx.streams).toHaveLength(1); // 未再次 spawn
+  });
+
+  it("握手失败映射 E_INTERNAL 明确错误；失败同样终止临时进程；失败不缓存，重试重新握手", async () => {
+    const ctx = makeModelsAdapter([new Error("claude initialize 握手超时"), initPayload]);
     await expect(ctx.adapter.listModels({ cwd: CWD })).rejects.toMatchObject({
       code: "E_INTERNAL",
-      message: expect.stringContaining("暂未支持"),
+      message: expect.stringContaining("拉取 Claude 模型目录失败"),
+    });
+    expect(ctx.streams[0].stopCalls).toBe(1); // 失败路径也退出临时进程
+    const models = await ctx.adapter.listModels({ cwd: CWD }); // 失败不缓存：重新握手
+    expect(models.map((m) => m.id)).toContain("sonnet");
+    expect(ctx.streams).toHaveLength(2);
+  });
+
+  it("exe 缺失 → E_SPAWN_NOT_FOUND（对齐 createSession #46 协议级映射）", async () => {
+    const hookDir = mkdtempSync(path.join(tmpdir(), "kb-claude-spawn-"));
+    hookRoots.push(hookDir);
+    const adapter = new ClaudeAdapter({
+      hookDir,
+      clientFactory: () => {
+        throw new ExeNotFoundError("未找到 claude 可执行文件（已尝试：npm 全局；where）");
+      },
+    });
+    await expect(adapter.listModels({ cwd: CWD })).rejects.toMatchObject({
+      code: "E_SPAWN_NOT_FOUND",
+      message: expect.stringContaining("未找到 claude 可执行文件"),
+    });
+  });
+
+  it("响应不含 models 数组 → 协议漂移明确报错（E_INTERNAL）", async () => {
+    const ctx = makeModelsAdapter([{ commands: [] }]);
+    await expect(ctx.adapter.listModels({ cwd: CWD })).rejects.toMatchObject({
+      code: "E_INTERNAL",
+      message: expect.stringContaining("不含 models 数组"),
     });
   });
 });
