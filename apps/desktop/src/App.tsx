@@ -1,4 +1,4 @@
-// 用途：renderer 根组件 —— 原型变体 A 三区布局：42px 顶栏（当前项目名）+ 退出提示条（生命周期序列 UI 提示，#13）+ 残留通知条（#49 确认式清理，全局层、退出条之下）+ 主区（240px 侧栏 + 中央聊天/看板视图切换，#18）；transport 经 preload 桥接（不可用时聊天区降级占位）；AppShell 为可注入骨架（组件测试直挂 Fake transport）
+// 用途：renderer 根组件 —— 原型变体 A 三区布局：42px 顶栏（当前项目名）+ 退出提示条（生命周期序列 UI 提示，#13）+ 残留通知条（#49 确认式清理，全局层、退出条之下）+ 主区（可拖拽宽侧栏，默认 240px，#85 + 中央聊天/看板视图切换，#18）；transport 经 preload 桥接（不可用时聊天区降级占位）；AppShell 为可注入骨架（组件测试直挂 Fake transport）
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { AppInfo, ResidueKillResult, ResidueProcess } from "@kanban/ipc-schema";
 import { AppInfoLine } from "./components/Sidebar";
