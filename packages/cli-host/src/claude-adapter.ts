@@ -455,15 +455,19 @@ export class ClaudeAdapter implements CliAdapter {
     this.emit(s, { type: "message_delta", itemId, partId, delta: delta.text });
   }
 
-  /** assistant 消息：text 块终文自愈补 delta + message_completed；tool_use 块 → tool_started + Skill 流内 self_reported */
+  /** assistant 消息：text 块终文自愈补 delta + message_completed；tool_use 块 → tool_started + Skill 流内 self_reported。
+   *  Claude 2.1.317 把一轮回复按块拆成多行 assistant（thinking/text 各一行）：流式 content_block_delta 的 index 是
+   *  API 消息 content 的绝对下标（thinking 占 0、text 占 1），而终文 assistant 行的 content 内 text 块重新编号到 0。
+   *  直接用 content 数组下标当 partId 会与流式键错位生成两个气泡——按 itemId 找已有文本增量、以内容前缀对齐复用其 partId。 */
   private handleAssistant(s: SessionState, msg: Record<string, unknown>): void {
     const message = msg.message as { id?: string; content?: unknown } | undefined;
     if (!message || !Array.isArray(message.content) || !message.id) return;
     const blocks = message.content as Record<string, unknown>[];
+    const itemId = String(message.id);
     blocks.forEach((block, index) => {
       if (block.type === "text" && typeof block.text === "string") {
-        const itemId = String(message.id);
-        const partId = String(index);
+        // 同一 itemId 下已有流式文本增量时复用其 partId（按累计内容前缀匹配，容忍终文补齐/拆分行）
+        const partId = this.matchTextPart(s, itemId, block.text) ?? String(index);
         const key = `${itemId}:${partId}`;
         const acc = s.parts.get(key) ?? "";
         if (block.text.startsWith(acc) && block.text.length > acc.length) {
@@ -493,6 +497,18 @@ export class ClaudeAdapter implements CliAdapter {
         }
       }
     });
+  }
+
+  /** 终文 text 块对齐流式归并键：同 itemId 下找累计增量是终文前缀的 part（若无流式增量返回 null，沿用 content 下标） */
+  private matchTextPart(s: SessionState, itemId: string, finalText: string): string | null {
+    const prefix = `${itemId}:`;
+    let best: string | null = null;
+    for (const [key, acc] of s.parts) {
+      if (!key.startsWith(prefix) || !finalText.startsWith(acc)) continue;
+      // 多个候选（异常重复流）取累计最长者，避免短前缀误匹配
+      if (best === null || acc.length > (s.parts.get(`${prefix}${best}`) ?? "").length) best = key.slice(prefix.length);
+    }
+    return best;
   }
 
   /** user 消息（tool_result）：→ tool_completed（deny 决定的 id → denied） */
@@ -675,11 +691,24 @@ export class ClaudeAdapter implements CliAdapter {
       if (e.type === "message_delta" || e.type === "message_completed") existing.add(`msg:${e.itemId}:${e.partId}`);
       else if (e.type === "tool_started" || e.type === "tool_completed") existing.add(`tool:${e.itemId}`);
     }
+    // itemId → 已见终文集合：thinking 拆分 wire 下流式 partId 为绝对下标、transcript content 内下标为 0，
+    // 键对不上但同一段终文内容一致——按 (itemId, 终文) 兜底去重，避免 readHistory 恢复后重复气泡。
+    const seenTexts = new Map<string, Set<string>>();
+    for (const [key, text] of s.parts) {
+      const itemId = key.slice(0, key.lastIndexOf(":"));
+      if (!seenTexts.has(itemId)) seenTexts.set(itemId, new Set());
+      seenTexts.get(itemId)!.add(text);
+    }
+    const isSeen = (item: { dedupeKeys: string[]; seeds: Array<{ seed: ChatEventSeed; at: string }> }): boolean => {
+      if (item.dedupeKeys.every((k) => existing.has(k))) return true;
+      const seed = item.seeds.find((x) => x.seed.type === "message_delta")?.seed;
+      return seed?.type === "message_delta" ? (seenTexts.get(seed.itemId)?.has(seed.delta) ?? false) : false;
+    };
     for (const turn of parseTranscriptItems(content)) {
-      const unseen = turn.items.filter((item) => item.dedupeKeys.some((k) => !existing.has(k)));
+      const unseen = turn.items.filter((item) => !isSeen(item));
       if (unseen.length === 0) continue; // 该轮已全部实时见过 → 整轮跳过（无重复）
       this.emit(s, { type: "turn_started", turnId: `t-${randomUUID().slice(0, 8)}` }, turn.at);
-      for (const item of turn.items) {
+      for (const item of unseen) {
         for (const { seed, at } of item.seeds) this.emit(s, seed, at);
       }
       this.emit(s, { type: "turn_completed" }, turn.at);

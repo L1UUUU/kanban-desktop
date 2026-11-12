@@ -371,6 +371,30 @@ describe("ClaudeAdapter：turn 与流式映射", () => {
     expect(ctx.chat(sessionId).at(-1)).toMatchObject({ type: "session_status", status: "idle" });
   });
 
+  it("thinking 拆分 wire：流式 text index=1 + 终文 content text index=0 仍归并为同一个 part（不重复回复）", async () => {
+    const ctx = makeAdapter();
+    hookRoots.push(ctx.hookDir);
+    const { sessionId } = await ctx.adapter.createSession({ cwd: CWD });
+    await ctx.adapter.sendTurn({ sessionId, text: "1" });
+    const s = ctx.stream();
+    const msgId = "msg-20261112";
+    const finalText = "boss，这条消息只有「1」，看起来可能是误触或没发完整。";
+    // 真实 2.1.317 wire：thinking 占绝对 index 0，text 流式增量在 index 1（poc-7 t4b 实证）
+    s.emit({ type: "stream_event", event: { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: finalText.slice(0, 5) } }, api_message_id: msgId });
+    s.emit({ type: "stream_event", event: { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: finalText.slice(5) } }, api_message_id: msgId });
+    // 终文 assistant 消息被拆成独立行：content 内 text 块重新编号到 index 0
+    s.emit({ type: "assistant", message: { id: msgId, role: "assistant", content: [{ type: "text", text: finalText }] }, session_id: "native-1" });
+    s.emit({ type: "result", subtype: "success", session_id: "native-1" });
+    const parts = new Set(
+      ctx.chat(sessionId)
+        .filter((e) => e.type === "message_delta" || e.type === "message_completed")
+        .map((e) => `${(e as { itemId: string }).itemId}:${(e as { partId: string }).partId}`),
+    );
+    expect(parts.size).toBe(1); // 两个键 → UI 渲染成两个 Claude 气泡
+    const deltas = ctx.chat(sessionId).filter((e): e is Extract<ChatEvent, { type: "message_delta" }> => e.type === "message_delta");
+    expect(deltas.map((d) => d.delta).join("")).toBe(finalText); // 终文不重复拼接
+  });
+
   it("tool_use → tool_started；tool_result → tool_completed（含输出与时长）", async () => {
     const ctx = makeAdapter();
     hookRoots.push(ctx.hookDir);
@@ -750,6 +774,36 @@ describe("ClaudeAdapter：readHistory transcript 直读回填", () => {
     const merged = [...snapshot, ...live].map((e) => e.seq);
     expect(new Set(merged).size).toBe(merged.length);
     expect(merged.length).toBe(final.length);
+  });
+
+  it("thinking 拆分 wire 的 transcript 回填：实时流 partId=1 与 transcript 下标 0 对齐去重", async () => {
+    const ctx = makeAdapter();
+    hookRoots.push(ctx.hookDir);
+    const { sessionId, nativeSessionId } = await ctx.adapter.createSession({ cwd: realCwd });
+    const s = ctx.stream();
+    const msgId = "msg-thinking-1";
+    const finalText = "只有一条终文";
+    await ctx.adapter.sendTurn({ sessionId, text: "1" });
+    // 真实 wire：thinking 占 index 0，text 流式增量在 index 1
+    s.emit({ type: "stream_event", event: { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: finalText.slice(0, 2) } }, api_message_id: msgId });
+    s.emit({ type: "stream_event", event: { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: finalText.slice(2) } }, api_message_id: msgId });
+    s.emit({ type: "assistant", message: { id: msgId, role: "assistant", content: [{ type: "text", text: finalText }] }, session_id: nativeSessionId });
+    s.emit({ type: "result", subtype: "success", session_id: nativeSessionId });
+    // transcript 落盘：thinking 行 + text 行（同 id，text 块在 content 内下标 0）
+    writeTranscript(nativeSessionId!, [
+      { type: "user", timestamp: "2026-11-12T11:12:00.000Z", message: { role: "user", content: [{ type: "text", text: "1" }] } },
+      { type: "assistant", timestamp: "2026-11-12T11:12:05.000Z", message: { id: msgId, role: "assistant", content: [{ type: "thinking", thinking: "" }] } },
+      { type: "assistant", timestamp: "2026-11-12T11:12:06.000Z", message: { id: msgId, role: "assistant", content: [{ type: "text", text: finalText }] } },
+    ]);
+    s.simulateExit(0);
+    const history = await ctx.adapter.readHistory(sessionId);
+    const parts = new Set(
+      history
+        .filter((e) => e.type === "message_delta" || e.type === "message_completed")
+        .map((e) => `${(e as { itemId: string }).itemId}:${(e as { partId: string }).partId}`),
+    );
+    expect(parts.size).toBe(1); // 回填不得再生成第二个键（恢复后不重复气泡）
+    expect(history.filter((e) => e.type === "message_delta" && e.itemId === msgId).map((e) => (e as { delta: string }).delta).join("")).toBe(finalText);
   });
 
   it("adoptSession（应用重启收养）：无进程先 readHistory 直读 transcript；resume 后可续问", async () => {
