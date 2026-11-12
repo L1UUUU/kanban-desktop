@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<!-- 用途：模型选择 combobox 原型（模型选择真实化设计）——展示 ModelCombobox 四状态与关键交互，替代 stage5 原型中「默认模型 ▾」chip 形态的差异说明；纯原型与业务实现隔离 -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>模型选择 Combobox 原型（模型真实化）</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font: 13px/1.5 system-ui, "Segoe UI", sans-serif; background: #14161a; color: #e6e6e9; padding: 24px; }
+  h1 { font-size: 15px; margin-bottom: 4px; }
+  .sub { color: #8b8f98; margin-bottom: 20px; }
+  h2 { font-size: 13px; color: #9aa0ac; margin: 22px 0 8px; font-weight: 600; }
+  .bar { display: flex; gap: 8px; align-items: center; padding: 10px 12px; border: 1px solid #2a2e37; border-radius: 10px; background: #191c22; max-width: 760px; }
+  .send { margin-left: auto; background: #4f46e5; border: none; color: #fff; border-radius: 8px; padding: 6px 14px; cursor: pointer; }
+  .send[disabled] { opacity: .45; cursor: default; }
+  /* combobox 主体：chip 形态的输入框（与权限 chip 同排） */
+  .cbx { position: relative; }
+  .cbx input { width: 190px; height: 28px; border-radius: 999px; border: 1px solid #2a2e37; background: transparent; color: #b9bdc7; padding: 0 26px 0 12px; font: inherit; font-size: 12px; cursor: pointer; outline: none; }
+  .cbx input:hover, .cbx input:focus { border-color: #6366f1; color: #e6e6e9; }
+  .cbx input.err { border-color: #d97706; }
+  .cbx .caret { position: absolute; right: 10px; top: 7px; color: #8b8f98; pointer-events: none; font-size: 10px; }
+  .cbx .menu { display: none; position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 5; min-width: 300px; max-height: 240px; overflow: auto; border: 1px solid #2a2e37; border-radius: 10px; background: #20232b; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,.5); }
+  .cbx.open .menu { display: block; }
+  .mi { display: block; width: 100%; text-align: left; background: none; border: none; color: inherit; font: inherit; border-radius: 7px; padding: 6px 9px; cursor: pointer; }
+  .mi:hover, .mi.sel { background: #262a34; }
+  .mi .nm { font-size: 12.5px; font-weight: 600; }
+  .mi .nm .dft { color: #34d399; font-size: 10.5px; margin-left: 6px; border: 1px solid #34d39955; border-radius: 999px; padding: 0 6px; }
+  .mi .id { font-size: 11px; color: #8b8f98; font-family: ui-monospace, Consolas, monospace; }
+  .note { display: block; padding: 6px 9px; font-size: 11.5px; color: #8b8f98; }
+  .note.err { color: #f59e0b; }
+  .chip { height: 28px; border-radius: 999px; border: 1px solid #34d39950; color: #34d399; padding: 0 12px; font-size: 12px; background: none; cursor: pointer; }
+</style>
+</head>
+<body>
+<h1>模型选择 Combobox 原型</h1>
+<p class="sub">模型选择真实化：下拉展示各 CLI「/model」同源模型列表（displayName 主行 + id 副行）；替代 stage5 原型的「默认模型 ▾」chip。可点开体验。</p>
+
+<h2>① 就绪态（默认：已自动选中账号默认模型，绿标「默认」）</h2>
+<div class="bar">
+  <button class="chip" type="button">⚡ 权限：自动 ▾</button>
+  <span class="cbx open" id="cbx1">
+    <input value="GPT-5.6" readonly><span class="caret">▾</span>
+    <div class="menu">
+      <button class="mi sel" type="button"><span class="nm">GPT-5.6<span class="dft">默认</span></span><span class="id">gpt-5.6-luna</span></button>
+      <button class="mi" type="button"><span class="nm">GPT-6</span><span class="id">gpt-6-luna</span></button>
+      <button class="mi" type="button"><span class="nm">GPT-6.1 Terra</span><span class="id">gpt-6.1-terra</span></button>
+      <span class="note">未在列表中？直接输入模型 id</span>
+    </div>
+  </span>
+  <button class="send" type="button">发送</button>
+</div>
+
+<h2>② 过滤（输入即过滤 displayName / id，不分大小写）</h2>
+<div class="bar">
+  <span class="cbx open">
+    <input value="terra"><span class="caret">▾</span>
+    <div class="menu">
+      <button class="mi" type="button"><span class="nm">GPT-6.1 Terra</span><span class="id">gpt-6.1-terra</span></button>
+      <span class="note">匹配 1 项 · 回车使用输入内容</span>
+    </div>
+  </span>
+</div>
+
+<h2>③ 加载中（不阻塞输入与发送；发送时后端自选并回填真实名）</h2>
+<div class="bar">
+  <span class="cbx">
+    <input value="模型列表加载中…" readonly><span class="caret">▾</span>
+  </span>
+  <button class="send" type="button">发送</button>
+</div>
+
+<h2>④ 拉取失败（错误行说明原因；手动输入模型 id 兜底，仍可发送）</h2>
+<div class="bar">
+  <span class="cbx open">
+    <input class="err" value=""><span class="caret">▾</span>
+    <div class="menu">
+      <span class="note err">模型列表获取失败：codex 未登录</span>
+      <span class="note">手动输入模型 id 后回车</span>
+    </div>
+  </span>
+</div>
+
+<h2>⑤ 手动输入（非列表项允许使用——展示原始 id，下发原样）</h2>
+<div class="bar">
+  <span class="cbx">
+    <input value="gpt-5.6-luna">
+  </span>
+  <button class="send" type="button">发送</button>
+</div>
+
+<script>
+  // 交互演示：① 的输入框可点开/收起、选项点击回填并收起
+  const box = document.getElementById("cbx1");
+  const input = box.querySelector("input");
+  input.addEventListener("click", () => box.classList.toggle("open"));
+  box.querySelectorAll(".mi").forEach((b) =>
+    b.addEventListener("click", () => {
+      box.querySelectorAll(".mi").forEach((x) => x.classList.remove("sel"));
+      b.classList.add("sel");
+      input.value = b.querySelector(".nm").childNodes[0].textContent.trim();
+      box.classList.remove("open");
+    })
+  );
+  document.addEventListener("click", (e) => { if (!box.contains(e.target)) box.classList.remove("open"); });
+</script>
+</body>
+</html>
