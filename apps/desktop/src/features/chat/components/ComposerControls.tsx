@@ -1,6 +1,6 @@
 // 用途：composer 控件共享件 —— 权限档位 chip（三档下拉带说明；#59 起会话 composer 与草稿面板共用，DOM 输出与原 Composer 内联形态一致）；模型选择自 #77 起独立为 ModelCombobox（真实目录数据源）
-import { useState } from "react";
 import type { PermMode } from "@kanban/ipc-schema";
+import { useClosableOverlay } from "./use-closable-overlay";
 
 // 权限三档元数据（原型 §3.3 文案硬约束；fake 非 OpenCode，full 用通用说明）
 const PERM_META: Record<PermMode, { icon: string; label: string; menuTitle: string; desc: string }> = {
@@ -30,12 +30,12 @@ const PERM_CHIP_CLS: Record<PermMode, string> = {
   full: "text-muted-foreground border-border",
 };
 
-/** 权限档位 chip + 下拉菜单（三档带说明；原型一致项 6） */
+/** 权限档位 chip + 下拉菜单（三档带说明；原型一致项 6）—— 浮层关闭交互（外部点击/Esc）经共享 useClosableOverlay，issue #83 */
 export function PermChip({ value, onChange }: { value: PermMode; onChange(mode: PermMode): void }) {
-  const [open, setOpen] = useState(false);
+  const { open, setOpen, rootRef } = useClosableOverlay<HTMLSpanElement>();
   const perm = PERM_META[value];
   return (
-    <span className="relative">
+    <span ref={rootRef} className="relative">
       <button
         type="button"
         title="权限档位：由 Adapter 映射到各 CLI 原生审批机制"
