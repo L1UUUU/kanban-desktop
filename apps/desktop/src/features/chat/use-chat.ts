@@ -49,6 +49,8 @@ export interface ChatControllerActions {
   switchTo(sessionId: string): void;
   /** 两类草稿齐丢（切项目 effect 单调用；不弹确认、输入不保留） */
   discardAllDrafts(): void;
+  /** #86 先手让位（项目维度）：切项目清除他项目的激活会话（含启动自动选中者，回落空态）——与 discardAllDrafts 同属切项目 effect 单调用 */
+  clearActiveIfForeignProject(currentProjectId: string | null): void;
   setPerm(mode: PermMode): void;
   setModel(model: string): void;
   /** 断开会话「读取原生历史并恢复」：readHistory 快照重建消息流 → resume 重连（状态经实时事件流回 idle） */
@@ -417,13 +419,18 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
     [manager, killTerminal],
   );
 
-  // 稳定动作独立 useCallback：discardAllDrafts 不依赖 deps（resolveCwd/onNotice 随项目列表每帧可变），
-  // ChatWorkspace 切项目 effect 依赖它——项目列表刷新不得触发丢弃（actions 随 deps 重建不影响本引用）
+  // 稳定动作独立 useCallback：discardAllDrafts / clearActiveIfForeignProject 不依赖 deps（resolveCwd/onNotice 随项目列表每帧可变），
+  // ChatWorkspace 切项目 effect 依赖它们——项目列表刷新不得触发丢弃/清除（actions 随 deps 重建不影响本引用）
   const discardAllDrafts = useCallback(() => {
     discardAllDraftsAction({ store, drafts, manager });
   }, [store, drafts, manager]);
 
-  const actions = useMemo<Omit<ChatControllerActions, "discardAllDrafts">>(() => {
+  // #86 先手让位（项目维度）：切项目清除他项目激活会话（纯 store 委托，引用稳定供切项目 effect 依赖）
+  const clearActiveIfForeignProject = useCallback((currentProjectId: string | null) => {
+    store.clearActiveIfForeignProject(currentProjectId);
+  }, [store]);
+
+  const actions = useMemo<Omit<ChatControllerActions, "discardAllDrafts" | "clearActiveIfForeignProject">>(() => {
     const activeId = (): string | null => store.getSnapshot().activeId;
     const report = (p: Promise<IpcResult>, sessionId: string): void => {
       void p.then((r) => {
@@ -516,6 +523,7 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
   return {
     ...actions,
     discardAllDrafts,
+    clearActiveIfForeignProject,
     ...registry,
     sessions: snap.sessions,
     activeSession,

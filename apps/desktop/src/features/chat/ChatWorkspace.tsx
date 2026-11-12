@@ -71,11 +71,14 @@ export function ChatWorkspace({
   // #59/#60：切项目丢弃两类草稿——聊天与 PTY（不弹确认、输入不保留）；单一 effect 统一覆盖所有切项目路径
   // （含 register() 成功后 Main 自动切项目——不经侧栏点击，命令式 discard 会漏，spec #57 Story 5）；
   // discardAllDrafts 引用随项目列表刷新重建时本 effect 亦重跑——丢弃幂等（无草稿时 no-op），无行为差异
+  // #86 先手让位（项目维度）：注册/切换为用户先手——他项目的激活会话（含启动自动选中者）清除选中回落空态，不跨项目残留
   const currentProjectId = projects.currentProjectId;
   const discardAllDrafts = controller.discardAllDrafts;
+  const clearActiveIfForeignProject = controller.clearActiveIfForeignProject;
   useEffect(() => {
     discardAllDrafts();
-  }, [currentProjectId, discardAllDrafts]);
+    clearActiveIfForeignProject(currentProjectId);
+  }, [currentProjectId, discardAllDrafts, clearActiveIfForeignProject]);
 
   // 活跃会话为 PTY 终端时中央渲染终端面板（与结构化聊天区并列切换，spec I）
   const active = controller.activeSession;
