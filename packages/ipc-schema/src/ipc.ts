@@ -46,6 +46,8 @@ export const sessionRowSchema = z.object({
   permMode: permModeSchema.nullable(),
   status: sessionStatusSchema.nullable(),
   lastActiveAt: z.string().nullable(),
+  /** 创建时间（DB created_at 直读；#64 自动归档基准回落源、#86 启动自动选中「全部无活跃时间取最新创建」数据源） */
+  createdAt: z.string().nullable(),
   /** #58 归档时间（NULL=未归档；默认列表恒 null，归档视图（session:archivedList）行必带） */
   archivedAt: z.string().nullable(),
   /** 目录身份（spec I-3）：main=主仓库绿徽标 / worktree=蓝徽标（name 见 worktreeName）/ none=非 git 目录不渲染 */

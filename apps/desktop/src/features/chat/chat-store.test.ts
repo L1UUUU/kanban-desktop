@@ -28,6 +28,7 @@ describe("chat-store 恢复会话登记（#7 重启恢复）", () => {
       permMode: "ask",
       status: "running", // 上次退出前的落库状态：恢复后统一显示断开
       lastActiveAt: "2026-11-04T00:00:00.000Z",
+      createdAt: "2026-11-04T00:00:00.000Z",
       archivedAt: null,
       dirIdentity: "worktree",
       worktreeName: "poc7",
@@ -195,6 +196,7 @@ describe("chat-store 断开会话恢复（#9：readHistory 快照 + 实时增量
       permMode: "auto",
       status: "idle",
       lastActiveAt: null,
+      createdAt: "2026-11-04T00:00:00.000Z",
       archivedAt: null,
       dirIdentity: "none",
       worktreeName: null,
@@ -257,6 +259,7 @@ describe("chat-store 恢复引导三态（#42：banner 状态机 idle/resuming/f
       permMode: "auto",
       status: "idle",
       lastActiveAt: null,
+      createdAt: "2026-11-04T00:00:00.000Z",
       archivedAt: null,
       dirIdentity: "none",
       worktreeName: null,

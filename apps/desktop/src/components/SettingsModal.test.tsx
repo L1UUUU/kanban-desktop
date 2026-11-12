@@ -93,6 +93,7 @@ function archRow(p: { id: string; archivedAt: string; projectId?: string | null;
     permMode: "auto",
     status: "idle",
     lastActiveAt: p.lastActiveAt ?? null,
+    createdAt: "2026-11-01T00:00:00.000Z",
     archivedAt: p.archivedAt,
     dirIdentity: "none",
     worktreeName: null,

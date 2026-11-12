@@ -21,6 +21,7 @@ const demoSession = {
   permMode: "auto",
   status: "disconnected",
   lastActiveAt: null,
+  createdAt: "2026-11-05T00:00:00.000Z",
   archivedAt: null,
   dirIdentity: "main",
   worktreeName: null,
