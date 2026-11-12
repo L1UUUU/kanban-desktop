@@ -32,7 +32,7 @@ import { createAdapterEventHandler } from "./adapter-events";
 import { CliHostClient } from "./cli-host-client";
 import { SQLITE_ENTRY, openDatabase } from "./db";
 import { createValidatedSender } from "./event-sender";
-import { handleIpc, handleConfigIpc, handleDiffIpc, handleMemoryIpc, handleResidueIpc, TRACKER_CLI_BY_APP, type IpcDeps } from "./ipc";
+import { handleIpc, handleConfigIpc, handleDiffIpc, handleMemoryIpc, handleModelsIpc, handleResidueIpc, TRACKER_CLI_BY_APP, type IpcDeps } from "./ipc";
 import { defaultGitDiffDeps, readWorkspaceDiff } from "./git-diff-service";
 import { handleLogWrite } from "./log-write";
 import { createLogger, registerCrashHandlers, resolveKindLog, type Logger } from "./logger";
@@ -363,6 +363,10 @@ app.whenReady().then(async () => {
     }),
   );
   ipcMain.handle(IPC_CHANNELS.kanban.name, (_event, raw: unknown) => handleIpc(deps, raw));
+  // #76（spec #75 模型目录）：models:ipc 单通道 —— models:list 按 cli 经 adapter 分发（AdapterError 原码透传：claude 暂未支持/exe 未装）
+  ipcMain.handle(IPC_CHANNELS.models.name, (_event, raw: unknown) =>
+    handleModelsIpc({ adapter, isShuttingDown: () => shutdown.isShuttingDown(), log: logger.log }, raw),
+  );
   // #31：memory:ipc 单通道（入站 zod 强制校验 + 业务拒绝 ok:false+reason，spec #27 H 节）
   ipcMain.handle(IPC_CHANNELS.memory.name, (_event, raw: unknown) =>
     handleMemoryIpc({ memory: memoryService, isShuttingDown: () => shutdown.isShuttingDown(), log: logger.log }, raw),

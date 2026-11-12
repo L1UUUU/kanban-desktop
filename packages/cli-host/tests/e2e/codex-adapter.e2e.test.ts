@@ -175,13 +175,11 @@ describe.skipIf(!E2E)("CodexAdapter 真实集成（env-gated）", () => {
     expect(transcript.some((e) => e.role === "assistant" && e.text.length > 0)).toBe(true); // assistant 回复在场
   });
 
-  /* ---------------- 模型可用性回退（model/list 不可信，poc-1 发现 2） ---------------- */
-  it("显式假模型名 → 探测回退到可用模型，会话正常出流", async () => {
-    const { sessionId } = await adapter.createSession({ cwd: workdir, model: "definitely-not-a-model-xyz", permMode: "auto" });
-    await adapter.sendTurn({ sessionId, text: "只回复两个字：好的" });
-    await driveIdle();
-    expect(assistantText(sessionId).length).toBeGreaterThan(0);
-    expect(chat(sessionId).some((e) => e.type === "turn_completed")).toBe(true);
+  /* ---------------- 模型可用性（model/list 不可信，poc-1 发现 2；spec #75/#76 修正：显式失败不回退） ---------------- */
+  it("显式假模型名 → 创建直接报错含模型名（不静默回退换模型；探测 400 拒绝零推理成本）", async () => {
+    await expect(adapter.createSession({ cwd: workdir, model: "definitely-not-a-model-xyz", permMode: "auto" })).rejects.toThrow(
+      /definitely-not-a-model-xyz/,
+    );
   });
 
   /* ---------------- 锁版本 + generate-ts diff 协议探针（§7-6；独立 env 开关：成本较高，升级/排障时跑） ---------------- */

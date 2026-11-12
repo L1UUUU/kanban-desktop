@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { AdapterEvent, ChatEvent, LogKind, TranscriptEvent } from "@kanban/ipc-schema";
+import type { AdapterEvent, ChatEvent, LogKind, ModelEntry, TranscriptEvent } from "@kanban/ipc-schema";
 import { utilityProcess } from "electron";
 import {
   AdapterError,
@@ -14,6 +14,7 @@ import {
   type CreateSessionInput,
   type DisposeInput,
   type HostCommand,
+  type ListModelsInput,
   type ResolveApprovalInput,
   type ReturnOf,
   type RunOnceInput,
@@ -132,8 +133,13 @@ export class CliHostClient implements CliAdapter {
     }
   }
 
-  async createSession(init: CreateSessionInput): Promise<{ sessionId: string; nativeSessionId?: string | null }> {
+  async createSession(init: CreateSessionInput): Promise<{ sessionId: string; nativeSessionId?: string | null; model?: string | null }> {
     return this.send({ kind: "createSession", payload: init });
+  }
+
+  /** 模型目录查询（issue #76）：cli 缺省 fake 显式补齐（与 Router 兜底一致，保持 wire 摘要 cli= 命中） */
+  async listModels(input: ListModelsInput): Promise<ModelEntry[]> {
+    return this.send({ kind: "listModels", payload: { ...input, cli: input.cli ?? "fake" } });
   }
 
   async sendTurn(input: SendTurnInput): Promise<void> {

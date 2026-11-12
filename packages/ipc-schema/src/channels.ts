@@ -4,6 +4,7 @@ import { configRequestSchema, configResultSchema } from "./config";
 import { diffRequestSchema, diffResultSchema } from "./diff";
 import { ipcRequestSchema, ipcResultSchema } from "./ipc";
 import { memoryRequestSchema, memoryResultSchema } from "./memory";
+import { modelsRequestSchema, modelsResultSchema } from "./models";
 import { residueRequestSchema, residueResultSchema } from "./residue";
 
 /** 信封错误方言标记（wire 形状不变，仅 main 侧信封工厂参数化依据）：code={ok:false,error:{code,message}}｜reason={ok:false,reason,detail?} */
@@ -28,7 +29,8 @@ export const IPC_CHANNELS = {
   residue: { name: "residue:ipc", request: residueRequestSchema, result: residueResultSchema, errorShape: "reason" },
   diff: { name: "diff:ipc", request: diffRequestSchema, result: diffResultSchema, errorShape: "code" },
   config: { name: "config:ipc", request: configRequestSchema, result: configResultSchema, errorShape: "code" },
+  models: { name: "models:ipc", request: modelsRequestSchema, result: modelsResultSchema, errorShape: "code" },
 } as const satisfies Record<string, IpcChannelDef<string, unknown, unknown>>;
 
-/** 通道键名（"kanban" | "memory" | "residue" | "diff" | "config"） */
+/** 通道键名（"kanban" | "memory" | "residue" | "diff" | "config" | "models"） */
 export type IpcChannelName = keyof typeof IPC_CHANNELS;

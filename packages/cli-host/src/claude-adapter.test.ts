@@ -180,6 +180,28 @@ describe("ClaudeAdapter：createSession 与启动自检", () => {
     expect(() => assertApprovalFlag(["--permission-prompt-tool", "mcp__x__y"])).toThrow("启动自检失败");
     expect(() => assertApprovalFlag([...CLAUDE_BASE_ARGS])).not.toThrow();
   });
+
+  it("createSession 返回透传 model（显式值；未指定 undefined，issue #76）", async () => {
+    const ctx = makeAdapter();
+    hookRoots.push(ctx.hookDir);
+    const a = await ctx.adapter.createSession({ cwd: CWD, model: "claude-x" });
+    expect(a.model).toBe("claude-x");
+    const b = makeAdapter();
+    hookRoots.push(b.hookDir);
+    const r = await b.adapter.createSession({ cwd: CWD });
+    expect(r.model).toBeUndefined();
+  });
+});
+
+describe("ClaudeAdapter：listModels（issue #76：本票明确暂未支持）", () => {
+  it("listModels 抛 AdapterError 明确「暂未支持」（#78 接入 initialize 握手 models 数组后替换）", async () => {
+    const ctx = makeAdapter();
+    hookRoots.push(ctx.hookDir);
+    await expect(ctx.adapter.listModels({ cwd: CWD })).rejects.toMatchObject({
+      code: "E_INTERNAL",
+      message: expect.stringContaining("暂未支持"),
+    });
+  });
 });
 
 describe("ClaudeAdapter：turn 与流式映射", () => {

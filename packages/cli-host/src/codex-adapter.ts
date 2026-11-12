@@ -1,8 +1,8 @@
-// 用途：CodexAdapter —— C1 契约的真实 Codex 实现：spawn 直连 vendored codex.exe app-server（JSON-RPC/stdio，单进程多 thread），通知流映射 ChatEvent（poc-1/t0-01 实证 wire 行为）+ readTranscript rollout 落盘双视角（#28）
+// 用途：CodexAdapter —— C1 契约的真实 Codex 实现：spawn 直连 vendored codex.exe app-server（JSON-RPC/stdio，单进程多 thread），通知流映射 ChatEvent（poc-1/t0-01 实证 wire 行为）+ readTranscript rollout 落盘双视角（#28）+ listModels 常驻 app-server 目录查询（#76）
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import type { LogKind, AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, PermMode, SessionStatus, TranscriptEvent } from "@kanban/ipc-schema";
-import { AdapterError, ExeNotFoundError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
+import type { LogKind, AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, ModelEntry, PermMode, SessionStatus, TranscriptEvent } from "@kanban/ipc-schema";
+import { AdapterError, ExeNotFoundError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
 import { resolveCodexExe } from "./codex/exe";
 import { CodexRpcClient } from "./codex/rpc";
 import { parseRolloutTranscript } from "./codex/rollout";
@@ -28,7 +28,7 @@ export interface CodexAdapterOptions {
   exe?: string | null;
   /** turn 级推理档（"low"/"medium"/"high"；缺省不传用账号默认；e2e 用 low 控成本） */
   effort?: string;
-  /** 模型解析器（缺省内置探测链：显式→缓存→rollout 扫描→model/list→试探） */
+  /** 模型解析器（缺省内置探测链：显式直试探绕缓存→[未指定]缓存→rollout 扫描→model/list→试探） */
   resolveModel?: ModelResolver;
   /** 测试注入 rpc 客户端工厂 */
   clientFactory?: () => CodexRpcClientLike;
@@ -63,6 +63,9 @@ const CODEX_CAPABILITIES: AdapterCapabilities = {
   readHistory: true,
   skillSignal: false,
 };
+
+/** model/list 分页保护上限（nextCursor 续拉；防异常游标死循环，issue #76） */
+const MODEL_LIST_MAX_PAGES = 20;
 
 /** 待决审批：respond 挂起 wire 响应直到用户决定或服务端终决 */
 interface PendingApproval {
@@ -126,7 +129,7 @@ export class CodexAdapter implements CliAdapter {
     }
   }
 
-  async createSession(init: CreateSessionInput): Promise<{ sessionId: string; nativeSessionId?: string | null }> {
+  async createSession(init: CreateSessionInput): Promise<{ sessionId: string; nativeSessionId?: string | null; model?: string | null }> {
     this.ensureStarted();
     const perm = PERM_MAP[init.permMode ?? "auto"];
     let model: string;
@@ -172,7 +175,33 @@ export class CodexAdapter implements CliAdapter {
     this.sessions.set(s.sessionId, s);
     this.byThread.set(threadId, s);
     this.emit(s, { type: "session_status", status: "idle" });
-    return { sessionId: s.sessionId, nativeSessionId: threadId };
+    return { sessionId: s.sessionId, nativeSessionId: threadId, model }; // model = resolver 结果（issue #76：本会话实际采用）
+  }
+
+  /** 模型目录（issue #76 / spec #75）：常驻 app-server 发 model/list（hidden 项不进目录；nextCursor 分页续拉），映射 displayName/description/isDefault */
+  async listModels(_input: ListModelsInput): Promise<ModelEntry[]> {
+    void _input; // 单实现忽略 cli/cwd（Router 分发用）
+    this.ensureStarted();
+    const entries: ModelEntry[] = [];
+    let cursor: string | undefined;
+    try {
+      for (let page = 0; page < MODEL_LIST_MAX_PAGES; page += 1) {
+        const res = (await this.client!.request("model/list", cursor ? { cursor } : {})) as {
+          data?: Array<{ id?: string; displayName?: string; description?: string; hidden?: boolean; isDefault?: boolean } | null>;
+          nextCursor?: string | null;
+        };
+        const data = Array.isArray(res.data) ? res.data : [];
+        for (const m of data) {
+          if (!m?.id || m.hidden) continue; // hidden 项对用户不可见（spec #75）
+          entries.push({ id: m.id, displayName: m.displayName ?? m.id, description: m.description ?? "", isDefault: m.isDefault ?? false });
+        }
+        cursor = typeof res.nextCursor === "string" && res.nextCursor ? res.nextCursor : undefined;
+        if (!cursor) break;
+      }
+    } catch (e) {
+      throw new AdapterError("E_INTERNAL", `拉取 Codex 模型目录失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+    return entries;
   }
 
   /** 应用重启后的会话收养（#13 恢复编排）：按 DB thread id 重建状态（无进程；readHistory 拉起进程读原生历史，resume 后可续问） */

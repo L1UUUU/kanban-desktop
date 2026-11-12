@@ -26,6 +26,27 @@ describe("FakeAdapter 专属场景", () => {
     });
   });
 
+  it("listModels 返回两条假模型且第一条 isDefault（spec #75 #18：演示 UI 形态与真实 CLI 一致）", async () => {
+    const adapter = new FakeAdapter({ clock: new VirtualClock() });
+    const models = await adapter.listModels({ cwd: "C:\\demo" });
+    expect(models).toHaveLength(2);
+    expect(models[0].isDefault).toBe(true);
+    expect(models[1].isDefault).toBe(false);
+    for (const m of models) {
+      expect(m.id.length).toBeGreaterThan(0);
+      expect(typeof m.displayName).toBe("string");
+      expect(typeof m.description).toBe("string");
+    }
+  });
+
+  it("createSession 透传请求 model；未指定为 undefined（issue #76）", async () => {
+    const adapter = new FakeAdapter({ clock: new VirtualClock() });
+    const a = await adapter.createSession({ cwd: "C:\\demo", model: "fake-lite" });
+    expect(a.model).toBe("fake-lite");
+    const b = await adapter.createSession({ cwd: "C:\\demo" });
+    expect(b.model).toBeUndefined();
+  });
+
   it("审批过期：无人决定时发 approval_expired（Codex timed_out 映射），工具被拒，走 deny 后续", async () => {
     const clock = new VirtualClock();
     const adapter = new FakeAdapter({ clock });

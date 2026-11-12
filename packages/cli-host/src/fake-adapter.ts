@@ -1,6 +1,6 @@
-// 用途：FakeAdapter —— C1 契约的脚本化 mock 实现：事件溯源日志（readHistory=重放，天然满足不变量 4）、可注入时钟、演示脚本驱动（原型行为规格）+ readTranscript 双视角剧本（#28，独立于 ChatEvent 日志维护）
-import type { AdapterEvent, ChatEvent, ChatEventSeed, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
-import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
+// 用途：FakeAdapter —— C1 契约的脚本化 mock 实现：事件溯源日志（readHistory=重放，天然满足不变量 4）、可注入时钟、演示脚本驱动（原型行为规格）+ readTranscript 双视角剧本（#28，独立于 ChatEvent 日志维护）+ listModels 假模型目录（#76：演示 UI 形态与真实 CLI 一致）
+import type { AdapterEvent, ChatEvent, ChatEventSeed, ModelEntry, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
+import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
 import { SystemClock, type FakeClock } from "./clock";
 import { pickScript, type ScriptStep } from "./fake-scripts";
 
@@ -66,6 +66,12 @@ const FAKE_CAPABILITIES: AdapterCapabilities = {
   skillSignal: true,
 };
 
+/** Fake 模型目录（spec #75 #18）：两条假模型，第一条默认——演示/测试时 UI 形态与真实 CLI 一致 */
+const FAKE_MODELS: ModelEntry[] = [
+  { id: "fake-standard", displayName: "Fake 标准模型", description: "演示用假模型（完整演示脚本节奏）", isDefault: true },
+  { id: "fake-lite", displayName: "Fake 轻量模型", description: "演示用假模型（轻量输出）", isDefault: false },
+];
+
 export class FakeAdapter implements CliAdapter {
   readonly capabilities = FAKE_CAPABILITIES;
   private readonly clock: FakeClock;
@@ -88,7 +94,7 @@ export class FakeAdapter implements CliAdapter {
     this.failCreateFirst = options.failCreateFirst ?? 0;
   }
 
-  async createSession(init: CreateSessionInput): Promise<{ sessionId: string }> {
+  async createSession(init: CreateSessionInput): Promise<{ sessionId: string; model?: string | null }> {
     // #46 e2e 注入：前 N 次创建抛 spawn 失败（协议级 E_SPAWN_NOT_FOUND，与真实 exe 解析失败同码）
     this.createCalls += 1;
     if (this.createCalls <= this.failCreateFirst) {
@@ -115,7 +121,12 @@ export class FakeAdapter implements CliAdapter {
     };
     this.sessions.set(sessionId, s);
     this.emit(s, { type: "session_status", status: "idle" });
-    return { sessionId };
+    return { sessionId, model: init.model }; // model 透传（issue #76：fake 会话实际采用即请求值）
+  }
+
+  /** 模型目录（issue #76）：返回两条假模型（拷贝防调用方改写常量），第一条默认 */
+  async listModels(_input?: ListModelsInput): Promise<ModelEntry[]> {
+    return FAKE_MODELS.map((m) => ({ ...m }));
   }
 
   async sendTurn(input: SendTurnInput): Promise<void> {

@@ -1,4 +1,4 @@
-// 用途：模型探测回退单测 —— mock client 验证候选链（显式→env 偏好白名单→缓存→rollout→model/list）、400 拒绝回退、缓存命中免试探
+// 用途：模型探测回退单测 —— mock client 验证候选链（显式直试探→env 偏好白名单→缓存→rollout→model/list）、显式失败不回退（spec #75 存量 bug 修正）、缓存命中免试探
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -60,19 +60,47 @@ describe("createDefaultModelResolver 候选链（mock 试探）", () => {
     expect(state.probes.length).toBe(1); // 仅试探一次
   });
 
-  it("显式模型 400 失败 → 回退到可用候选（不再用失败模型）", async () => {
+  it("显式模型 400 失败 → 直接抛错含模型名，不回退候选（spec #75 存量 bug 修正：不静默换模型）", async () => {
     const { client, state } = makeMockClient({ okModels: ["m-list-a"], listModels: ["m-list-a"] });
     const resolve = createDefaultModelResolver({ preferredModels: [], rolloutModel: null });
-    const model = await resolve("m-broken", client);
-    expect(model).toBe("m-list-a");
-    expect(state.probes[0]).toBe("m-broken"); // 首选显式
-    expect(state.probes.length).toBe(2);
+    await expect(resolve("m-broken", client)).rejects.toThrow(/m-broken/);
+    expect(state.probes).toEqual(["m-broken"]); // 只试探显式模型，未回退试探 model/list 候选
+  });
+
+  it("显式模型不被内存缓存劫持：第一个会话缓存 A 后，第二个会话显式选 B 仍得到 B", async () => {
+    const { client, state } = makeMockClient({ okModels: ["m-a", "m-b"], listModels: [] });
+    const resolve = createDefaultModelResolver({ preferredModels: [], rolloutModel: null });
+    expect(await resolve("m-a", client)).toBe("m-a");
+    expect(await resolve("m-b", client)).toBe("m-b"); // 不返回内存缓存 m-a
+    expect(state.probes).toEqual(["m-a", "m-b"]); // 显式各试探一次
+  });
+
+  it("显式模型不被磁盘缓存劫持：历史缓存 A 不拦截显式 B 的直接试探", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kanban-probe-explicit-"));
+    writeFileSync(path.join(dir, "codex-model-probe.json"), JSON.stringify({ model: "m-disk", version: null, probedAt: "2026-01-01T00:00:00.000Z" }), "utf8");
+    const { client, state } = makeMockClient({ okModels: ["m-explicit"], listModels: [] });
+    const resolve = createDefaultModelResolver({ preferredModels: [], cacheDir: dir, rolloutModel: null });
+    expect(await resolve("m-explicit", client)).toBe("m-explicit");
+    expect(state.probes).toEqual(["m-explicit"]); // 真试探而非读磁盘缓存
+  });
+
+  it("未指定仍走缓存与回退链：磁盘缓存命中免试探；无缓存时按候选链回退", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kanban-probe-unset-"));
+    writeFileSync(path.join(dir, "codex-model-probe.json"), JSON.stringify({ model: "m-disk", version: null, probedAt: "2026-01-01T00:00:00.000Z" }), "utf8");
+    const cached = makeMockClient({ okModels: [], listModels: [] });
+    const resolveCached = createDefaultModelResolver({ preferredModels: [], cacheDir: dir, rolloutModel: null });
+    expect(await resolveCached(undefined, cached.client)).toBe("m-disk"); // 磁盘缓存命中
+    expect(cached.state.probes).toEqual([]); // 免试探
+    const { client, state } = makeMockClient({ okModels: ["m-list-a"], listModels: ["m-list-a"] });
+    const resolve = createDefaultModelResolver({ preferredModels: [], rolloutModel: null });
+    expect(await resolve(undefined, client)).toBe("m-list-a"); // 回退链兜底
+    expect(state.probes).toEqual(["m-list-a"]);
   });
 
   it("全部候选失败 → 明确中文报错", async () => {
     const { client } = makeMockClient({ okModels: [], listModels: ["m1"] });
     const resolve = createDefaultModelResolver({ preferredModels: [], rolloutModel: null });
-    await expect(resolve("m-broken", client)).rejects.toThrow(/未探测到可用的 Codex 模型/);
+    await expect(resolve(undefined, client)).rejects.toThrow(/未探测到可用的 Codex 模型/);
   });
 });
 

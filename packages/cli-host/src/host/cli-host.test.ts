@@ -156,6 +156,9 @@ class BaseStubAdapter implements CliAdapter {
     this.n += 1;
     return { sessionId: `s-pid-${this.n}`, nativeSessionId: null };
   }
+  async listModels(): Promise<never[]> {
+    return [];
+  }
   async sendTurn(): Promise<void> {}
   async interruptTurn(): Promise<void> {}
   async resolveApproval(): Promise<void> {}

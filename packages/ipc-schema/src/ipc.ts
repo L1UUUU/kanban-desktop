@@ -144,6 +144,8 @@ export const ipcOkSchema = z.object({
   title: z.string().optional(),
   /** session:create 附带：新会话 cwd 的目录身份（徽标即时渲染依据） */
   dirIdentity: sessionRowSchema.shape.dirIdentity.optional(),
+  /** session:create 附带（issue #76 / spec #75）：该会话实际采用的模型（codex=探测结果、opencode=显式或 /config 默认、fake/claude 透传；供调用方回显） */
+  model: z.string().optional(),
   worktreeName: z.string().nullable().optional(),
   canceled: z.boolean().optional(),
   duplicate: z.boolean().optional(),

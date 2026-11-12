@@ -47,7 +47,7 @@ export class CliHost {
     switch (cmd.kind) {
       case "createSession": {
         const r = await this.router.createSession(cmd.payload);
-        return { sessionId: r.sessionId, nativeSessionId: r.nativeSessionId ?? null };
+        return { sessionId: r.sessionId, nativeSessionId: r.nativeSessionId ?? null, model: r.model };
       }
       case "sendTurn":
         await this.router.sendTurn(cmd.payload);
@@ -74,6 +74,9 @@ export class CliHost {
       case "listChildPids":
         // C5 演进（#44）：聚合各 Adapter 活跃子进程 pid 上报 Main（不路由会话，host 级查询）
         return this.router.listChildPids();
+      case "listModels":
+        // issue #76：模型目录查询（按 cli 分发的目录级命令，不路由会话）
+        return this.router.listModels(cmd.payload);
       case "runOnce":
         return this.runOnceRunner.run(cmd.payload);
       case "cancelRunOnce":

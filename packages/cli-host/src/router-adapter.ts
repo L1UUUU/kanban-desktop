@@ -1,7 +1,7 @@
-// 用途：AdapterRouter —— 多 CLI 分发门面：createSession 按 init.cli 分发到对应 Adapter 并登记路由，其余 C1 方法按 sessionId 路由（ipc 单 adapter 注入位不变）
+// 用途：AdapterRouter —— 多 CLI 分发门面：createSession/listModels 按 init.cli 分发到对应 Adapter 并登记路由，其余 C1 方法按 sessionId 路由（ipc 单 adapter 注入位不变）
 import { randomUUID } from "node:crypto";
-import type { AdapterEvent, ChatEvent, TranscriptEvent } from "@kanban/ipc-schema";
-import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
+import type { AdapterEvent, ChatEvent, ModelEntry, TranscriptEvent } from "@kanban/ipc-schema";
+import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
 
 /** Router 构造工厂：cli → adapter（不支持该 CLI 时抛 AdapterError） */
 export type AdapterFactory = (cli: string) => CliAdapter;
@@ -39,12 +39,18 @@ export class AdapterRouter implements CliAdapter {
     this.capabilities = mergeCapabilities(probes);
   }
 
-  async createSession(init: CreateSessionInput): Promise<{ sessionId: string; nativeSessionId?: string | null }> {
+  async createSession(init: CreateSessionInput): Promise<{ sessionId: string; nativeSessionId?: string | null; model?: string | null }> {
     const cli = init.cli ?? "fake";
     const adapter = this.adapterForCli(cli);
     const r = await adapter.createSession(init);
     this.routing.set(r.sessionId, adapter);
     return r;
+  }
+
+  /** 模型目录查询（issue #76 / spec #75）：按 cli 分发的目录级命令（无 sessionId，照 createSession 分发模式） */
+  async listModels(input: ListModelsInput): Promise<ModelEntry[]> {
+    const cli = input.cli ?? "fake";
+    return this.adapterForCli(cli).listModels({ ...input, cli });
   }
 
   /** 会话收养（#13 恢复编排）：按 cli 分发到目标 Adapter 并登记路由（readHistory/resume/interruptTurn 由此可达） */

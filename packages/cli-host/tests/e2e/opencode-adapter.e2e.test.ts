@@ -183,6 +183,7 @@ describe.skipIf(!E2E)("OpenCodeAdapter 真实集成（env-gated）", () => {
       return adapter.createSession({ ...init, cwd });
     },
     sendTurn: (i) => adapter.sendTurn(i),
+    listModels: (i) => adapter.listModels(i),
     interruptTurn: (id) => adapter.interruptTurn(id),
     resolveApproval: (i) => adapter.resolveApproval(i),
     readHistory: (id) => adapter.readHistory(id),

@@ -8,6 +8,7 @@ export * from "./ipc";
 export * from "./kanban";
 export * from "./log";
 export * from "./memory";
+export * from "./models";
 export * from "./residue";
 export * from "./terminal";
 export * from "./transcript";

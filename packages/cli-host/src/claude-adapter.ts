@@ -1,11 +1,11 @@
-// 用途：ClaudeAdapter —— C1 契约的真实 Claude 实现：stream-json 行协议直连（每会话一进程，poc-7 client 演进）、stdio 审批（can_use_tool 控制请求）、interrupt 归类已取消、--resume 跨重启恢复、--settings 会话级 hook 注入产生 verified SkillObservation（t0-02 裁决：无 SDK 备选路径）
+// 用途：ClaudeAdapter —— C1 契约的真实 Claude 实现：stream-json 行协议直连（每会话一进程，poc-7 client 演进）、stdio 审批（can_use_tool 控制请求）、interrupt 归类已取消、--resume 跨重启恢复、--settings 会话级 hook 注入产生 verified SkillObservation（t0-02 裁决：无 SDK 备选路径）；listModels 暂未支持（#76 明确报错，#78 接入）
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { LogKind, AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
+import type { LogKind, AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, ModelEntry, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
 import { transformHookEvents } from "@kanban/tracker";
-import { AdapterError, ExeNotFoundError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
+import { AdapterError, ExeNotFoundError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput } from "./adapter";
 import { resolveClaudeExe } from "./claude/exe";
 import { ClaudeStreamClient, type ClaudeStreamOptions } from "./claude/client";
 import { prepareSessionHookDir, resolveHookNodeBin, tailJsonl, writeSessionSettings, type SessionHookFiles } from "./claude/hook-inject";
@@ -124,7 +124,7 @@ export class ClaudeAdapter implements CliAdapter {
     return exe;
   }
 
-  async createSession(init: CreateSessionInput): Promise<{ sessionId: string; nativeSessionId?: string | null }> {
+  async createSession(init: CreateSessionInput): Promise<{ sessionId: string; nativeSessionId?: string | null; model?: string | null }> {
     const sessionId = `s-${randomUUID().slice(0, 8)}`;
     // native session id 由我方预生成并经 --session-id 强制指定（CLI 2.x 的 system/init 懒发射——首条 user 消息后才到，实测 2.1.317；不能等 init 拿 id）
     const nativeSessionId = randomUUID();
@@ -153,7 +153,13 @@ export class ClaudeAdapter implements CliAdapter {
       if (e instanceof AdapterError) throw e;
       throw new AdapterError("E_INTERNAL", `创建 Claude 会话失败：${e instanceof Error ? e.message : String(e)}`);
     }
-    return { sessionId, nativeSessionId };
+    return { sessionId, nativeSessionId, model: init.model }; // model 透传（--model spawn 参数；未指定 undefined=账号默认未知，issue #76）
+  }
+
+  /** 模型目录（issue #76）：本票明确「暂未支持」——#78 以 spawn 临时进程 initialize 握手读 models 数组替换 */
+  async listModels(_input: ListModelsInput): Promise<ModelEntry[]> {
+    void _input;
+    throw new AdapterError("E_INTERNAL", "claude 模型目录暂未支持（待 initialize 握手 models 数组接入）");
   }
 
   /** 应用重启后的会话收养（#13 恢复编排的接入点）：按 DB 持久化的 native session id 重建状态（无进程；readHistory 直读 transcript，resume 后可续问） */

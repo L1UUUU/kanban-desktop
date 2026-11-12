@@ -25,6 +25,11 @@ class FakeRpc implements CodexRpcClientLike {
   readonly responses: Record<string, unknown> = {};
   /** 测试钩子：thread/read includeTurns 抛错（模拟未 materialized，t0-01 发现 5） */
   failReadIncludeTurns = false;
+  /** 测试钩子：model/list 逐页响应（按调用次序推进，末页重复；驱动 nextCursor 分页，issue #76） */
+  modelListPages: Array<{ data: Array<Record<string, unknown>>; nextCursor: string | null }> = [];
+  /** 测试钩子：model/list 抛错（listModels 失败路径，issue #76） */
+  failModelList: string | null = null;
+  private modelListCalls = 0;
 
   start(): void {
     /* 测试不 spawn */
@@ -37,6 +42,14 @@ class FakeRpc implements CodexRpcClientLike {
     if (method === "initialize") return {};
     if (method === "thread/read" && this.failReadIncludeTurns && (params as { includeTurns?: boolean } | undefined)?.includeTurns) {
       throw new Error("thread is not materialized yet");
+    }
+    if (method === "model/list") {
+      if (this.failModelList) throw new Error(this.failModelList);
+      if (this.modelListPages.length) {
+        const ix = Math.min(this.modelListCalls, this.modelListPages.length - 1);
+        this.modelListCalls += 1;
+        return this.modelListPages[ix];
+      }
     }
     if (this.responses[method] !== undefined) return this.responses[method];
     if (method === "thread/start") {
@@ -133,6 +146,55 @@ describe("CodexAdapter：createSession 与权限映射", () => {
     const { rpc, adapter } = makeAdapter();
     rpc.failThreadStart = "Invalid request: cwd not found";
     await expect(adapter.createSession({ cwd: "C:\\nope" })).rejects.toMatchObject({ code: "E_INTERNAL" });
+  });
+
+  it("createSession 返回实际 model（resolver 结果：显式值/缺省探测值）", async () => {
+    const a = makeAdapter();
+    const r1 = await a.adapter.createSession({ cwd: CWD, model: "gpt-6-luna" });
+    expect(r1.model).toBe("gpt-6-luna");
+    const b = makeAdapter();
+    const r2 = await b.adapter.createSession({ cwd: CWD });
+    expect(r2.model).toBe("gpt-probe-ok"); // 注入 resolver 的缺省值
+  });
+});
+
+describe("CodexAdapter：listModels 模型目录（issue #76 / spec #75）", () => {
+  it("model/list 映射 displayName/description/isDefault；hidden 项不进目录", async () => {
+    const { rpc, adapter } = makeAdapter();
+    rpc.modelListPages = [
+      {
+        data: [
+          { id: "gpt-x", displayName: "GPT X", description: "旗舰模型", hidden: false, isDefault: false },
+          { id: "gpt-secret", displayName: "Secret", description: "隐藏项", hidden: true, isDefault: false },
+          { id: "gpt-d", displayName: "GPT 默认", description: "账号默认", hidden: false, isDefault: true },
+        ],
+        nextCursor: null,
+      },
+    ];
+    const models = await adapter.listModels({ cwd: CWD });
+    expect(models).toEqual([
+      { id: "gpt-x", displayName: "GPT X", description: "旗舰模型", isDefault: false },
+      { id: "gpt-d", displayName: "GPT 默认", description: "账号默认", isDefault: true },
+    ]);
+    expect(rpc.callsOf("model/list")).toEqual([{}]); // 无游标时单页、空参请求
+  });
+
+  it("nextCursor 分页续拉：后续请求携带游标，游标耗尽停；缺 displayName/description 回退 id/空串", async () => {
+    const { rpc, adapter } = makeAdapter();
+    rpc.modelListPages = [
+      { data: [{ id: "m1", displayName: "M1", description: "d1", isDefault: false }], nextCursor: "cur-1" },
+      { data: [{ id: "m2" }], nextCursor: null },
+    ];
+    const models = await adapter.listModels({ cwd: CWD });
+    expect(models).toHaveLength(2);
+    expect(models[1]).toEqual({ id: "m2", displayName: "m2", description: "", isDefault: false });
+    expect(rpc.callsOf("model/list")).toEqual([{}, { cursor: "cur-1" }]);
+  });
+
+  it("model/list 失败抛 AdapterError（中文可定位）", async () => {
+    const { rpc, adapter } = makeAdapter();
+    rpc.failModelList = "rpc -32000: not logged in";
+    await expect(adapter.listModels({ cwd: CWD })).rejects.toMatchObject({ code: "E_INTERNAL" });
   });
 });
 
