@@ -52,10 +52,10 @@ const HISTORY_EVENTS: ChatEvent[] = [
   { type: "message_completed", sessionId: "s-resume", seq: 1, at: "2026-01-01T00:00:01Z", itemId: "i-1", partId: "p-1" },
 ];
 
-/** 装配：已开结构化草稿并填入首条输入的 store */
+/** 装配：已开结构化草稿并填入首条输入与模型的 store（#77 起单一就绪态：未选模型不提交） */
 function storeWithDraft(): ChatStore {
   const store = new ChatStore();
-  store.openDraft({ cli: "claude", cwd: "C:\\repo", title: "草稿会话" });
+  store.openDraft({ cli: "claude", cwd: "C:\\repo", title: "草稿会话", model: "gpt-5.6-luna" });
   store.updateDraft({ input: "首条消息" });
   return store;
 }
@@ -115,12 +115,14 @@ describe("submitDraftChain（session:create+firstMessage 原子链）", () => {
     expect(store.getSnapshot().draft?.submitError?.code).toBe("E_INTERNAL"); // 失败仍留草稿
   });
 
-  it("守卫：无草稿或空输入直接 false，不发任何请求", async () => {
+  it("守卫：无草稿/空输入/未选模型直接 false，不发任何请求", async () => {
     const empty = new ChatStore();
     const { transport, requests } = makeTransport();
     await expect(submitDraftChain(empty, transport)).resolves.toBe(false); // 无草稿
     empty.openDraft({ cli: "fake", cwd: "C:\\demo" });
     await expect(submitDraftChain(empty, transport)).resolves.toBe(false); // 空输入
+    empty.updateDraft({ input: "有输入但模型未就绪" });
+    await expect(submitDraftChain(empty, transport)).resolves.toBe(false); // 单一就绪态：模型未选（列表未就绪/未手输）不提交
     expect(requests).toHaveLength(0);
   });
 });
@@ -129,7 +131,7 @@ describe("resumeChain（readHistory 快照重建 → resume 重连两步编排�
   /** 装配：登记一个断开会话的 store */
   function storeWithDisconnected(): ChatStore {
     const store = new ChatStore();
-    store.registerSession({ sessionId: "s-resume", cli: "claude", title: "历史会话", permMode: "auto", model: "默认模型" });
+    store.registerSession({ sessionId: "s-resume", cli: "claude", title: "历史会话", permMode: "auto" });
     store.updateStatus("s-resume", "disconnected");
     return store;
   }
@@ -191,9 +193,9 @@ describe("resumeChain（readHistory 快照重建 → resume 重连两步编排�
     expect(requests[0]?.channel).toBe("session:readHistory");
   });
 
-  it("参数下发：权限档位/具体模型/首条文本随 session:create 携带；默认模型占位串不下发", async () => {
+  it("参数下发：权限档位/模型/首条文本随 session:create 携带（所见即所发，默认选中项同样下发，issue #77）", async () => {
     const store = storeWithDraft();
-    store.updateDraft({ permMode: "full", model: "gpt-5.6-luna", input: "带参数首条" });
+    store.updateDraft({ permMode: "full", model: "gpt-6-luna", input: "带参数首条" });
     const requests: IpcRequest[] = [];
     const transport: ChatTransport = {
       invoke: (req) => {
@@ -206,13 +208,12 @@ describe("resumeChain（readHistory 快照重建 → resume 重连两步编排�
     };
     await expect(submitDraftChain(store, transport)).resolves.toBe(true);
     const create = requests.find((r) => r.channel === "session:create") as IpcRequest & { permMode?: string; model?: string; firstMessage?: string };
-    expect(create).toMatchObject({ permMode: "full", model: "gpt-5.6-luna", firstMessage: "带参数首条" });
-    // 占位模型不下发：新草稿默认 DEFAULT_MODEL → 请求无 model 键
+    expect(create).toMatchObject({ permMode: "full", model: "gpt-6-luna", firstMessage: "带参数首条" });
+    // 新草稿未选模型（目录未就绪态）：守卫直接拦截，不发出请求（「默认占位不下发」语义已被就绪态阻塞取代）
     store.openDraft({ cli: "fake", cwd: "C:\\demo" });
     store.updateDraft({ input: "第二条" });
-    await submitDraftChain(store, transport);
-    const create2 = requests.filter((r) => r.channel === "session:create")[1] as IpcRequest & { model?: string };
-    expect(create2.model).toBeUndefined();
+    await expect(submitDraftChain(store, transport)).resolves.toBe(false);
+    expect(requests.filter((r) => r.channel === "session:create")).toHaveLength(1);
   });
 });
 
@@ -297,7 +298,7 @@ describe("openSessionDraftAction 互斥矩阵（issue #71 S5：全局任一时�
 
   it("fromSessionId：cwd 取该会话（认证失效卡「打开 PTY 终端」），projectId 随会话", () => {
     const { env } = makeEnv();
-    env.store.registerSession({ sessionId: "s-auth", cli: "claude", title: "认证会话", permMode: "auto", model: "默认模型", projectId: "p9", cwd: "C:\\auth-dir" });
+    env.store.registerSession({ sessionId: "s-auth", cli: "claude", title: "认证会话", permMode: "auto", projectId: "p9", cwd: "C:\\auth-dir" });
     expect(openSessionDraftAction(env, { projectId: "ignored", cli: "pty", fromSessionId: "s-auth" })).toEqual({ ok: true, replaced: null });
     const pty = env.drafts.getSnapshot();
     expect(pty?.cwd).toBe("C:\\auth-dir"); // 会话 cwd，非 resolveCwd 结果
@@ -306,7 +307,7 @@ describe("openSessionDraftAction 互斥矩阵（issue #71 S5：全局任一时�
 
   it("fromSessionId 会话无 cwd（不可建终端的守卫路径）：拒绝且提示", () => {
     const { env, notices } = makeEnv();
-    env.store.registerSession({ sessionId: "s-nocwd", cli: "claude", title: "无目录会话", permMode: "auto", model: "默认模型", projectId: null, cwd: null });
+    env.store.registerSession({ sessionId: "s-nocwd", cli: "claude", title: "无目录会话", permMode: "auto", projectId: null, cwd: null });
     expect(openSessionDraftAction(env, { projectId: null, cli: "pty", fromSessionId: "s-nocwd" })).toEqual({ ok: false, reason: "project-missing" });
     expect(notices).toHaveLength(1);
     expect(env.drafts.getSnapshot()).toBeNull();
@@ -324,7 +325,7 @@ describe("openSessionDraftAction 互斥矩阵（issue #71 S5：全局任一时�
 
   it("switchToAction：切会话双丢弃（结构化 + PTY 含 xterm 释放）并激活目标", () => {
     const { env } = makeEnv();
-    env.store.registerSession({ sessionId: "s-a", cli: "claude", title: "A", permMode: "auto", model: "默认模型" });
+    env.store.registerSession({ sessionId: "s-a", cli: "claude", title: "A", permMode: "auto" });
     openSessionDraftAction(env, { projectId: null, cli: "pty" }); // PTY 草稿就位
     switchToAction(env, "s-a");
     openSessionDraftAction(env, { projectId: "p1", cli: "claude" }); // 结构化草稿就位

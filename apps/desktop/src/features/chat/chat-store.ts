@@ -7,9 +7,6 @@ import type { AssistantItem, SessionView, ToolItem } from "./session-view";
 
 export type { AssistantItem, ChatItem, PendingApproval, ResumeState, SessionView, ToolItem, UserItem } from "./session-view";
 
-/** 「默认模型」UI 占位串（composer 候选/草稿缺省/恢复与占位会话模型统一数据源；占位值不下发，后端按各 CLI 探测链自选） */
-export const DEFAULT_MODEL = "默认模型";
-
 /** #46 会话创建失败信息（session:create 失败的错误形状：错误卡数据源；#59 起由草稿 submitError 构造） */
 export interface CreateFailure {
   cli: CliKind;
@@ -42,9 +39,9 @@ export interface DraftSession {
   title: string;
   cwd: string;
   projectId: string | null;
-  /** 权限档位/默认模型：随首条消息一并下发 */
+  /** 权限档位/模型：随首条消息一并下发（model undefined = 未选择/未就绪，就绪后由 combobox 默认选中） */
   permMode: PermMode;
-  model: string;
+  model: string | undefined;
   requirementId?: string;
   /** 首条消息输入（提交失败保留；丢弃草稿即失） */
   input: string;
@@ -59,7 +56,8 @@ export interface SessionMeta {
   cli: string;
   title: string;
   permMode: PermMode;
-  model: string;
+  /** 模型：创建时选定值；省略/undefined = 未选择（PTY 终端/恢复会话等无模型路径，恢复 chip 显示层派生，issue #77） */
+  model?: string | undefined;
   projectId?: string | null;
   cwd?: string | null;
   dirIdentity?: SessionRow["dirIdentity"];
@@ -161,7 +159,8 @@ export class ChatStore {
       title: row.title ?? "历史会话",
       status: "disconnected",
       permMode: row.permMode ?? "auto",
-      model: DEFAULT_MODEL,
+      // DB 无 model 列：恢复会话模型为空（undefined），chip 显示由显示层派生默认名（不写 store，issue #77）
+      model: undefined,
       projectId: row.projectId,
       cwd: row.cwd,
       dirIdentity: row.dirIdentity,
@@ -196,7 +195,7 @@ export class ChatStore {
       cwd: meta.cwd,
       projectId: meta.projectId ?? null,
       permMode: meta.permMode ?? "auto",
-      model: meta.model ?? DEFAULT_MODEL,
+      model: meta.model,
       requirementId: meta.requirementId,
       input: "",
       replacedHint: replaced,
@@ -206,7 +205,7 @@ export class ChatStore {
     return replaced;
   }
 
-  /** #59：草稿本地编辑（首条消息输入/权限档位/默认模型） */
+  /** #59：草稿本地编辑（首条消息输入/权限档位/模型） */
   updateDraft(patch: Partial<Pick<DraftSession, "input" | "permMode" | "model">>): void {
     if (!this.draft) return;
     Object.assign(this.draft, patch);
@@ -457,7 +456,7 @@ export class ChatStore {
         title: "未知会话",
         status: "idle",
         permMode: "auto",
-        model: DEFAULT_MODEL,
+        model: undefined, // 事件先至占位：模型未知（注册后回填，issue #77）
         projectId: null,
         cwd: null,
         dirIdentity: "none",

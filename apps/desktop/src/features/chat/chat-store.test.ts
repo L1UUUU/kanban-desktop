@@ -10,7 +10,7 @@ function ev(seq: number, e: ChatEventSeed): ChatEvent {
 
 function makeStore() {
   const store = new ChatStore();
-  store.registerSession({ sessionId: "s-1", cli: "fake", title: "演示会话", permMode: "auto", model: "默认模型" });
+  store.registerSession({ sessionId: "s-1", cli: "fake", title: "演示会话", permMode: "auto" });
   return store;
 }
 
@@ -35,6 +35,7 @@ describe("chat-store 恢复会话登记（#7 重启恢复）", () => {
     const s = store.getSession("s-old")!;
     expect(s.status).toBe("disconnected");
     expect(s).toMatchObject({ cli: "claude", title: "新会话 · Claude", projectId: "p-1", permMode: "ask" });
+    expect(s.model, "DB 无 model 列：恢复会话模型为空（chip 显示层派生默认名，issue #77）").toBeUndefined();
     expect(s.dirIdentity).toBe("worktree");
     expect(s.worktreeName).toBe("poc7");
     expect(s.items).toHaveLength(0);
@@ -47,7 +48,7 @@ describe("chat-store 恢复会话登记（#7 重启恢复）", () => {
       cli: "codex",
       title: "新会话 · Codex",
       permMode: "auto",
-      model: "默认模型",
+      model: "fake-standard",
       projectId: "p-1",
       cwd: "C:\\repo",
       dirIdentity: "main",
@@ -141,7 +142,7 @@ describe("chat-store 事件归并", () => {
 
   it("用户消息为 renderer 本地回显（ChatEvent 无 user 成员）；未知会话事件自动建占位会话", () => {
     const store = new ChatStore();
-    store.registerSession({ sessionId: "s-1", cli: "fake", title: "A", permMode: "auto", model: "默认模型" });
+    store.registerSession({ sessionId: "s-1", cli: "fake", title: "A", permMode: "auto" });
     store.appendUserMessage("s-1", "帮我拆类型");
     expect(store.getSession("s-1")!.items[0]).toMatchObject({ kind: "user", text: "帮我拆类型" });
     store.applyEvent(
@@ -152,11 +153,11 @@ describe("chat-store 事件归并", () => {
 
   it("快照稳定性：无变更时 getSnapshot 引用不变；active 会话切换生效", () => {
     const store = new ChatStore();
-    store.registerSession({ sessionId: "s-1", cli: "fake", title: "A", permMode: "auto", model: "默认模型" });
+    store.registerSession({ sessionId: "s-1", cli: "fake", title: "A", permMode: "auto" });
     const snap1 = store.getSnapshot();
     const snap2 = store.getSnapshot();
     expect(snap1).toBe(snap2);
-    store.registerSession({ sessionId: "s-2", cli: "fake", title: "B", permMode: "auto", model: "默认模型" });
+    store.registerSession({ sessionId: "s-2", cli: "fake", title: "B", permMode: "auto" });
     expect(store.getSnapshot().activeId).toBe("s-2");
     store.setActive("s-1");
     expect(store.getSnapshot().activeId).toBe("s-1");
@@ -364,7 +365,7 @@ describe("chat-store 草稿生命周期（#59：点「＋」只开草稿不落�
 
   it("切会话（setActive）自动丢弃草稿；discardDraft 显式丢弃后快照为 null", () => {
     const store = makeStore();
-    store.registerSession({ sessionId: "s-2", cli: "fake", title: "另一会话", permMode: "auto", model: "默认模型" });
+    store.registerSession({ sessionId: "s-2", cli: "fake", title: "另一会话", permMode: "auto" });
     // registerSession 会激活 s-2；先回 s-1 再开草稿
     store.setActive("s-1");
     store.openDraft(META);
@@ -407,7 +408,7 @@ describe("chat-store 草稿生命周期（#59：点「＋」只开草稿不落�
 // ========== #58 会话行移除（归档/删除编排的 renderer 侧；spec #57 D 节） ==========
 describe("removeSession（#58）", () => {
   function reg(store: ChatStore, id: string): void {
-    store.registerSession({ sessionId: id, cli: "fake", title: id, permMode: "auto", model: "默认模型" });
+    store.registerSession({ sessionId: id, cli: "fake", title: id, permMode: "auto" });
   }
 
   it("移除行；激活会话被移除时切到下一条，无则上一条，全无则空态", () => {

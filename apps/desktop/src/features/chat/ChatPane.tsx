@@ -2,6 +2,7 @@
 import { useEffect, useRef } from "react";
 import type { ApprovalDecision } from "@kanban/ipc-schema";
 import type { SessionView } from "./chat-store";
+import type { ModelCatalog } from "./model-catalog";
 import { ApprovalCard } from "./components/ApprovalCard";
 import { Composer, type ComposerActions } from "./components/Composer";
 import { ErrorBanner } from "./components/ErrorBanner";
@@ -22,12 +23,15 @@ export interface ChatPaneActions extends ComposerActions {
 
 export function ChatPane({
   session,
+  models,
   version,
   conflictTitles,
   configPath = null,
   actions,
 }: {
   session: SessionView | null;
+  /** 模型目录控制器（issue #77）：composer 挂载预取与 combobox 数据源 */
+  models: ModelCatalog;
   version: number;
   /** 主仓库并行冲突会话名（≥2 活跃时非空；仅提示不阻止，spec I-4） */
   conflictTitles: string[] | null;
@@ -133,7 +137,7 @@ export function ChatPane({
           />
         ) : null}
       </div>
-      <Composer session={session} actions={actions} />
+      <Composer session={session} models={models} actions={actions} />
     </section>
   );
 }

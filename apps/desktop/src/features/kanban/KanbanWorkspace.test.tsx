@@ -5,12 +5,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AdapterEvent, CliKind, IpcRequest, IpcResult, RequirementCardRow, TerminalEvent, TrackerChangeWire } from "@kanban/ipc-schema";
+import type { AdapterEvent, CliKind, IpcRequest, IpcResult, ModelsRequest, RequirementCardRow, TerminalEvent, TrackerChangeWire } from "@kanban/ipc-schema";
 import { FakeAdapter, VirtualClock } from "@kanban/cli-host";
 import { TrackerEngine } from "@kanban/tracker";
 import { openDatabase } from "../../../electron/main/db";
 import { createAdapterEventHandler } from "../../../electron/main/adapter-events";
-import { handleIpc, type IpcDeps } from "../../../electron/main/ipc";
+import { handleIpc, handleModelsIpc, type IpcDeps } from "../../../electron/main/ipc";
 import { createPtyHost, type PtyLike, type PtyProcess } from "../../../electron/main/pty-host";
 import { createAdapterSessionProcesses, createSessionLifecycle } from "../../../electron/main/session-lifecycle";
 import { ProjectStore } from "../../../electron/main/project-store";
@@ -23,12 +23,17 @@ import type { ChatTransport } from "../../lib/kanban-api";
 const openDbs: Array<{ close(): void }> = [];
 
 /** #59 草稿创建会话：打开草稿并发送首条消息（原 createSession 直建的草稿语义等价物；text 可携带剧本关键词） */
-async function createViaDraft(ctl: ChatController, cli: CliKind, opts?: { projectId?: string | null }, text = "默认演示"): Promise<void> {
-  // issue #71 S4：经 openSessionDraft 单入口（cwd 由 projectId 解析），updateDraft 为收窄动作
-  const r = ctl.openSessionDraft({ projectId: opts?.projectId ?? null, cli });
+async function createViaDraft(ctl: () => ChatController, cli: CliKind, opts?: { projectId?: string | null }, text = "默认演示"): Promise<void> {
+  // issue #71 S4：经 openSessionDraft 单入口（cwd 由 projectId 解析），updateDraft 为收窄动作；#77 单一就绪态：待目录就绪自动选中模型后提交
+  const r = ctl().openSessionDraft({ projectId: opts?.projectId ?? null, cli });
   if (!r.ok) throw new Error(`草稿打开失败：${r.reason}`);
-  ctl.updateDraft({ input: text });
-  await ctl.submitDraft();
+  ctl().updateDraft({ input: text });
+  await waitFor(() => {
+    const d = ctl().draft;
+    if (d?.kind !== "structured") throw new Error("结构化草稿不在位");
+    expect(d.data.model).toBeDefined();
+  });
+  await ctl().submitDraft();
 }
 
 // jsdom 缺 ResizeObserver：xterm 服务需要（生产 Chromium 原生具备）
@@ -141,6 +146,7 @@ function makeTransport(
   };
   return {
     invoke: (req: IpcRequest) => handleIpc(deps, req),
+    invokeModels: (req: ModelsRequest) => handleModelsIpc(deps, req),
     onEvent: (h) => {
       chatListeners.add(h);
       return () => {
@@ -282,7 +288,7 @@ describe("五列看板：列映射/建卡/移列/徽标/会话数/删除（#18�
     await screen.findAllByText("demo-repo");
     await t.flush(); // 冲刷 passive effects：holder 里的 controller 须携带最新项目列表（openSessionDraft 依赖）
     await act(async () => {
-      await createViaDraft(t.ctl(), "claude", { projectId: await currentProjectId() });
+      await createViaDraft(t.ctl, "claude", { projectId: await currentProjectId() });
     });
     await screen.findByText("新会话 · Claude");
     t.advance(); // 首条 turn 完成回空闲（供后续用例继续发消息）
@@ -359,7 +365,7 @@ describe("五列看板：列映射/建卡/移列/徽标/会话数/删除（#18�
     await bootWithProjectSession();
     // 再建第二个项目会话（link 用）
     await act(async () => {
-      await createViaDraft(t.ctl(), "claude", { projectId: await currentProjectId() });
+      await createViaDraft(t.ctl, "claude", { projectId: await currentProjectId() });
     });
     enterKanban();
     fireEvent.click(within(col("none")).getByTitle("手动新建需求（归属当前项目）"));
@@ -427,7 +433,7 @@ describe("按项目过滤（#18；S2-08）", () => {
     const listA = await invoke(t, { channel: "project:list" });
     const pidA = listA.ok ? listA.currentProjectId ?? "" : "";
     await act(async () => {
-      await createViaDraft(t.ctl(), "claude", { projectId: pidA }, "/design-feature verified");
+      await createViaDraft(t.ctl, "claude", { projectId: pidA }, "/design-feature verified");
     });
     await screen.findByText("新会话 · Claude");
     t.advance();
@@ -478,7 +484,7 @@ describe("重启再水化（#18；S2-17）", () => {
     const listA = await invoke(t1, { channel: "project:list" });
     const pid = listA.ok ? listA.currentProjectId ?? "" : "";
     await act(async () => {
-      await createViaDraft(t1.ctl(), "claude", { projectId: pid }, "/design-feature verified");
+      await createViaDraft(t1.ctl, "claude", { projectId: pid }, "/design-feature verified");
     });
     await screen.findByText("新会话 · Claude");
     act(() => {

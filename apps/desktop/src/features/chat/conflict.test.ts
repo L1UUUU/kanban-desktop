@@ -10,7 +10,7 @@ function view(over: Partial<SessionView> & { sessionId: string }): SessionView {
     title: over.title ?? over.sessionId,
     status: "idle",
     permMode: "auto",
-    model: "默认模型",
+    model: undefined,
     projectId: "p1",
     cwd: "C:\\repo",
     dirIdentity: "main",

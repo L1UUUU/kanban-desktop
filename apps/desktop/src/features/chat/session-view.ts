@@ -45,9 +45,9 @@ export interface SessionView {
   cli: string;
   title: string;
   status: SessionStatus;
-  /** 权限档位/模型为 renderer 本地会话状态（createSession 传入；chip/select 切换） */
+  /** 权限档位为 renderer 本地会话状态；模型为创建时选定值（chip 切换），undefined = 未选择/未就绪（恢复会话：显示层派生默认名，issue #77） */
   permMode: PermMode;
-  model: string;
+  model: string | undefined;
   /** 会话挂靠项目（null=无项目演示会话；侧栏按当前项目过滤） */
   projectId: string | null;
   /** 会话工作目录与目录身份徽标数据（spec I-3） */

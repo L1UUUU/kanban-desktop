@@ -5,12 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AdapterEvent, CliKind, IpcRequest, TerminalEvent, TrackerChangeWire } from "@kanban/ipc-schema";
+import type { AdapterEvent, CliKind, IpcRequest, ModelsRequest, TerminalEvent, TrackerChangeWire } from "@kanban/ipc-schema";
 import { FakeAdapter, VirtualClock } from "@kanban/cli-host";
 import { TrackerEngine } from "@kanban/tracker";
 import { openDatabase } from "../../../electron/main/db";
 import { createAdapterEventHandler } from "../../../electron/main/adapter-events";
-import { handleIpc, type IpcDeps } from "../../../electron/main/ipc";
+import { handleIpc, handleModelsIpc, type IpcDeps } from "../../../electron/main/ipc";
 import { createPtyHost, type PtyLike, type PtyProcess } from "../../../electron/main/pty-host";
 import { createAdapterSessionProcesses, createSessionLifecycle } from "../../../electron/main/session-lifecycle";
 import { ProjectStore } from "../../../electron/main/project-store";
@@ -25,12 +25,17 @@ import { RelatedSessionsArea } from "./RelatedSessionsArea";
 const openDbs: Array<{ close(): void }> = [];
 
 /** #59 草稿创建会话：打开草稿并发送首条消息（原 createSession 直建的草稿语义等价物；text 可携带剧本关键词） */
-async function createViaDraft(ctl: ChatController, cli: CliKind, opts?: { projectId?: string | null }, text = "默认演示"): Promise<void> {
-  // issue #71 S4：经 openSessionDraft 单入口（cwd 由 projectId 解析），updateDraft 为收窄动作
-  const r = ctl.openSessionDraft({ projectId: opts?.projectId ?? null, cli });
+async function createViaDraft(ctl: () => ChatController, cli: CliKind, opts?: { projectId?: string | null }, text = "默认演示"): Promise<void> {
+  // issue #71 S4：经 openSessionDraft 单入口（cwd 由 projectId 解析），updateDraft 为收窄动作；#77 单一就绪态：待目录就绪自动选中模型后提交
+  const r = ctl().openSessionDraft({ projectId: opts?.projectId ?? null, cli });
   if (!r.ok) throw new Error(`草稿打开失败：${r.reason}`);
-  ctl.updateDraft({ input: text });
-  await ctl.submitDraft();
+  ctl().updateDraft({ input: text });
+  await waitFor(() => {
+    const d = ctl().draft;
+    if (d?.kind !== "structured") throw new Error("结构化草稿不在位");
+    expect(d.data.model).toBeDefined();
+  });
+  await ctl().submitDraft();
 }
 
 // jsdom 缺 ResizeObserver/matchMedia：xterm 服务需要（生产 Chromium 原生具备；PTY 会话激活时 TerminalPanel 挂载）
@@ -140,6 +145,7 @@ function makeTransport(
   };
   return {
     invoke: (req: IpcRequest) => handleIpc(deps, req),
+    invokeModels: (req: ModelsRequest) => handleModelsIpc(deps, req),
     onEvent: (h) => {
       chatListeners.add(h);
       return () => {
@@ -242,7 +248,7 @@ describe("详情面板关联区（#20；原型一致项 4 关联区）", () => {
     await screen.findAllByText("demo-repo");
     await t.flush(); // 冲刷 passive effects：holder 里的 controller 须携带最新项目列表（openSessionDraft 依赖）
     await act(async () => {
-      await createViaDraft(t.ctl(), "claude", { projectId: await currentProjectId() }, "/design-feature verified");
+      await createViaDraft(t.ctl, "claude", { projectId: await currentProjectId() }, "/design-feature verified");
     });
     await screen.findByText("新会话 · Claude");
     t.advance();
@@ -260,7 +266,7 @@ describe("详情面板关联区（#20；原型一致项 4 关联区）", () => {
   async function createOpencodeSession(): Promise<string> {
     const projectId = await currentProjectId();
     await act(async () => {
-      await createViaDraft(t.ctl(), "opencode", { projectId });
+      await createViaDraft(t.ctl, "opencode", { projectId });
     });
     await screen.findByText("新会话 · OpenCode");
     const s = t.ctl().sessions.find((x) => x.cli === "opencode");
@@ -440,7 +446,7 @@ describe("link 拒绝原因直达呈现（三类，#20）", () => {
     title: `会话 ${sessionId}`,
     status: "idle",
     permMode: "auto",
-    model: "默认模型",
+    model: undefined,
     projectId,
     cwd: null,
     dirIdentity: "none",

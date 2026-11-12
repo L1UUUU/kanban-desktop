@@ -4,6 +4,7 @@ import {
   ipcRequestSchema,
   memoryEventSchema,
   memoryRequestSchema,
+  modelsRequestSchema,
   terminalEventSchema,
   trackerChangeSchema,
   type AdapterEvent,
@@ -12,6 +13,8 @@ import {
   type MemoryEventWire,
   type MemoryRequest,
   type MemoryResult,
+  type ModelsRequest,
+  type ModelsResult,
   type TerminalEvent,
   type TrackerChangeWire,
 } from "@kanban/ipc-schema";
@@ -31,6 +34,8 @@ export interface ChatTransport {
   invokeMemory?(req: MemoryRequest): Promise<MemoryResult>;
   /** #33：memory 事件订阅（batch-status 批次状态 / chunk-progress 段进度） */
   onMemoryEvent?(handler: (event: MemoryEventWire) => void): () => void;
+  /** #77：models:ipc 请求（models:list 按 CLI 拉取模型目录；可选——未接的旧 fake 由模型目录降级为错误态手输兜底） */
+  invokeModels?(req: ModelsRequest): Promise<ModelsResult>;
 }
 
 /** dev 态出站校验（#55 迁移）：失败经统一日志记 warn 后原样重抛，保持既有 dev-only throw 语义 */
@@ -85,6 +90,10 @@ export function createWindowTransport(): ChatTransport | null {
     invokeMemory: async (req) => {
       if (import.meta.env.DEV) devCheck(() => memoryRequestSchema.parse(req), "出站 memory 请求");
       return api.invokeMemory(req);
+    },
+    invokeModels: async (req) => {
+      if (import.meta.env.DEV) devCheck(() => modelsRequestSchema.parse(req), "出站 models 请求");
+      return api.invokeModels(req);
     },
     onMemoryEvent: (handler) =>
       api.onMemoryEvent((event: MemoryEventWire) => {

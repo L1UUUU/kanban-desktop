@@ -171,6 +171,7 @@ export function ChatWorkspace({
           // #59：结构化会话草稿面板
           <DraftPane
             draft={controller.draft.data}
+            models={controller.models}
             configPath={configPath}
             actions={{
               onSubmit: controller.submitDraft,
@@ -186,6 +187,7 @@ export function ChatWorkspace({
       ) : (
         <ChatPane
           session={controller.activeSession}
+          models={controller.models}
           version={controller.version}
           conflictTitles={conflictTitles}
           configPath={configPath}

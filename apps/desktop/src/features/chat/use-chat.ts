@@ -1,9 +1,10 @@
 // 用途：会话控制器 hook（issue #71：内聚两类草稿与全部会话写路径）—— transport → ChatStore 接线：启动恢复（session:list 断开会话登记）+ 无项目时 boot 演示草稿（#59：发出首条消息才创建会话，空会话永不进历史）+ 全部会话始终归并（切会话不中断，一致项 7）；openSessionDraft 为互斥属主唯一安装点（全局至多一个草稿、两类互相替换、replacedHint 单源）；TerminalDraftController/TerminalManager/terminal:event 订阅隐藏在 seam 之后（use-terminals.ts 已消亡）
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { AdapterEvent, ApprovalDecision, ChatEvent, CliKind, IpcResult, PermMode, ProjectRow, SessionRow, SessionStatus, TerminalCommand } from "@kanban/ipc-schema";
+import type { AdapterEvent, ApprovalDecision, ChatEvent, CliKind, IpcResult, ModelsResult, PermMode, ProjectRow, SessionRow, SessionStatus, TerminalCommand } from "@kanban/ipc-schema";
 import type { ChatTransport } from "../../lib/kanban-api";
 import { createScopedLogger } from "../../lib/logger";
-import { ChatStore, DEFAULT_MODEL, type DraftSession, type SessionMeta, type SessionView } from "./chat-store";
+import { ChatStore, type DraftSession, type SessionMeta, type SessionView } from "./chat-store";
+import { ModelCatalog } from "./model-catalog";
 import { TerminalDraftController, type TerminalDraftSnapshot } from "../terminal/terminal-draft";
 import { TerminalManager } from "../terminal/TerminalManager";
 
@@ -78,6 +79,8 @@ export interface ChatController extends ChatControllerActions, SessionRegistry {
   version: number;
   /** 当前草稿（判别联合；null=无；中央区草稿路由两分支的数据源） */
   draft: SessionDraft | null;
+  /** 模型目录控制器（issue #77）：DraftPane/Composer 挂载预取与 ModelCombobox 数据源 */
+  models: ModelCatalog;
   /** PTY 终端数据源与显式终止入口（TerminalWorkspace 渲染挂点） */
   terminals: { manager: TerminalManager; kill(id: string): void };
 }
@@ -197,16 +200,15 @@ export function discardAllDraftsAction(env: Omit<SessionDraftEnv, "resolveCwd" |
  */
 export async function submitDraftChain(store: ChatStore, transport: ChatTransport): Promise<boolean> {
   const d = store.getSnapshot().draft;
-  if (!d || d.input.trim().length === 0) return false;
-  // 「默认模型」是 UI 占位串不下发（后端按各 CLI 探测链自选）
-  const model = d.model === DEFAULT_MODEL ? undefined : d.model;
+  // 单一就绪态守卫：模型未选（列表未就绪/未手输兜底）不提交——UI 发送钮同步禁用，此处为链路兜底
+  if (!d || d.input.trim().length === 0 || !d.model) return false;
   const r = await transport.invoke({
     channel: "session:create",
     cli: d.cli,
     cwd: d.cwd,
     projectId: d.projectId ?? undefined,
     title: d.title,
-    ...(model ? { model } : {}),
+    model: d.model, // 所见即所发：默认选中项同样真实下发（无占位串）
     permMode: d.permMode,
     requirementId: d.requirementId,
     firstMessage: d.input,
@@ -286,6 +288,15 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
   const demoCwd = deps.demoCwd;
   // useState 初始化器保证每 hook 实例一个 store（渲染期可安全读取）
   const [store] = useState(() => new ChatStore());
+  // 模型目录控制器（issue #77）：实例随控制器存活（App 生命周期即模块级效果），按 cli 缓存一次；
+  // shortcut: 闭包捕获首帧 transport（与下方 drafts/manager 同款，App 经 useMemo 同步建桥）；复查：transport 出现「后可用」路径时一并改造
+  const [models] = useState(
+    () =>
+      new ModelCatalog((req) =>
+        transport?.invokeModels?.(req) ??
+        Promise.resolve({ ok: false, error: { code: "E_INTERNAL", message: "transport 不可用" } } satisfies ModelsResult),
+      ),
+  );
   const snap = useSyncExternalStore(store.subscribe, store.getSnapshot);
   // PTY 草稿机制（issue #71 S3 吸收自 use-terminals）：草稿控制器与多路复用管理器为本 hook 实现细节
   // shortcut: drafts/manager 闭包直接捕获首帧 transport 与 store（App 经 useMemo 同步建桥、测试首帧给定，身份稳定；
@@ -308,7 +319,7 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
             cli: "pty",
             title: ev.ok.title ?? "终端",
             permMode: "auto",
-            model: DEFAULT_MODEL,
+            // PTY 无模型概念：model 保持 undefined（issue #77 清理，不写占位串）
             projectId: ev.opts.projectId,
             cwd: ev.opts.cwd,
             dirIdentity: ev.ok.dirIdentity ?? "none",
@@ -480,6 +491,7 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
     activeId: snap.activeId,
     version: snap.version,
     draft,
+    models,
     terminals,
   };
 }

@@ -5,11 +5,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AdapterEvent, CliKind, ErrorCode, IpcRequest, IpcResult, TerminalEvent } from "@kanban/ipc-schema";
-import { AdapterError, FakeAdapter, VirtualClock, type SendTurnInput } from "@kanban/cli-host";
+import type { AdapterEvent, CliKind, ErrorCode, IpcRequest, IpcResult, ModelEntry, ModelsRequest, ModelsResult, TerminalEvent } from "@kanban/ipc-schema";
+import { AdapterError, FakeAdapter, VirtualClock, type CreateSessionInput, type ListModelsInput, type SendTurnInput } from "@kanban/cli-host";
 import { TrackerEngine } from "@kanban/tracker";
 import { openDatabase } from "../../../electron/main/db";
-import { handleIpc, type IpcDeps } from "../../../electron/main/ipc";
+import { handleIpc, handleModelsIpc, type IpcDeps } from "../../../electron/main/ipc";
 import { createPtyHost, type PtyLike, type PtyProcess } from "../../../electron/main/pty-host";
 import { createAdapterSessionProcesses, createSessionLifecycle } from "../../../electron/main/session-lifecycle";
 import { ProjectStore } from "../../../electron/main/project-store";
@@ -140,6 +140,8 @@ function makeTransport(
   };
   return {
     invoke: (req: IpcRequest) => handleIpc(deps, req),
+    // #77 模型目录独立通道（models:ipc）：与生产同经 main 侧 handler 路由到 adapter.listModels
+    invokeModels: (req: ModelsRequest) => handleModelsIpc(deps, req),
     onEvent: (h: (e: AdapterEvent) => void) => adapter.subscribe(h),
     onTerminalEvent: (h: (e: TerminalEvent) => void) => {
       terminalListeners.add(h);
@@ -154,6 +156,12 @@ function makeTransport(
 
 // 测试注入的演示 cwd（等价生产 AppInfo.fakeDemoCwd：Main 经 KANBAN_FAKE_DEMO_CWD/主目录注入，renderer 不内置任何路径）
 const DEMO_CWD = join(tmpdir(), "kb-fake-demo");
+
+/** 桩 transport 的模型目录应答（#77：单一就绪态——目录就绪默认选中后发送钮才可用） */
+const STUB_MODELS: ModelsResult = {
+  ok: true,
+  models: [{ id: "fake-standard", displayName: "Fake 标准模型", description: "", isDefault: true }],
+};
 
 /** 挂载工作区（含真实 useProjects host）并暴露 controller 与 transport（供测试直接驱动动作/取项目 id） */
 function mount(transport?: ChatTransport, opts?: { configPath?: string | null; pick?: () => Promise<string | null> }) {
@@ -204,17 +212,23 @@ function send(text: string): void {
   fireEvent.click(screen.getByRole("button", { name: "发送 ➤" }));
 }
 
-/** #59 经草稿建立会话：打开草稿 → 输入首条消息 → 提交（原 createSession 直建的草稿语义等价物；issue #71 S4 起经 openSessionDraft 单入口） */
+/** #59 经草稿建立会话：打开草稿 → 输入首条消息 → 提交（原 createSession 直建的草稿语义等价物；issue #71 S4 起经 openSessionDraft 单入口；#77 起等待模型目录就绪自动选中后提交；ctl 传访问器——waitFor 轮询需读最新渲染快照） */
 async function createViaDraft(
-  ctl: ChatController,
+  ctl: () => ChatController,
   cli: CliKind,
   opts?: { projectId?: string | null; requirementId?: string },
   text = "默认演示",
 ): Promise<void> {
-  const r = ctl.openSessionDraft({ projectId: opts?.projectId ?? null, cli, requirementId: opts?.requirementId });
+  const r = ctl().openSessionDraft({ projectId: opts?.projectId ?? null, cli, requirementId: opts?.requirementId });
   if (!r.ok) throw new Error(`草稿打开失败：${r.reason}`);
-  ctl.updateDraft({ input: text });
-  await ctl.submitDraft();
+  ctl().updateDraft({ input: text });
+  // 单一就绪态（#77）：模型目录就绪并自动选中默认项（combobox effect 写回草稿）后才可提交
+  await waitFor(() => {
+    const d = ctl().draft;
+    if (d?.kind !== "structured") throw new Error("结构化草稿不在位");
+    expect(d.data.model).toBeDefined();
+  });
+  await ctl().submitDraft();
 }
 
 /** 注册一个临时项目目录并返回其 id（真实 CLI 草稿需挂已注册项目——cwd 经 openSessionDraft 解析） */
@@ -228,11 +242,13 @@ async function registerProject(t: { transport: ChatTransport; flush: () => Promi
   return r.currentProjectId;
 }
 
-/** #59 点项目行「＋」菜单选 CLI 后在草稿面板发首条消息（草稿 → 会话出现在侧栏） */
+/** #59 点项目行「＋」菜单选 CLI 后在草稿面板发首条消息（草稿 → 会话出现在侧栏；#77 起待模型就绪可发） */
 async function createViaMenu(cliLabel = "Claude", text = "默认演示"): Promise<void> {
   fireEvent.click(screen.getByRole("button", { name: "＋" }));
   fireEvent.click(screen.getByText(cliLabel));
   await act(async () => {
+    // 模型目录就绪（输入框离开加载态）后发送钮可用
+    await waitFor(() => expect((screen.getByRole("combobox") as HTMLInputElement).value).not.toBe("模型列表加载中…"));
     send(text);
   });
   await screen.findByText(`新会话 · ${cliLabel}`);
@@ -411,7 +427,7 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     expect(screen.queryByTestId("error-card")).toBeNull();
   });
 
-  it("composer（一致项 6）：权限 chip 三档切换（菜单含说明文案）+ 模型选择", async () => {
+  it("composer（一致项 6）：权限 chip 三档切换（菜单含说明文案）+ 模型 combobox（#77：默认选中带角标，点选候选回填）", async () => {
     const t = mount();
     await t.flush();
     expect(screen.getByText("⚡ 权限：自动 ▾")).toBeTruthy();
@@ -428,46 +444,43 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     fireEvent.click(screen.getByText("🔒 权限：请求 ▾"));
     fireEvent.click(screen.getByText("🔓 完全访问"));
     expect(screen.getByText("🔓 权限：完全访问 ▾")).toBeTruthy();
-    // 模型选择
-    const model = screen.getByRole("combobox");
-    expect((model as HTMLSelectElement).value).toBe("默认模型");
-    fireEvent.change(model, { target: { value: "gpt-5.6-luna" } });
-    expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("gpt-5.6-luna");
+    // 模型 combobox：目录就绪自动选中默认项（displayName 主行）；下拉含「默认」角标与 id 副行；点选候选回填
+    const model = screen.getByRole("combobox") as HTMLInputElement;
+    await waitFor(() => expect(model.value).toBe("Fake 标准模型"));
+    fireEvent.focus(model);
+    expect(screen.getByText("默认")).toBeTruthy();
+    expect(screen.getByText("fake-standard")).toBeTruthy();
+    fireEvent.click(screen.getByText("Fake 轻量模型"));
+    await waitFor(() => expect((screen.getByRole("combobox") as HTMLInputElement).value).toBe("Fake 轻量模型"));
   });
 
-  it("composer 模型选择：选定值随草稿提交下发（firstMessage 携带），默认模型占位不下发", async () => {
+  it("composer 模型选择（#77）：默认选中项随草稿提交真实下发（所见即所发）；点选候选后新草稿继承并下发", async () => {
     const seen: IpcRequest[] = [];
     const base = makeTransport(new FakeAdapter({ clock: new VirtualClock() }));
     const spy: ChatTransport = { ...base, invoke: (req) => { seen.push(req); return base.invoke(req); } };
     const t = mount(spy);
     await t.flush();
     const creates = () => seen.filter((r) => r.channel === "session:create") as Array<IpcRequest & { model?: string; title?: string; firstMessage?: string }>;
-    // boot 演示草稿发首条消息：默认模型为占位值不下发（后端按各 CLI 探测链自选）；首条消息随 create 携带
+    // boot 演示草稿发首条消息：默认选中项（fake-standard）同样真实下发——无占位串
     await act(async () => {
       send("默认演示");
     });
     const boot = creates().find((r) => r.firstMessage === "默认演示");
     expect(boot, "boot 演示草稿提交应发出 session:create").toBeTruthy();
-    expect(boot!.model, "默认模型为占位值，不下发").toBeUndefined();
+    expect(boot!.model, "默认选中项同样下发（所见即所发）").toBe("fake-standard");
 
-    // 选具体模型 → 再开草稿提交：继承选定值随 session:create 下发，且新会话 composer 回显该值
-    fireEvent.change(screen.getByRole("combobox"), { target: { value: "gpt-5.6-luna" } });
+    // combobox 点选 fake-lite → 新开草稿提交：继承选定值随 session:create 下发，新会话 composer 回显该值
+    const model = screen.getByRole("combobox") as HTMLInputElement;
+    fireEvent.focus(model);
+    fireEvent.click(screen.getByText("Fake 轻量模型"));
+    await waitFor(() => expect((screen.getByRole("combobox") as HTMLInputElement).value).toBe("Fake 轻量模型"));
     await act(async () => {
-      await createViaDraft(t.ctl(), "fake", undefined, "带模型的首条");
+      await createViaDraft(t.ctl, "fake", undefined, "带模型的首条");
     });
     const withModel = creates().find((r) => r.firstMessage === "带模型的首条");
     expect(withModel, "草稿提交应发出 session:create").toBeTruthy();
-    expect(withModel!.model).toBe("gpt-5.6-luna");
-    expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("gpt-5.6-luna");
-
-    // 切回默认模型 → 再开草稿提交：占位值仍不下发
-    fireEvent.change(screen.getByRole("combobox"), { target: { value: "默认模型" } });
-    await act(async () => {
-      await createViaDraft(t.ctl(), "fake", undefined, "默认模型的首条");
-    });
-    const withoutModel = creates().find((r) => r.firstMessage === "默认模型的首条");
-    expect(withoutModel, "默认模型会话应发出 session:create").toBeTruthy();
-    expect(withoutModel!.model).toBeUndefined();
+    expect(withModel!.model).toBe("fake-lite");
+    expect((screen.getByRole("combobox") as HTMLInputElement).value).toBe("Fake 轻量模型");
   });
 
   it("composer：OpenCode 会话明示权限档位为 server 级（同项目共享）；其他 CLI 无此说明（spec B UI 明示）", async () => {
@@ -479,11 +492,11 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     expect(screen.queryByText(/OpenCode 权限档位为 server 级/)).toBeNull(); // boot 演示草稿（fake）不显示
     const projectId = await registerProject(t, projDir);
     await act(async () => {
-      await createViaDraft(t.ctl(), "fake", { projectId }, "默认演示"); // 同项目 fake 会话：也不显示
+      await createViaDraft(t.ctl, "fake", { projectId }, "默认演示"); // 同项目 fake 会话：也不显示
     });
     expect(screen.queryByText(/OpenCode 权限档位为 server 级/)).toBeNull();
     await act(async () => {
-      await createViaDraft(t.ctl(), "opencode", { projectId }); // 新会话 · OpenCode
+      await createViaDraft(t.ctl, "opencode", { projectId }); // 新会话 · OpenCode
     });
     expect(screen.getByText(/OpenCode 权限档位为 server 级（同项目下会话共享）；切换后新会话生效/)).toBeTruthy();
     // 切回 fake 会话：说明消失
@@ -500,7 +513,7 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     const aId = t.ctl().activeId;
     // A 流式中经草稿新建并切到 B（B 的首条也跑默认剧本，与 A 同文 → 用激活态区分视图）
     await act(async () => {
-      await createViaDraft(t.ctl(), "fake");
+      await createViaDraft(t.ctl, "fake");
     });
     const bId = t.ctl().activeId;
     expect(bId).toBeTruthy();
@@ -571,7 +584,7 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     });
     await t.flush();
     await act(async () => {
-      await createViaDraft(t.ctl(), "fake"); // #59：再经草稿建第二个会话，登记为激活（排序最前，演示会话在后）
+      await createViaDraft(t.ctl, "fake"); // #59：再经草稿建第二个会话，登记为激活（排序最前，演示会话在后）
     });
     await t.flush();
     const deleted = t.ctl().activeId;
@@ -599,6 +612,7 @@ describe("聊天区（原型一致项 5/6/7）", () => {
       onEvent: () => () => undefined,
       onTerminalEvent: () => () => undefined,
       onTrackerEvent: () => () => undefined,
+      invokeModels: async () => STUB_MODELS,
     };
     const t = mount(stub);
     await t.flush();
@@ -643,6 +657,7 @@ describe("聊天区（原型一致项 5/6/7）", () => {
       onEvent: () => () => undefined,
       onTerminalEvent: () => () => undefined,
       onTrackerEvent: () => () => undefined,
+      invokeModels: async () => STUB_MODELS,
     };
     const t = mount(stub);
     await t.flush();
@@ -1260,7 +1275,7 @@ describe("草稿提交失败卡（#59：session:create+firstMessage 失败在草
     await t.flush();
     const projectId = await registerProject(t, projDir);
     await act(async () => {
-      await createViaDraft(t.ctl(), "claude", { projectId }, "首条消息");
+      await createViaDraft(t.ctl, "claude", { projectId }, "首条消息");
     });
     const card = screen.getByTestId("create-error-card");
     expect(card.textContent).toContain("找不到 CLI 程序（Claude）");
@@ -1287,7 +1302,7 @@ describe("草稿提交失败卡（#59：session:create+firstMessage 失败在草
     await t.flush();
     const projectId = await registerProject(t, projDir);
     await act(async () => {
-      await createViaDraft(t.ctl(), "claude", { projectId }, "要重试的首条");
+      await createViaDraft(t.ctl, "claude", { projectId }, "要重试的首条");
     });
     expect(screen.getByTestId("create-error-card")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "重试发送" }));
@@ -1305,7 +1320,7 @@ describe("草稿提交失败卡（#59：session:create+firstMessage 失败在草
     await t.flush();
     const projectId = await registerProject(t, projDir);
     await act(async () => {
-      await createViaDraft(t.ctl(), "codex", { projectId }, "首条");
+      await createViaDraft(t.ctl, "codex", { projectId }, "首条");
     });
     const card = screen.getByTestId("create-error-card");
     expect(card.textContent).toContain("E_INTERNAL");
@@ -1324,7 +1339,7 @@ describe("草稿提交失败卡（#59：session:create+firstMessage 失败在草
       await t.flush();
       const projectId = await registerProject(t, projDir);
       await act(async () => {
-        await createViaDraft(t.ctl(), "claude", { projectId }, "首条消息");
+        await createViaDraft(t.ctl, "claude", { projectId }, "首条消息");
       });
       expect(screen.getByTestId("create-error-card")).toBeTruthy();
       expect(entries).toContainEqual({
@@ -1362,7 +1377,7 @@ describe("会话内错误卡五类（#46：fake 脚本分支驱动 ChatPane → 
     // 首条消息即「认证演示」（建会话 + 触发认证剧本一步完成），cwd 经 openSessionDraft 从注册项目解析
     const projectId = await registerProject(t, projDir);
     await act(async () => {
-      await createViaDraft(t.ctl(), "claude", { projectId }, "认证演示");
+      await createViaDraft(t.ctl, "claude", { projectId }, "认证演示");
     });
     t.advance();
     const card = screen.getByTestId("error-card");
@@ -1457,13 +1472,16 @@ describe("结构化会话草稿创建（#59：点「＋」只开草稿，首条�
     expect(screen.queryAllByTestId("session-row")).toHaveLength(0);
     expect((screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…") as HTMLTextAreaElement).value).toBe("");
     expect(screen.getByText("⚡ 权限：自动 ▾")).toBeTruthy();
-    expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("默认模型");
+    // 模型 combobox（#77）：挂载预取 → 就绪自动选中默认项（加载态断言在「模型目录全链」套用挂起 promise 确定性覆盖）
+    const model = screen.getByRole("combobox") as HTMLInputElement;
+    await waitFor(() => expect(model.value).toBe("Fake 标准模型"));
     // 权限/模型在草稿上可改
     fireEvent.click(screen.getByText("⚡ 权限：自动 ▾"));
     fireEvent.click(screen.getByText("🔒 请求"));
     expect(screen.getByText("🔒 权限：请求 ▾")).toBeTruthy();
-    fireEvent.change(screen.getByRole("combobox"), { target: { value: "gpt-5.6-luna" } });
-    expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("gpt-5.6-luna");
+    fireEvent.focus(model);
+    fireEvent.click(screen.getByText("Fake 轻量模型"));
+    await waitFor(() => expect((screen.getByRole("combobox") as HTMLInputElement).value).toBe("Fake 轻量模型"));
   });
 
   it("创建成功但发送失败（全链注入）：不留空会话（DB 无记录）、失败卡明确报错、草稿与输入保留、重试成功后正常入库", async () => {
@@ -1517,7 +1535,7 @@ describe("结构化会话草稿创建（#59：点「＋」只开草稿，首条�
   it("切会话丢弃草稿且不弹确认、输入不保留；草稿丢弃后中央区回到原会话", async () => {
     const { t, projectId } = await bootWithProject("kb-ws-draft-switch-");
     await act(async () => {
-      await createViaDraft(t.ctl(), "fake", { projectId }); // 建同项目 fake 会话（供切换点击，行可见）
+      await createViaDraft(t.ctl, "fake", { projectId }); // 建同项目 fake 会话（供切换点击，行可见）
     });
     const fakeId = t.ctl().activeId;
     await act(async () => {
@@ -1589,5 +1607,164 @@ describe("结构化会话草稿创建（#59：点「＋」只开草稿，首条�
     expect(await screen.findByText("演示会话 · Fake")).toBeTruthy();
     expect(screen.getByText("已断开")).toBeTruthy();
     void t2;
+  });
+});
+
+// ============ #77 模型目录全链（spec #75 单一就绪态：加载阻塞/手输兜底/不可用报错保留/恢复 chip 派生） ============
+
+describe("模型目录全链（#77：combobox 就绪态/阻塞/手输/恢复派生）", () => {
+  let tmpRoot = "";
+
+  afterEach(() => {
+    cleanup();
+    for (const db of openDbs.splice(0)) db.close();
+    if (tmpRoot) {
+      rmSync(tmpRoot, { recursive: true, force: true });
+      tmpRoot = "";
+    }
+  });
+
+  /** listModels 恒失败的 Fake（错误态与手输兜底、已建会话不受影响的驱动） */
+  class NoModelsAdapter extends FakeAdapter {
+    override async listModels(_input?: ListModelsInput): Promise<ModelEntry[]> {
+      throw new AdapterError("E_SPAWN_NOT_FOUND", "未找到 codex 可执行文件（注入：listModels 失败）");
+    }
+  }
+
+  /** 指定模型创建期报错（含模型名）的 Fake（#76 main 侧显式选择探测失败语义的 UI 展示驱动） */
+  class RejectModelAdapter extends FakeAdapter {
+    override async createSession(init: CreateSessionInput): Promise<{ sessionId: string; model?: string | null }> {
+      if (init.model === "gpt-9-broken") {
+        throw new AdapterError("E_INTERNAL", `模型 gpt-9-broken 不可用（注入：显式选择探测失败）`);
+      }
+      return super.createSession(init);
+    }
+  }
+
+  it("单一就绪态：目录加载中草稿发送禁用（有输入也不可发、不发 create）；就绪后默认选中可发并真实下发（issue #77）", async () => {
+    const base = makeTransport(new FakeAdapter({ clock: new VirtualClock() }));
+    let release!: (r: ModelsResult) => void;
+    const held = new Promise<ModelsResult>((res) => {
+      release = res;
+    });
+    const seen: IpcRequest[] = [];
+    const modelCalls: ModelsRequest[] = [];
+    const spy: ChatTransport = {
+      ...base,
+      invoke: (req) => {
+        seen.push(req);
+        return base.invoke(req);
+      },
+      invokeModels: (req) => {
+        modelCalls.push(req);
+        return held;
+      },
+    };
+    const t = mount(spy);
+    await t.flush();
+    // 加载中：输入有内容但发送禁用——不会出现「以为选了 A、实际用了 B」
+    fireEvent.change(screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…"), { target: { value: "等模型就绪" } });
+    expect((screen.getByRole("button", { name: "发送 ➤" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("combobox") as HTMLInputElement).value).toBe("模型列表加载中…");
+    expect(seen.filter((r) => r.channel === "session:create")).toHaveLength(0);
+    // StrictMode 双挂载语义在测试树同样成立：预取只发一次（in-flight 去重）
+    expect(modelCalls).toHaveLength(1);
+    // 就绪：默认选中 → 可发 → create 携带默认模型（所见即所发）
+    await act(async () => {
+      release({ ok: true, models: [{ id: "m-default", displayName: "默认演示模型", description: "", isDefault: true }, { id: "m-alt", displayName: "备选模型", description: "", isDefault: false }] });
+    });
+    await waitFor(() => expect((screen.getByRole("combobox") as HTMLInputElement).value).toBe("默认演示模型"));
+    expect((screen.getByRole("button", { name: "发送 ➤" }) as HTMLButtonElement).disabled).toBe(false);
+    await act(async () => {
+      send("等模型就绪");
+    });
+    const create = seen.find((r) => r.channel === "session:create") as IpcRequest & { model?: string };
+    expect(create.model).toBe("m-default");
+  });
+
+  it("拉取失败：原因行展示；手输模型 id 兜底后可发送；已建会话发消息不受目录错误影响", async () => {
+    const clock = new VirtualClock();
+    const adapter = new NoModelsAdapter({ clock });
+    const base = makeTransport(adapter);
+    const seen: IpcRequest[] = [];
+    const spy: ChatTransport = { ...base, invoke: (req) => { seen.push(req); return base.invoke(req); } };
+    const t = mount(spy);
+    await t.flush();
+    // 错误态：原因行 + 手输提示；有输入但发送禁用（无「默认/自选」逃生项）
+    const model = screen.getByRole("combobox") as HTMLInputElement;
+    fireEvent.focus(model);
+    expect(screen.getByText("模型列表获取失败：未找到 codex 可执行文件（注入：listModels 失败）")).toBeTruthy();
+    expect(screen.getByText("手动输入模型 id 后回车")).toBeTruthy();
+    fireEvent.change(screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…"), { target: { value: "手输兜底首条" } });
+    expect((screen.getByRole("button", { name: "发送 ➤" }) as HTMLButtonElement).disabled).toBe(true);
+    // 手输 id：回车采用 → 可发送 → create 原样携带
+    fireEvent.change(model, { target: { value: "fake-standard" } });
+    fireEvent.keyDown(model, { key: "Enter" });
+    await waitFor(() => expect((screen.getByRole("button", { name: "发送 ➤" }) as HTMLButtonElement).disabled).toBe(false));
+    await act(async () => {
+      send("手输兜底首条");
+    });
+    const create = seen.find((r) => r.channel === "session:create") as IpcRequest & { model?: string };
+    expect(create.model).toBe("fake-standard");
+    // 已建会话：目录仍处错误态，但会话发消息不受影响（模型沿用创建值）
+    await act(async () => {
+      clock.runToIdle(); // 首 turn 终结（自建 clock：mount 的 advance 驱动的是其内建 adapter）
+    });
+    await act(async () => {
+      send("会话第二条");
+    });
+    expect(seen.filter((r) => r.channel === "session:send").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("显式选择不可用模型：创建报错含模型名（失败卡展示）、草稿与输入保留可重试，换模型重试成功", async () => {
+    const t = mount(makeTransport(new RejectModelAdapter({ clock: new VirtualClock() })));
+    await t.flush();
+    // 就绪后手输不可用模型并发送
+    const model = screen.getByRole("combobox") as HTMLInputElement;
+    await waitFor(() => expect(model.value).toBe("Fake 标准模型"));
+    fireEvent.change(model, { target: { value: "gpt-9-broken" } });
+    fireEvent.keyDown(model, { key: "Enter" });
+    await act(async () => {
+      send("选了不可用模型的首条");
+    });
+    // 创建报错直达失败卡（含模型名，不静默换模型）；草稿与输入保留
+    const card = screen.getByTestId("create-error-card");
+    expect(card.textContent).toContain("gpt-9-broken");
+    expect((screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…") as HTMLTextAreaElement).value).toBe("选了不可用模型的首条");
+    expect((screen.getByRole("combobox") as HTMLInputElement).value).toBe("gpt-9-broken"); // 模型选择同样保留可改
+    // 换可用模型后重试成功：失败卡消失、草稿丢弃、会话建立
+    fireEvent.focus(screen.getByRole("combobox"));
+    fireEvent.click(screen.getByText("Fake 标准模型"));
+    fireEvent.click(screen.getByRole("button", { name: "重试发送" }));
+    await t.flush();
+    expect(screen.queryByTestId("create-error-card")).toBeNull();
+    expect(screen.queryByTestId("draft-hint")).toBeNull();
+    expect(screen.getByText("演示会话 · Fake")).toBeTruthy();
+  });
+
+  it("恢复会话模型 chip：显示层派生列表默认名（不写 store），无「默认模型」字样与空白", async () => {
+    const t = mount();
+    await t.flush();
+    // 重启恢复（DB 无 model 列）：断开会话登记后激活，composer chip 取目录默认项名
+    t.ctl().registerRestored({
+      id: "s-old",
+      kind: "structured",
+      cli: "fake",
+      nativeSessionId: "native-x",
+      projectId: null,
+      title: "历史会话",
+      cwd: "C:\\old",
+      permMode: "auto",
+      status: "idle",
+      lastActiveAt: "2026-11-01T00:00:00.000Z",
+      archivedAt: null,
+      dirIdentity: "none",
+      worktreeName: null,
+    });
+    t.ctl().switchTo("s-old");
+    const model = screen.getByRole("combobox") as HTMLInputElement;
+    await waitFor(() => expect(model.value).toBe("Fake 标准模型"));
+    expect(model.value).not.toContain("默认模型"); // 无「默认模型」占位字样
+    expect(t.ctl().activeSession?.model).toBeUndefined(); // 派生显示不写入 store
   });
 });

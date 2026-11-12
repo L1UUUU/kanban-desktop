@@ -1,8 +1,10 @@
-// 用途：结构化会话草稿面板（#59 / spec #57 原型演示①）—— 点「＋」后的中央区草稿态：提示行（不落库、未启 CLI）+ 首条消息 composer（权限/模型可改、输入失败保留）+ 提交失败卡（重试=重新执行创建+发送）
+// 用途：结构化会话草稿面板（#59 / spec #57 原型演示①）—— 点「＋」后的中央区草稿态：提示行（不落库、未启 CLI）+ 首条消息 composer（权限/模型可改、输入失败保留；#77 起模型为真实目录 combobox：就绪前阻塞首条发送）+ 提交失败卡（重试=重新执行创建+发送）
 import { useState } from "react";
 import type { PermMode } from "@kanban/ipc-schema";
 import type { DraftSession } from "../chat-store";
-import { ModelSelect, PermChip } from "./ComposerControls";
+import type { ModelCatalog } from "../model-catalog";
+import { PermChip } from "./ComposerControls";
+import { ModelCombobox } from "./ModelCombobox";
 import { CreateErrorCard } from "./CreateErrorCard";
 
 export interface DraftPaneActions {
@@ -18,20 +20,24 @@ export interface DraftPaneActions {
 
 export function DraftPane({
   draft,
+  models,
   configPath,
   actions,
 }: {
   draft: DraftSession;
+  /** 模型目录控制器（issue #77）：combobox 数据源与挂载预取 */
+  models: ModelCatalog;
   /** 配置文件绝对路径（spawn 失败卡「复制配置路径」数据源） */
   configPath: string | null;
   actions: DraftPaneActions;
 }) {
   const [submitting, setSubmitting] = useState(false);
 
-  // 提交中禁用输入与按钮（防双发）；失败时 draft 仍在（输入保留在草稿上）；
-  // 返回值不在此消费：成功草稿消失 / 失败经 draft.submitError 渲染失败卡（均由 store 状态驱动）
+  // 提交中禁用输入与按钮（防双发）；单一就绪态：模型未选（列表未就绪/未手输兜底）禁发（issue #77）；
+  // 失败时 draft 仍在（输入保留在草稿上）；返回值不在此消费：成功草稿消失 / 失败经 draft.submitError 渲染失败卡（均由 store 状态驱动）
+  const blocked = draft.model === undefined;
   const submit = async (): Promise<void> => {
-    if (draft.input.trim().length === 0 || submitting) return;
+    if (draft.input.trim().length === 0 || submitting || blocked) return;
     setSubmitting(true);
     await actions.onSubmit();
     setSubmitting(false);
@@ -77,11 +83,19 @@ export function DraftPane({
           />
           <div className="mt-2 flex items-center gap-2">
             <PermChip value={draft.permMode} onChange={actions.onPermChange} />
-            <ModelSelect value={draft.model} onChange={actions.onModelChange} />
+            {/* 模型 combobox（草稿语义：就绪后自动选中默认项并随首条消息真实下发——所见即所发，issue #77） */}
+            <ModelCombobox
+              cli={draft.cli}
+              cwd={draft.cwd}
+              value={draft.model}
+              onChange={actions.onModelChange}
+              catalog={models}
+              autoSelectDefault
+            />
             <span className="flex-1" />
             <button
               type="button"
-              disabled={submitting || draft.input.trim().length === 0}
+              disabled={submitting || blocked || draft.input.trim().length === 0}
               className="h-[30px] rounded-full bg-primary px-4 text-xs text-primary-foreground hover:bg-accent2 disabled:opacity-50"
               onClick={() => void submit()}
             >

@@ -62,8 +62,8 @@ describe("顶部 banner 叠加顺序（#42 / spec G·F18：全局条在上，会
     act(() => {
       // 同目录主仓库两个运行中会话（冲突条判据）+ 当前断开会话（恢复条）带同名 skill 冲突
       const repo = { cwd: "C:\\repo", dirIdentity: "main" as const, worktreeName: null };
-      ctl.registerExternalSession({ sessionId: "run-1", cli: "claude", title: "运行A", permMode: "auto", model: "默认模型", ...repo });
-      ctl.registerExternalSession({ sessionId: "run-2", cli: "claude", title: "运行B", permMode: "auto", model: "默认模型", ...repo });
+      ctl.registerExternalSession({ sessionId: "run-1", cli: "claude", title: "运行A", permMode: "auto", ...repo });
+      ctl.registerExternalSession({ sessionId: "run-2", cli: "claude", title: "运行B", permMode: "auto", ...repo });
       ctl.updateExternalStatus("run-1", "running");
       ctl.updateExternalStatus("run-2", "running");
       ctl.registerExternalSession({
@@ -71,7 +71,6 @@ describe("顶部 banner 叠加顺序（#42 / spec G·F18：全局条在上，会
         cli: "claude",
         title: "断开会话",
         permMode: "auto",
-        model: "默认模型",
         ...repo,
         skillConflicts: ["setup"],
       });

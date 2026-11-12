@@ -15,7 +15,7 @@ function makeSession(partial: Partial<SessionView> = {}): SessionView {
     title: "调研 Vite 配置",
     status: "idle",
     permMode: "auto",
-    model: "默认模型",
+    model: undefined,
     projectId: "p-1",
     cwd: "C:\\alpha",
     dirIdentity: "main",
