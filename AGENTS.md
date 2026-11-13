@@ -12,7 +12,7 @@
 
 ### Domain docs
 
-single-context 布局：根目录 `GLOSSARY.md` + `docs/adr/`。见 `docs/agents/domain.md`。
+single-context 布局：根目录 `GLOSSARY.md` + `docs/adr/`。`/design-feature` 不产出 ADR/GLOSSARY；规划中敲定的重要决策与术语仍应经 `/domain-modeling` 落档保存。见 `docs/agents/domain.md`。
 
 ### Testing
 

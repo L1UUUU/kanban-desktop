@@ -9,6 +9,15 @@ How the engineering skills should consume this repo's domain documentation when 
 
 If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
 
+## The planning flow doesn't write domain docs — route them yourself
+
+`/design-feature` and its downstream `/to-spec` / `/to-tickets` produce spec + tickets only; they never write `GLOSSARY.md` or ADRs. But planning is exactly where terms and decisions get resolved. When the confirmed plan locks one in, don't leave it only inside the spec issue — capture it with `/domain-modeling`:
+
+- A decision that changes state ownership or invariants, locks an external behavior contract, or reverses an `.out-of-scope/` entry → `docs/adr/`
+- A term newly introduced or first agreed during planning (it will echo through spec, tickets, and code naming) → `GLOSSARY.md`
+
+This stays lazy: write only what was actually resolved and confirmed, no placeholder ADRs or glossary stubs.
+
 ## File structure
 
 This repo is **single-context**:
