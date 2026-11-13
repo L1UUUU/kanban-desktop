@@ -21,6 +21,16 @@ Issues and specs for this repo live as GitHub issues in `L1UUUU/kanban-desktop`.
 
 历史上曾因只按字面「resolve each ticket」而漏关父 spec，导致用户两次纠正；勿沿用「先例」自行推断。
 
+### 范围外发现登记（out-of-scope findings）
+
+Agent 处理工单时发现的、属于该工单范围之外的问题，**不在当前改动里顺手修**，而是登记为 issue——本节是全局「发现无关问题只记录」口径在本仓的落地，记录的形式就是登记 issue，让发现流入 tracker 而不是随会话沉没。登记规则：
+
+- **门槛**：只登记真实缺陷、风险或技术债；风格瑕疵不登记（那属于 review 流程的范围外观察 O*）。
+- **时机**：收尾回报时一并登记，不在任务中途分心查证。
+- **去重**：登记前先 `gh issue list --state open --search "<关键词>"` 查重（并行 subagent 可能撞见同一问题）；已有相近 issue 时改为在该 issue 下追加评论补充证据，不新开。
+- **标签**：一律打 `needs-triage`——未分诊，不代表 ready，不得直接开工。
+- **格式**：标题带 `[out-of-scope]` 前缀；body 注明「处理 #NN 时范围外发现」，给出可核验证据（`file:line`、现象、复现条件），事实与假设分开写（沿用 review 报告 P*/R* 口径）。
+
 Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
 
 ## Pull requests as a triage surface
