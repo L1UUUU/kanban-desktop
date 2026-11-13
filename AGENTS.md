@@ -22,7 +22,7 @@ single-context 布局：根目录 `GLOSSARY.md` + `docs/adr/`。见 `docs/agents
 
 ### 门禁与标准
 
-验收用 `pnpm lint:strict`（warning 视为失败）、`pnpm typecheck`、`pnpm test`、`pnpm check:gates`；四者已由 `.githooks/pre-commit` 与 CI 强制执行。判断性编码标准见 `CODING_STANDARDS.md`（review agent 读）。
+验收用 `pnpm lint:strict`（warning 视为失败）、`pnpm typecheck`、`pnpm test`、`pnpm check:gates`；四者已由 `.githooks/pre-commit`（每个 commit）、`.githooks/pre-push`（推 main 前验合并树——merge commit 不经 pre-commit）与 CI 强制执行。判断性编码标准见 `CODING_STANDARDS.md`（review agent 读）。
 
 ### 仓库地图
 

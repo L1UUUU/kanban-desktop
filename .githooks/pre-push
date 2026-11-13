@@ -1,0 +1,17 @@
+#!/bin/sh
+# 用途：推送前门禁 —— 推 main 前跑四项门禁（git merge 不触发 pre-commit，合并树必须在离开本机前补验）
+set -e
+
+cd "$(git rev-parse --show-toplevel)"
+
+# stdin 每行：<local ref> <local sha> <remote ref> <remote sha>；删除推送（全零 sha）无树可验，放行
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$remote_ref" = "refs/heads/main" ] || continue
+  [ "$local_sha" != "0000000000000000000000000000000000000000" ] || continue
+  echo "[pre-push] 目标含 main：merge commit 不经 pre-commit，推送前验证合并树"
+  node scripts/check-gates.mjs < /dev/null
+  pnpm lint:strict < /dev/null
+  pnpm typecheck < /dev/null
+  pnpm test < /dev/null
+  exit 0
+done

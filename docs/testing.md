@@ -148,7 +148,7 @@ include 均已通配（`packages/cli-host/vitest.config.ts`、`apps/desktop/vite
 
 ## 验收门禁命令（pre-commit / CI 强制）
 
-`.githooks/pre-commit` 与 `.github/workflows/checks.yml` 依次执行：`pnpm check:gates` → `pnpm lint:strict` → `pnpm typecheck` → `pnpm test`。`lint:strict` 是 `oxlint --deny-warnings`（warning 级违规如孤儿 import 也会让门禁失败）；`pnpm lint` 保留宽松语义仅供本地快速查看。`check:gates` 校验 B 类后缀门控、`workspacePackages` 与 workspace 包一致、归档 PNG 不被意外提交、根与 docs 下 md 的相对链接目标存在（文档互链不腐化）。CI 与本地跑同一套命令，不另立一套。
+`.githooks/pre-commit` 与 `.github/workflows/checks.yml` 依次执行：`pnpm check:gates` → `pnpm lint:strict` → `pnpm typecheck` → `pnpm test`。`lint:strict` 是 `oxlint --deny-warnings`（warning 级违规如孤儿 import 也会让门禁失败）；`pnpm lint` 保留宽松语义仅供本地快速查看。`check:gates` 校验 B 类后缀门控、`workspacePackages` 与 workspace 包一致、归档 PNG 不被意外提交、根与 docs 下 md 的相对链接目标存在（文档互链不腐化）。CI 与本地跑同一套命令，不另立一套。另有 `.githooks/pre-push`：merge commit 不触发 pre-commit（合并树不属于任何单边分支），推 main 前由它对合并树补跑同一套四门禁；推其它分支零开销直放。
 
 ## flaky 台账
 

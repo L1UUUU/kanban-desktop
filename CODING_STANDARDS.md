@@ -5,7 +5,7 @@
 
 ## 门禁（机械性，勿人工判）
 
-以下命令由 `.githooks/pre-commit` 与 `.github/workflows/checks.yml` 强制执行，验收时只报告结果，不再作为 review 发现项：
+以下命令由 `.githooks/pre-commit`（每个 commit）、`.githooks/pre-push`（推 main 前验合并树）与 `.github/workflows/checks.yml` 强制执行，验收时只报告结果，不再作为 review 发现项：
 
 | 检查 | 命令 | 拦什么 |
 |---|---|---|
