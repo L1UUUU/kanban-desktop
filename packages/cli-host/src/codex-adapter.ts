@@ -102,6 +102,8 @@ interface SessionState {
   turnErrorSent: boolean;
   queue: string[];
   pendingApprovals: Map<string, PendingApproval>;
+  /** #97：deny 决策已本地合成 tool_completed(denied) 的 itemId（0.167.0 起服务端不再回发 item/completed(declined)，防 0.144 双发） */
+  deniedItemIds: Set<string>;
   /** agentMessage delta 累计（终文自愈依据） */
   agentAcc: Map<string, string>;
   dead: boolean;
@@ -183,6 +185,7 @@ export class CodexAdapter implements CliAdapter {
       turnErrorSent: false,
       queue: [],
       pendingApprovals: new Map(),
+      deniedItemIds: new Set(),
       agentAcc: new Map(),
       dead: false,
       adopted: false,
@@ -314,6 +317,7 @@ export class CodexAdapter implements CliAdapter {
       turnErrorSent: false,
       queue: [],
       pendingApprovals: new Map(),
+      deniedItemIds: new Set(),
       agentAcc: new Map(),
       dead: true,
       adopted: true,
@@ -360,6 +364,11 @@ export class CodexAdapter implements CliAdapter {
     entry.decided = true;
     s.pendingApprovals.delete(input.requestId);
     entry.respond({ decision: DECISION_MAP[input.decision] });
+    if (input.decision === "deny") {
+      // #97：codex 0.167.0 起 deny 后服务端不再回发 item/completed(declined)（0.144.1 会）——deny 即本地合成工具终态，deniedItemIds 防旧版双发
+      s.deniedItemIds.add(entry.itemId);
+      this.emit(s, { type: "tool_completed", itemId: entry.itemId, status: "denied", durationMs: 0, output: "" });
+    }
     this.emit(s, { type: "session_status", status: "running" });
   }
 
@@ -373,7 +382,7 @@ export class CodexAdapter implements CliAdapter {
   /**
    * readTranscript（#28）：只读拉取（不 resume、不发 turn）。
    * 主路径：thread/read 拿 thread.path → rollout 落盘文件解析（0.144.1 实测 thread/read 归档剥离 commandExecution 工具条目，
-   * rollout 含全部事件；与本地事件日志无关，原生历史为权威源）。
+   * rollout 含全部事件；与本地事件日志无关，原生历史为权威源；0.167.0 起 rollout 行形态改版，双版本口径见 codex/rollout.ts，#97）。
    * 回退：path 缺失/读失败 → thread/read turns 的 userMessage/agentMessage/归档工具条目映射。
    */
   async readTranscript(sessionId: string): Promise<TranscriptEvent[]> {
@@ -571,7 +580,8 @@ export class CodexAdapter implements CliAdapter {
         return;
       }
       const done = this.mapToolCompleted(item);
-      if (done) this.emit(s, done);
+      // #97：deny 已本地合成 denied 终态时，服务端后到的 declined 条目（0.144.1 行为）不再重复发
+      if (done && !(done.type === "tool_completed" && done.status === "denied" && s.deniedItemIds.has(done.itemId))) this.emit(s, done);
     });
 
     client.on("item/commandExecution/outputDelta", (p) => {
@@ -590,6 +600,7 @@ export class CodexAdapter implements CliAdapter {
       s.pendingApprovals.delete(String(requestId));
       entry.respond({ decision: "cancel" }); // 释放挂起响应（服务端已终决，忽略内容）
       this.emit(s, { type: "approval_expired", requestId: entry.requestId, reason: "server_resolved" });
+      s.deniedItemIds.add(entry.itemId); // #97：与 deny 决策同防——服务端终决后旧版仍可能回发 declined 条目
       this.emit(s, { type: "tool_completed", itemId: entry.itemId, status: "denied", durationMs: 0, output: "" });
       if (s.turnActive) this.emit(s, { type: "session_status", status: "running" });
     });

@@ -166,6 +166,7 @@ include 均已通配（`packages/cli-host/vitest.config.ts`、`apps/desktop/vite
 | C 类 Playwright whole-test 60s 超时（stage4 I-3 恢复流转、lifecycle 冲突条/PTY 孤儿，逐轮换用例） | 多兄弟 worktree 并行跑测试的机器负载拉长 Electron 冷启/turn 用时（issue 87 全量跑实测：60s 预算超时，单跑 35.6s 通过；断言面与当次 diff 无交集） | 负载型假红，非产品缺陷；单跑/低负载验证收敛，不改代码 |
 | acceptance-screenshots「徽标与断开恢复」整机用例 60s 测试超时（无页面快照 = 挂在 Electron 级 await） | 多 worktree 并行负载（同机兄弟 agent e2e 并发 + 孤儿 electron 进程）；与首行同类负载假红 | 未改产品代码；隔离复跑全绿（2026-11-12，#85 回归时复现一次）；复现条件=并行负载窗口，静置复跑不出现 |
 | stage4「I-2 补充：spawn 失败重试收敛」批次连跑 60s 超时 | 两次 Electron 冷启 + 多步交互，基础 12-14s，负载残留拉长冷启推过全局预算（NO_FOCUS=0 对照与改动无关） | 用例单独 `test.setTimeout(120_000)`（2026-11-13）；单跑绿 + 批次复跑收敛 |
+| codex B 类「权限档位 auto」两轮一绿一红（2026-11-13，0.167.0） | 模型非确定性：偶发跳过命令执行且谎报成功（rollout 无 CommandExecution、文件未写、agent 文本自称退出码 0——文件系统实证；非策略/适配层变更，sandbox_policy 与 approval_policy 均正确生效） | prompt 加「不要跳过，必须先真实执行」措辞压低跳过率（#97）；复现条件=gpt-6-luna 偶发，连续红两轮再升级为确定性手段 |
 
 新发现时追加一行并注明复现条件；连续全绿才标记「已收敛」，仍要保留根因记录。
 

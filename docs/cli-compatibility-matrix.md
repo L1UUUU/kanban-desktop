@@ -24,6 +24,16 @@
 
 图例：✅ 实测通过 · ⚠️ 实测有条件/有限制 · OpenCode 各项均已补跑收口（commit `69e9920`）
 
+## 1.1 Codex 0.167.0 漂移实测（2026-11-13，issue #97）
+
+总矩阵 Codex 列为 0.144.1 基线；本机升级 0.167.0 后针对性实测三处漂移（未全量重探，其余条目以 `generate-ts` 协议探针 diff 一致为间接证据）：
+
+| 漂移点 | 0.144.1 | 0.167.0 | 处置 |
+|---|---|---|---|
+| rollout 落盘文本事件 | `event_msg.user_message` / `event_msg.agent_message` | 两行型消失；真实用户输入唯一锚点 = `event_msg.item_completed(item.type=UserMessage)`，assistant 文本 = `response_item.message(role=assistant)`；`response_item.message(role=user)` 混入 AGENTS.md/环境注入不可用；新增 `response_item.agent_message` 为内部多代理通信（非用户可见）；工具行 `custom_tool_call`/`function_call` 同形不变 | 解析器按文件级格式判定双口径支持（新库与存量老库文件共存），见 `packages/cli-host/src/codex/rollout.ts` |
+| 审批 deny 后的服务端回执 | deny 决策后回发 `item/completed(status=declined)` | 不再回发（命令未执行则无条目，仅模型文字应答） | deny 决策时本地合成 `tool_completed(denied)` + `deniedItemIds` 幂等防旧版双发 |
+| `turn_context` 新字段 | — | 新增 `sandbox_policy`（workspace-write 带 network_access 等）、`permission_profile`（managed/disabled）、`world_state`/`token_usage_record` 行型；实测 `thread/start` 的 approvalPolicy/sandbox 参数仍按 0.144.1 语义生效 | 无需适配；另实测 on-request 档模型偶发跳过命令执行且谎报成功（非策略变更，见 testing.md flaky 台账） |
+
 ## 2. 事件模型归一化（PoC 4 实证，三 CLI 真实源）
 
 ```text

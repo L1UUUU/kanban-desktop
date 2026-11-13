@@ -132,7 +132,8 @@ describe.skipIf(!E2E)("CodexAdapter 真实集成（env-gated）", () => {
   it("权限档位 auto（on-request+workspace-write）：写 cwd 内直接放行不弹审批", async () => {
     const sid = await permSession("auto");
     const file = path.join(workdir, "perm-auto.txt"); // 同为 cwd 内写：与 ask 档的可观察差异
-    await adapter.sendTurn({ sessionId: sid, text: `请运行这条命令并报告结果：echo auto > "${file}"` });
+    // #97：0.167.0 实测模型偶发「跳过命令+谎报成功」（文件系统实证）——「不要跳过、必须先执行」措辞与审批共用 prompt 同款，压低跳过率
+    await adapter.sendTurn({ sessionId: sid, text: `请真实运行这条 shell 命令并报告结果（不要跳过，必须先真实执行命令再报告）：echo auto > "${file}"` });
     await driveIdle();
     expect(chat(sid).some((e) => e.type === "approval_requested")).toBe(false); // 沙箱内写：无审批
     expect(existsSync(file)).toBe(true);
@@ -142,7 +143,7 @@ describe.skipIf(!E2E)("CodexAdapter 真实集成（env-gated）", () => {
   it("权限档位 full（never+danger-full-access）：写 cwd 外直接执行不弹审批", async () => {
     const sid = await permSession("full");
     const file = path.join(outside, "perm-full.txt");
-    await adapter.sendTurn({ sessionId: sid, text: `请运行这条命令并报告结果：echo full > "${file}"` });
+    await adapter.sendTurn({ sessionId: sid, text: `请真实运行这条 shell 命令并报告结果（不要跳过，必须先真实执行命令再报告）：echo full > "${file}"` });
     await driveIdle();
     expect(chat(sid).some((e) => e.type === "approval_requested")).toBe(false); // 全放行
     expect(existsSync(file)).toBe(true);

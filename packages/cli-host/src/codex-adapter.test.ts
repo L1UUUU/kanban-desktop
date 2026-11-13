@@ -378,8 +378,11 @@ describe("CodexAdapter：审批映射", () => {
     expect(chat(sessionId).some((e) => e.type === "session_status" && e.status === "waiting")).toBe(true);
     await adapter.resolveApproval({ sessionId, requestId: req!.requestId, decision: "deny" });
     await expect(respondPromise).resolves.toEqual({ decision: "declined" });
+    // #97：codex 0.167.0 起 deny 后服务端不再回发 item/completed(declined)——deny 即本地合成工具 denied 终态
+    expect(chat(sessionId).some((e) => e.type === "tool_completed" && e.itemId === "cmd1" && e.status === "denied")).toBe(true);
+    // 0.144.1 仍回发 declined 条目时不双发（deniedItemIds 幂等防重）
     rpc.emit("item/completed", { threadId: "th-1", turnId: "t1", item: { type: "commandExecution", id: "cmd1", command: "echo x > out.txt", status: "declined", exitCode: null, aggregatedOutput: null, durationMs: 3 } });
-    expect(chat(sessionId).find((e): e is Extract<ChatEvent, { type: "tool_completed" }> => e.type === "tool_completed")).toMatchObject({ itemId: "cmd1", status: "denied" });
+    expect(chat(sessionId).filter((e) => e.type === "tool_completed" && e.itemId === "cmd1").length).toBe(1);
     // deny 后状态回 running（不再 waiting），turn 可继续到终态
     const lastStatus = chat(sessionId).filter((e): e is Extract<ChatEvent, { type: "session_status" }> => e.type === "session_status").at(-1)!;
     expect(lastStatus.status).not.toBe("waiting");
@@ -621,6 +624,33 @@ describe("CodexAdapter：readTranscript 双视角（#28）", () => {
     writeFileSync(file, lines.map((l) => JSON.stringify(l)).join("\n") + "\n", "utf8");
   }
 
+  /** 写 0.167.0 形态 rollout（#97：user_message/agent_message 行消失——item_completed(UserMessage) 为 user 锚点、response_item.message 角色化、内部多代理 agent_message 行在场） */
+  function writeRollout0167(file: string): void {
+    const lines = [
+      { timestamp: "2026-11-13T10:00:00.000Z", type: "session_meta", payload: { session_id: NATIVE, cwd: CWD } },
+      { timestamp: "2026-11-13T10:00:01.000Z", type: "turn_context", payload: { turn_id: "t1", cwd: CWD, approval_policy: "on-request" } },
+      { timestamp: "2026-11-13T10:00:02.000Z", type: "world_state", payload: { change: [] } },
+      // AGENTS.md/环境注入：0.167.0 也以 role=user 的 response_item.message 混入（非真实用户输入，不入 user 视角）
+      { timestamp: "2026-11-13T10:00:03.000Z", type: "response_item", payload: { type: "message", id: "msg_inj", role: "user", content: [{ type: "input_text", text: "# AGENTS.md instructions\n<INSTRUCTIONS>环境注入</INSTRUCTIONS>" }] } },
+      { timestamp: "2026-11-13T10:00:04.000Z", type: "response_item", payload: { type: "message", id: "msg_dev", role: "developer", content: [{ type: "input_text", text: "You are Codex, an agent based on GPT-6." }] } },
+      // 真实用户输入唯一锚点：item_completed(UserMessage)
+      { timestamp: "2026-11-13T10:00:05.000Z", type: "event_msg", payload: { type: "item_completed", thread_id: "th-1", turn_id: "t1", item: { type: "UserMessage", id: "um_1", content: [{ type: "Text", text: "请实现 X 并跑测试" }] } } },
+      { timestamp: "2026-11-13T10:00:06.000Z", type: "response_item", payload: { type: "message", id: "msg_a1", status: "completed", role: "assistant", phase: "commentary", content: [{ type: "output_text", text: "收到，我先看代码。", annotations: [], logprobs: [] }] } },
+      {
+        timestamp: "2026-11-13T10:00:07.000Z",
+        type: "response_item",
+        payload: { type: "custom_tool_call", id: "ctc_1", status: "completed", call_id: "call_1", name: "exec", input: "await tools.shell_command({command:'pnpm vitest run'})" },
+      },
+      // 内部多代理通信（recipient 非主对话）：payload.type=agent_message，非用户可见
+      { timestamp: "2026-11-13T10:00:08.000Z", type: "response_item", payload: { type: "agent_message", id: "amsg_1", author: "/root", recipient: "/root/embedded_migration_map", content: [{ type: "input_text", text: "Message Type: NEW_TASK" }, { type: "encrypted_content", encrypted_content: "gAAA" }] } },
+      // item_completed(AgentMessage) 与 response_item.message(assistant) 同文同 id——assistant 只取 response_item 侧，防重复
+      { timestamp: "2026-11-13T10:00:09.000Z", type: "event_msg", payload: { type: "item_completed", thread_id: "th-1", turn_id: "t1", item: { type: "AgentMessage", id: "msg_a2", content: [{ type: "Text", text: "完成。" }], phase: "final_answer" } } },
+      { timestamp: "2026-11-13T10:00:10.000Z", type: "response_item", payload: { type: "message", id: "msg_a2", status: "completed", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "完成。", annotations: [], logprobs: [] }] } },
+      { timestamp: "2026-11-13T10:00:11.000Z", type: "token_usage_record", payload: { info: {} } },
+    ];
+    writeFileSync(file, lines.map((l) => JSON.stringify(l)).join("\n") + "\n", "utf8");
+  }
+
   it("主路径 rollout 落盘解析：user/assistant/工具全形态（thread/read 只拿 path，不 resume、不发 turn）", async () => {
     const rolloutFile = path.join(tmpdir(), `kb-cx-rollout-${Date.now()}.jsonl`);
     writeRollout(rolloutFile);
@@ -639,6 +669,22 @@ describe("CodexAdapter：readTranscript 双视角（#28）", () => {
     expect((ctx.rpc.callsOf("thread/read")[0] as { includeTurns?: boolean }).includeTurns).toBe(true);
     expect(ctx.rpc.callsOf("thread/resume").length).toBe(0);
     expect(ctx.rpc.callsOf("turn/start").length).toBe(0);
+    rmSync(rolloutFile, { force: true });
+  });
+
+  it("rollout 0.167.0 形态解析：item_completed(UserMessage) 为 user 锚点、response_item.message(assistant) 为文本；注入/developer/内部多代理行不入视角（#97）", async () => {
+    const rolloutFile = path.join(tmpdir(), `kb-cx-rollout17-${Date.now()}.jsonl`);
+    writeRollout0167(rolloutFile);
+    const ctx = makeAdapter();
+    ctx.rpc.responses["thread/read"] = { thread: { id: NATIVE, path: rolloutFile, turns: [] } };
+    await ctx.adapter.adoptSession({ sessionId: "s-tr17", nativeSessionId: NATIVE, cwd: CWD });
+    const transcript = await ctx.adapter.readTranscript("s-tr17");
+    expect(transcript).toEqual([
+      { role: "user", text: "请实现 X 并跑测试" },
+      { role: "assistant", text: "收到，我先看代码。" },
+      { role: "assistant", text: "", tool: { name: "exec", summary: "await tools.shell_command({command:'pnpm vitest run'})" } },
+      { role: "assistant", text: "完成。" },
+    ]);
     rmSync(rolloutFile, { force: true });
   });
 
