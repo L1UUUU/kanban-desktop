@@ -1,8 +1,9 @@
-// 用途：会话标题状态机整机 E2E（#94 / ADR 0003）—— 首条消息派生标题即时更新（含截断）→ 侧栏铅笔行内重命名（manual 终态）→ 再发消息不覆盖；PTY 行豁免（标题 shell 回写不变、无重命名入口）
+// 用途：会话标题状态机整机 E2E（#94/#95 / ADR 0003）—— 首条消息派生标题即时更新（含截断）→ 侧栏铅笔行内重命名（manual 终态）→ 再发消息不覆盖；PTY 行豁免（标题 shell 回写不变、无重命名入口）；T2 首轮摘要：turn 结束 → 固定值摘要经 session:event 推送翻转侧栏、摘要进行中手动重命名不被覆盖
 import { test, expect, _electron, type ElectronApplication, type Page } from "@playwright/test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { FAKE_SUMMARY_TITLE } from "./helpers/fake-summary";
 
 const PROJECT_NAME = "title-repo";
 
@@ -15,8 +16,8 @@ function makeFixture(): { userData: string; repoDir: string } {
   return { userData, repoDir };
 }
 
-/** 启动应用（Fake 演示模式）并注册项目 */
-async function launchApp(): Promise<{ app: ElectronApplication; win: Page; cleanup(): Promise<void> }> {
+/** 启动应用（Fake 演示模式；extraEnv 供 #95 摘要延迟注入）并注册项目 */
+async function launchApp(extraEnv: Record<string, string> = {}): Promise<{ app: ElectronApplication; win: Page; cleanup(): Promise<void> }> {
   const { userData, repoDir } = makeFixture();
   const app = await _electron.launch({
     args: [resolve(__dirname, "..")],
@@ -26,6 +27,7 @@ async function launchApp(): Promise<{ app: ElectronApplication; win: Page; clean
       KANBAN_TEST_PICK_DIRECTORY: repoDir,
       KANBAN_DISABLE_CLAUDE: "1",
       KANBAN_DISABLE_OPENCODE: "1",
+      ...extraEnv,
     },
   });
   const win = await app.firstWindow();
@@ -116,6 +118,50 @@ test("PTY 豁免：终端标题保持 shell 回写（终端 · pwsh），PTY 行
   await expect(structuredRow.getByTitle("重命名会话")).toBeVisible();
   await ptyRow.hover();
   await expect(ptyRow.getByTitle("重命名会话")).toHaveCount(0);
+
+  await app.close();
+  await t.cleanup();
+});
+
+test("T2 摘要翻转（#95）：turn 结束 → 摘要固定值 → 侧栏经 session:event 推送刷新", async () => {
+  const t = await launchApp();
+  const { app, win } = t;
+
+  // 首条消息 → 派生标题（derived）；turn 结束 idle → main 触发一次性摘要（Fake 固定值）→ session:event → 侧栏翻转
+  await createSession(win, "等待摘要升级的会话首条消息");
+  await expect(win.locator("aside").getByText("等待摘要升级的会话首条消息")).toBeVisible({ timeout: 10_000 });
+  await expect(win.locator("aside").getByText(FAKE_SUMMARY_TITLE)).toBeVisible({ timeout: 20_000 });
+  // 派生标题已被摘要取代（同一行标题翻转，不并存）
+  await expect(win.locator("aside").getByText("等待摘要升级的会话首条消息")).toHaveCount(0);
+
+  await app.close();
+  await t.cleanup();
+});
+
+test("T2 摘要竞态（#95）：摘要进行中手动重命名不被覆盖（manual 终态权威）", async () => {
+  // Fake 摘要延迟 4s：turn 结束触发摘要后留出重命名窗口
+  const t = await launchApp({ KANBAN_FAKE_SUMMARIZE_DELAY_MS: "4000" });
+  const { app, win } = t;
+
+  await createSession(win, "摘要竞态用的会话首条消息");
+  await expect(win.locator("aside").getByText("摘要竞态用的会话首条消息")).toBeVisible({ timeout: 10_000 });
+  // turn 结束（空闲徽标）= 摘要已触发且 pending（4s 延迟窗口内）
+  await expect(win.getByText("空闲").first()).toBeVisible({ timeout: 20_000 });
+
+  // 摘要进行中手动重命名 → manual；随后摘要迟到，门控拒绝写入且无推送
+  const row = win.locator("aside").locator("div.group").filter({ hasText: "摘要竞态用的会话首条消息" });
+  await row.hover();
+  await row.getByTitle("重命名会话").click();
+  const input = win.getByTestId("session-rename-input");
+  await expect(input).toBeVisible();
+  await input.fill("竞态手动命名");
+  await input.press("Enter");
+  await expect(win.locator("aside").getByText("竞态手动命名")).toBeVisible({ timeout: 10_000 });
+
+  // 等过摘要延迟窗口（4s 延迟 + 裕量）：手动标题保持，摘要固定值从未出现
+  await win.waitForTimeout(6_000);
+  await expect(win.locator("aside").getByText("竞态手动命名")).toHaveCount(1);
+  await expect(win.locator("aside").getByText(FAKE_SUMMARY_TITLE)).toHaveCount(0);
 
   await app.close();
   await t.cleanup();

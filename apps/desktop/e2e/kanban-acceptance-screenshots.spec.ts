@@ -145,7 +145,7 @@ test("原型一致项截图集（spec #15 H 节 7 条 + S2-18 空板）：入口
     await send(win, "首条消息（建立会话）");
     await expect(win.locator("aside").getByText("首条消息（建立会话）").first()).toBeVisible({ timeout: 10_000 });
     await win.getByTestId("kanban-entry").click(); // 回看板（详情面板保持）
-    const openRow = win.getByTestId("detail-panel").locator('[data-testid="related-session"]', { hasText: "首条消息（建立会话）" });
+    const openRow = win.getByTestId("detail-panel").locator('[data-testid="related-session"]').nth(1); // 会话2 后关联（#95：两行标题同为摘要固定值，按行序）
     await expect(openRow).toBeVisible({ timeout: 15_000 });
     await expect(implCol.getByText("◍ 2 会话")).toBeVisible({ timeout: 10_000 });
 
@@ -169,8 +169,9 @@ test("原型一致项截图集（spec #15 H 节 7 条 + S2-18 空板）：入口
 
     // 一致项 6：侧栏会话行需求徽标（REQ-id）—— 两会话（Claude/OpenCode）均挂 REQ-001
     await win.getByTestId("kanban-entry").click();
-    const claudeRow = win.locator("aside").locator('[data-testid="session-row"]', { hasText: "看板联动的会话" });
-    const openSideRow = win.locator("aside").locator('[data-testid="session-row"]', { hasText: "首条消息（建立会话）" });
+    // #95：两会话标题均已翻转摘要固定值（同文），按行序定位（行序=创建序：会话1 在前）
+    const claudeRow = win.locator("aside").locator('[data-testid="session-row"]').nth(0);
+    const openSideRow = win.locator("aside").locator('[data-testid="session-row"]').nth(1);
     await expect(claudeRow.getByTestId("req-badge")).toHaveText("REQ-001");
     await expect(openSideRow.getByTestId("req-badge")).toHaveText("REQ-001");
     await shot(win, SHOT_DIR, "09-sidebar-req-badge.png");

@@ -1431,6 +1431,7 @@ function spyAdapter(
     listModels: (i) => base.listModels(i),
     listCommands: (i) => base.listCommands(i),
     setModel: (i) => base.setModel(i),
+    summarizeTitle: (id) => base.summarizeTitle(id),
     sendTurn: (i) => base.sendTurn(i),
     interruptTurn: async (id) => {
       calls.push(`interrupt:${id}`);

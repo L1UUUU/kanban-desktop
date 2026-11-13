@@ -20,6 +20,7 @@ function makeFakeAdapter(hooks: { onInterrupt?: (id: string) => void; failInterr
     listModels: async () => [],
     listCommands: async () => [],
     setModel: async () => ({ model: "" }),
+    summarizeTitle: async () => null,
     sendTurn: async () => {},
     interruptTurn: async (id) => {
       calls.push(`interrupt:${id}`);
@@ -230,6 +231,7 @@ describe("重开恢复编排（#13；#70 起经 session-lifecycle.adoptRestored�
       listModels: async () => [],
       listCommands: async () => [],
       setModel: async () => ({ model: "" }),
+    summarizeTitle: async () => null,
       sendTurn: async () => {},
       interruptTurn: async () => {},
       resolveApproval: async () => {},

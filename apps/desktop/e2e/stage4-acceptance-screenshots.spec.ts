@@ -8,6 +8,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { shot } from "./helpers/acceptance-artifacts";
+import { FAKE_SUMMARY_TITLE } from "./helpers/fake-summary";
 
 const SHOT_DIR = resolve(__dirname, "../../../docs/acceptance/stage4/screenshots");
 
@@ -299,12 +300,12 @@ test("I-3 恢复条成功流转：待恢复 → 恢复中（不可中断）→ �
     // 重启（同一 userData，注入 4s resume 延迟使「恢复中」态可截图）
     const second = await launchApp(userData, undefined, { KANBAN_FAKE_RESUME_DELAY_MS: "4000" });
     await expect(second.win.getByText("已断开").first()).toBeVisible({ timeout: 15_000 });
-    await second.win.locator("aside").getByText("首条消息（建立会话）").click();
+    await second.win.locator("aside").getByText(FAKE_SUMMARY_TITLE).click(); // #95：重启行标题=摘要固定值
 
     // 待恢复态（原型 d3 banner 1）：会话名 + 缓存不替代原生历史说明 + 主按钮（文案保留，F12）
     const banner = second.win.getByTestId("resume-banner");
     await expect(banner).toBeVisible();
-    await expect(banner).toContainText("首条消息（建立会话）");
+    await expect(banner).toContainText(FAKE_SUMMARY_TITLE); // #95：标题=摘要固定值
     await expect(banner).toContainText("缓存消息不替代原生历史");
     await shot(second.win, SHOT_DIR, "11-resume-banner-pending.png");
 
@@ -339,7 +340,7 @@ test("I-3 恢复条失败流转：失败原因 + 重试 + 复制错误详情（�
     // 重启（同一 userData，注入首次 resume 失败）
     const second = await launchApp(userData, undefined, { KANBAN_FAKE_RESUME_FAIL_FIRST: "1" });
     await expect(second.win.getByText("已断开").first()).toBeVisible({ timeout: 15_000 });
-    await second.win.locator("aside").getByText("首条消息（建立会话）").click();
+    await second.win.locator("aside").getByText(FAKE_SUMMARY_TITLE).click(); // #95：重启行标题=摘要固定值
 
     // 失败态（原型 d3 banner 3）：原因 + 错误码 + 重试 + 复制错误详情，会话保持断开
     const banner = second.win.getByTestId("resume-banner");

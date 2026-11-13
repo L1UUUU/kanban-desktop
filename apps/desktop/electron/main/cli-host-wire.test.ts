@@ -14,7 +14,7 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { CliHost, createPortHandler, FakeAdapter, type CliAdapter, type HostCommand, type ParentPortLike } from "@kanban/cli-host";
+import { CliHost, createPortHandler, FakeAdapter, FAKE_SUMMARIZED_TITLE, type CliAdapter, type HostCommand, type ParentPortLike } from "@kanban/cli-host";
 import { CliHostClient, type UtilityProcessLike } from "./cli-host-client";
 
 /** wire 全 kind 清单（roundtrip 逐 kind 断言的驱动面）；satisfies 拦截非法 kind，Equal 拦截缺漏 */
@@ -34,6 +34,7 @@ const allKinds = [
   "listModels",
   "listCommands",
   "setModel",
+  "summarizeTitle",
 ] as const satisfies readonly HostCommand["kind"][];
 
 /** 编译期双向相等断言（Equal 惯用法）：清单缺 kind → false 不可赋给 true 字面量 → 编译红 */
@@ -221,5 +222,13 @@ describe("wire 契约 roundtrip（issue #73）", () => {
     await expect(client.setModel({ sessionId: s.sessionId, model: "fake-lite" })).resolves.toEqual({ model: "fake-lite" });
     expect(cmdOf(proc.posted.at(-1))).toEqual({ kind: "setModel", payload: { sessionId: s.sessionId, model: "fake-lite" } });
     await expect(client.setModel({ sessionId: "s-nope", model: "x" })).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
+  });
+
+  it("summarizeTitle：payload 为 sessionId 字符串；返回值直传固定标题（#95 Fake）；未知会话错误码经 wire 原样回传", async () => {
+    const { proc, client } = makeWire();
+    const s = await client.createSession({ cwd: "C:\\wire", cli: "fake" });
+    await expect(client.summarizeTitle(s.sessionId)).resolves.toBe(FAKE_SUMMARIZED_TITLE);
+    expect(cmdOf(proc.posted.at(-1))).toEqual({ kind: "summarizeTitle", payload: s.sessionId });
+    await expect(client.summarizeTitle("s-nope")).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
   });
 });

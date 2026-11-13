@@ -8,6 +8,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { shot } from "./helpers/acceptance-artifacts";
+import { FAKE_SUMMARY_TITLE } from "./helpers/fake-summary";
 
 const PROJECT_NAME = "kb-s5-repo";
 const SHOT_DIR = resolve(__dirname, "../../../docs/acceptance/stage5/screenshots");
@@ -120,7 +121,7 @@ test("原型对照①②：草稿态 + 提交失败卡 + 行 hover 归档/删除
     await expect(win.getByText("空闲").first()).toBeVisible({ timeout: 20_000 });
 
     // 行 hover：归档/删除操作区（原型演示② .ops；常驻 pr 预留右缘，徽标不进入）
-    const row = sessionRow(win, "要重试的首条"); // #94：行标题=首条派生
+    const row = sessionRow(win, FAKE_SUMMARY_TITLE); // #95：空闲后行标题=摘要固定值
     await row.hover();
     await expect(row.getByRole("button", { name: "归档", exact: true })).toBeVisible();
     await shot(win, SHOT_DIR, "03-session-hover-ops.png");
@@ -129,7 +130,7 @@ test("原型对照①②：草稿态 + 提交失败卡 + 行 hover 归档/删除
     await row.getByRole("button", { name: "删除", exact: true }).click();
     const dialog = win.getByTestId("delete-session-dialog");
     await expect(dialog).toBeVisible({ timeout: 10_000 });
-    await expect(dialog).toContainText("确定删除『要重试的首条』吗？");
+    await expect(dialog).toContainText(`确定删除『${FAKE_SUMMARY_TITLE}』吗？`); // #95：行标题=摘要固定值
     await expect(dialog).toContainText("CLI 原生历史文件不删除。此操作不可撤销。");
     await shot(win, SHOT_DIR, "04-delete-confirm.png");
     await dialog.getByRole("button", { name: "取消" }).click();

@@ -63,6 +63,8 @@ export interface FakeAdapterOptions {
   failModelsFirst?: number;
   /** #81 e2e 支撑：前 N 次 setModel 抛 AdapterError（整机 Playwright 驱动中途切换失败回滚；缺省 0 不注入） */
   failSetModelFirst?: number;
+  /** #95 e2e 支撑：summarizeTitle 前置注入延迟毫秒（整机 Playwright 观察「摘要进行中手动重命名不被覆盖」竞态；缺省 0） */
+  summarizeDelayMs?: number;
   /** 用户主目录覆盖（#92：cli=codex 时目录模拟真实 codex 扫描的 ~/.codex/prompts 基准；缺省 os.homedir()；测试注入 fixture） */
   homeDir?: string;
 }
@@ -75,6 +77,9 @@ const FAKE_CAPABILITIES: AdapterCapabilities = {
   readHistory: true,
   skillSignal: true,
 };
+
+/** Fake 摘要标题固定值（#95 / ADR 0003 决策 3）：整机 e2e 断言侧栏标题翻转；契约套默认精确断言值 */
+export const FAKE_SUMMARIZED_TITLE = "演示会话 · 首轮摘要";
 
 /** Fake 模型目录（spec #75 #18）：两条假模型，第一条默认——演示/测试时 UI 形态与真实 CLI 一致 */
 const FAKE_MODELS: ModelEntry[] = [
@@ -93,6 +98,7 @@ export class FakeAdapter implements CliAdapter {
   private readonly modelsDelayMs: number;
   private readonly failModelsFirst: number;
   private readonly failSetModelFirst: number;
+  private readonly summarizeDelayMs: number;
   private resumeCalls = 0;
   private createCalls = 0;
   private listModelsCalls = 0;
@@ -111,6 +117,7 @@ export class FakeAdapter implements CliAdapter {
     this.modelsDelayMs = options.modelsDelayMs ?? 0;
     this.failModelsFirst = options.failModelsFirst ?? 0;
     this.failSetModelFirst = options.failSetModelFirst ?? 0;
+    this.summarizeDelayMs = options.summarizeDelayMs ?? 0;
     this.homeDir = options.homeDir ?? null;
   }
 
@@ -175,6 +182,13 @@ export class FakeAdapter implements CliAdapter {
     }
     s.model = input.model;
     return { model: input.model };
+  }
+
+  /** 一次性标题摘要（#95 / ADR 0003 决策 3）：固定值（整机 e2e 断言侧栏翻转）；#95 注入：前置延迟（驱动「摘要进行中重命名不被覆盖」竞态） */
+  async summarizeTitle(sessionId: string): Promise<string | null> {
+    this.requireSession(sessionId);
+    if (this.summarizeDelayMs > 0) await new Promise((r) => setTimeout(r, this.summarizeDelayMs));
+    return FAKE_SUMMARIZED_TITLE;
   }
 
   async sendTurn(input: SendTurnInput): Promise<void> {

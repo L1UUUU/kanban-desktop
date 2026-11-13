@@ -165,6 +165,9 @@ class BaseStubAdapter implements CliAdapter {
   async setModel(input: { sessionId: string; model: string }): Promise<{ model: string }> {
     return { model: input.model };
   }
+  async summarizeTitle(): Promise<string | null> {
+    return null; // #95：桩实现——摘要命令面在本测试不驱动
+  }
   async sendTurn(): Promise<void> {}
   async interruptTurn(): Promise<void> {}
   async resolveApproval(): Promise<void> {}

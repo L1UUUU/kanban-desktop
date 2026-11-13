@@ -1,7 +1,8 @@
-// 用途：CodexAdapter —— C1 契约的真实 Codex 实现：spawn 直连 vendored codex.exe app-server（JSON-RPC/stdio，单进程多 thread），通知流映射 ChatEvent（poc-1/t0-01 实证 wire 行为）+ readTranscript rollout 落盘双视角（#28）+ listModels 常驻 app-server 目录查询（#76）
+// 用途：CodexAdapter —— C1 契约的真实 Codex 实现：spawn 直连 vendored codex.exe app-server（JSON-RPC/stdio，单进程多 thread），通知流映射 ChatEvent（poc-1/t0-01 实证 wire 行为）+ readTranscript rollout 落盘双视角（#28）+ listModels 常驻 app-server 目录查询（#76）+ summarizeTitle 一次性 codex exec 标题摘要（#95）
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { readFileSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import path from "node:path";
 import type { LogKind, AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, CommandEntry, ModelEntry, PermMode, SessionStatus, TranscriptEvent } from "@kanban/ipc-schema";
 import { AdapterError, ExeNotFoundError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListCommandsInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
 import { resolveCodexExe } from "./codex/exe";
@@ -10,6 +11,7 @@ import { CodexRpcClient } from "./codex/rpc";
 import { parseRolloutTranscript } from "./codex/rollout";
 import { createDefaultModelResolver, type ModelResolver } from "./codex/model-probe";
 import { isAuthFailureText } from "./session-error";
+import { buildSummaryPrompt, DEFAULT_SUMMARIZE_TIMEOUT_MS, runTitleOneShot, toTitleLine } from "./title-summarize";
 
 /** 可注入的 rpc 客户端面（生产 CodexRpcClient；测试 Fake 手动驱动协议消息） */
 export interface CodexRpcClientLike {
@@ -35,7 +37,9 @@ export interface CodexAdapterOptions {
   /** 测试注入 rpc 客户端工厂 */
   clientFactory?: () => CodexRpcClientLike;
   /** 用户主目录覆盖（listCommands #89：~/.codex/prompts 解析基准；缺省 os.homedir()；测试注入 fixture） */
-  homeDir?: string;
+  homeDir?: string | null;
+  /** #95：标题摘要一次性进程超时 ms（缺省 60s，独立设定不沿用 run-once 300s） */
+  summarizeTimeoutMs?: number;
   /** 诊断日志 */
   log?: (kind: LogKind, detail: string) => void;
 }
@@ -105,6 +109,8 @@ interface SessionState {
   adopted: boolean;
   /** 已从原生 thread 历史回填过（防重复回填） */
   backfilled: boolean;
+  /** #95：本会话各轮 user 文本（startTurn 记录；原生 transcript 不可读时的摘要回退素材） */
+  userTexts: string[];
 }
 
 export class CodexAdapter implements CliAdapter {
@@ -118,20 +124,24 @@ export class CodexAdapter implements CliAdapter {
   private readonly clientFactory: () => CodexRpcClientLike;
   private readonly homeDir: string | null;
   private readonly log: (kind: LogKind, detail: string) => void;
+  /** #95：config 手动覆盖 exe（summarizeTitle 的 exe 解析复用同链）与摘要一次性超时 */
+  private readonly manualExe: string | null;
+  private readonly summarizeTimeoutMs: number;
 
   constructor(options: CodexAdapterOptions = {}) {
     this.effort = options.effort;
     this.log = options.log ?? (() => {});
     this.homeDir = options.homeDir ?? null;
+    this.manualExe = options.exe ?? null;
+    this.summarizeTimeoutMs = options.summarizeTimeoutMs ?? DEFAULT_SUMMARIZE_TIMEOUT_MS;
     this.modelResolver = options.resolveModel ?? createDefaultModelResolver(options);
     const factory = options.clientFactory;
     if (factory) {
       this.clientFactory = factory;
     } else {
       // 生产：解析 vendored exe（config 手动覆盖 → env → npm 全局 → 本地）
-      const exe = options.exe ?? null;
       this.clientFactory = () =>
-        new CodexRpcClient({ exe: resolveCodexExe({ manualOverride: exe }), log: this.log }) as unknown as CodexRpcClientLike;
+        new CodexRpcClient({ exe: resolveCodexExe({ manualOverride: this.manualExe }), log: this.log }) as unknown as CodexRpcClientLike;
     }
   }
 
@@ -177,6 +187,7 @@ export class CodexAdapter implements CliAdapter {
       dead: false,
       adopted: false,
       backfilled: false,
+      userTexts: [],
     };
     this.sessions.set(s.sessionId, s);
     this.byThread.set(threadId, s);
@@ -222,6 +233,63 @@ export class CodexAdapter implements CliAdapter {
     return { model: input.model };
   }
 
+  /**
+   * 一次性标题摘要（#95 / ADR 0003 决策 3）：spawn 独立 `codex exec` 一次性进程——--ephemeral 不落会话文件（上下文零污染）、
+   * prompt 经 stdin（`-`）、会话当前模型经 -m、-o 临时文件取最终 agent 消息（stdout 不解析，免 banner 干扰）；
+   * 超时独立设定；断开/收养会话亦可摘要（readTranscript 按需拉起 app-server 读原生历史）。
+   */
+  async summarizeTitle(sessionId: string): Promise<string | null> {
+    const s = this.requireKnownSession(sessionId);
+    const transcript = await this.readTranscript(sessionId);
+    // 原生 transcript 为空（如 CLI 版本漂移下 thread/read 无内容）时回退本地素材：user 文本（startTurn 记录）+ assistant 终文（delta 累计）
+    const material = transcript.length > 0 ? transcript : this.localSummaryMaterial(s);
+    if (material.length === 0) return null;
+    const out = path.join(tmpdir(), `kb-codex-title-${randomUUID().slice(0, 8)}.txt`);
+    const args = ["exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "--color", "never", "--output-last-message", out];
+    if (s.model) args.push("--model", s.model);
+    args.push("-"); // prompt 经 stdin
+    try {
+      const r = await runTitleOneShot({
+        exe: resolveCodexExe({ manualOverride: this.manualExe }),
+        args,
+        cwd: s.cwd,
+        stdin: buildSummaryPrompt(material),
+        timeoutMs: this.summarizeTimeoutMs,
+        log: this.log,
+      });
+      if (r.exitCode !== 0) {
+        throw new AdapterError("E_INTERNAL", `Codex 标题摘要失败（exit ${r.exitCode}）：${r.stderr.trim().slice(0, 200)}`);
+      }
+      // 最终消息由 -o 文件承载（0.167.0 实测 flag：--output-last-message）；缺文件/空文件按空产出降级 null
+      let text = "";
+      try {
+        text = readFileSync(out, "utf8");
+      } catch {
+        /* 未写出：按空产出处理 */
+      }
+      return toTitleLine(text) || null;
+    } catch (e) {
+      // #46 对齐 ensureStarted：exe 解析失败协议级映射；启动/超时/exit 非零包装均为 AdapterError 原样透传
+      if (e instanceof ExeNotFoundError) throw new AdapterError("E_SPAWN_NOT_FOUND", e.message);
+      if (e instanceof AdapterError) throw e;
+      throw new AdapterError("E_INTERNAL", `Codex 标题摘要失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      rmSync(out, { force: true }); // 临时文件即用即清
+    }
+  }
+
+  /** #95 摘要回退素材：本地已知对话（user 文本按轮序 + assistant 终文；标题摘要只需主题素材，顺序粗粒度可接受） */
+  private localSummaryMaterial(s: SessionState): TranscriptEvent[] {
+    const out: TranscriptEvent[] = [];
+    for (const text of s.userTexts) {
+      if (text.trim()) out.push({ role: "user", text });
+    }
+    for (const text of s.agentAcc.values()) {
+      if (text.trim()) out.push({ role: "assistant", text });
+    }
+    return out;
+  }
+
   /** 应用重启后的会话收养（#13 恢复编排）：按 DB thread id 重建状态（无进程；readHistory 拉起进程读原生历史，resume 后可续问） */
   async adoptSession(input: AdoptSessionInput): Promise<void> {
     if (this.sessions.has(input.sessionId)) throw new AdapterError("E_INTERNAL", `会话已存在：${input.sessionId}`);
@@ -246,6 +314,7 @@ export class CodexAdapter implements CliAdapter {
       dead: true,
       adopted: true,
       backfilled: false,
+      userTexts: [],
     };
     this.sessions.set(s.sessionId, s);
     this.byThread.set(input.nativeSessionId, s);
@@ -575,6 +644,7 @@ export class CodexAdapter implements CliAdapter {
   /* ---------------- 内部：turn 驱动与终态 ---------------- */
 
   private async startTurn(s: SessionState, text: string): Promise<void> {
+    s.userTexts.push(text); // #95：摘要回退素材（原生 transcript 不可读时）
     s.turnActive = true;
     s.interruptRequested = false;
     s.interruptSent = false;

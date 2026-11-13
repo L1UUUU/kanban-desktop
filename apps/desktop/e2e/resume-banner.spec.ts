@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readRunEntries } from "./log-run";
+import { FAKE_SUMMARY_TITLE } from "./helpers/fake-summary";
 
 const PROJECT_NAME = "kb-resume";
 
@@ -82,14 +83,14 @@ test("恢复条成功流转：断开 → 待恢复条 → 点击恢复 → 恢�
 
     // 重启（同一 userData，注入 1.5s resume 延迟使「恢复中」态可观察）
     const second = await launchApp(userData, undefined, { KANBAN_FAKE_RESUME_DELAY_MS: "1500" });
-    await expect(second.win.locator("aside").getByText("首条消息（建立会话）")).toBeVisible({ timeout: 15_000 });
+    await expect(second.win.locator("aside").getByText(FAKE_SUMMARY_TITLE)).toBeVisible({ timeout: 15_000 }); // #95：重启行标题=DB 摘要值
     await expect(second.win.getByText("已断开").first()).toBeVisible();
-    await second.win.locator("aside").getByText("首条消息（建立会话）").click();
+    await second.win.locator("aside").getByText(FAKE_SUMMARY_TITLE).click();
 
     // 待恢复态：会话名 + 缓存不替代原生历史说明 + 主按钮（文案保留，F12）
     const banner = second.win.getByTestId("resume-banner");
     await expect(banner).toBeVisible();
-    await expect(banner).toContainText("首条消息（建立会话）"); // #94：标题=首条派生
+    await expect(banner).toContainText(FAKE_SUMMARY_TITLE); // #95：标题=摘要固定值（首轮后已升级）
     await expect(banner).toContainText("缓存消息不替代原生历史");
 
     // 点击恢复 → 恢复中态：进行中说明 + 不可中断（D1：无取消/无任何按钮）
@@ -123,7 +124,7 @@ test("恢复条失败流转：恢复失败（IPC 错误原因/错误码 + 重试
     // 重启（同一 userData，注入首次 resume 失败）
     const second = await launchApp(userData, undefined, { KANBAN_FAKE_RESUME_FAIL_FIRST: "1" });
     await expect(second.win.getByText("已断开").first()).toBeVisible({ timeout: 15_000 });
-    await second.win.locator("aside").getByText("首条消息（建立会话）").click();
+    await second.win.locator("aside").getByText(FAKE_SUMMARY_TITLE).click(); // #95：重启行标题=摘要固定值
 
     // 待恢复 → 点击 → 失败态：IPC 错误原因 + 错误码 + 「重试」+「复制错误详情」，会话保持断开
     const banner = second.win.getByTestId("resume-banner");

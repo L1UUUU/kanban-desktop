@@ -327,6 +327,19 @@ export async function renameSessionChain(store: ChatStore, transport: ChatTransp
 }
 
 /**
+ * #95 / ADR 0003 摘要标题推送订阅（模块级可直测）：session:event 轻通道 → title 事件本地刷新侧栏标题
+ * （main 已按 title_source 门控——推送到达即代表 DB 已升级 summarized，renderer 无需再判权）。
+ * transport 未实现 onSessionEvent（旧 fake）时安全 no-op。
+ */
+export function subscribeSessionEvents(store: ChatStore, transport: ChatTransport): () => void {
+  return (
+    transport.onSessionEvent?.((event) => {
+      if (event.type === "title") store.updateSession(event.sessionId, { title: event.title });
+    }) ?? (() => undefined)
+  );
+}
+
+/**
  * 会话控制器 hook（issue #71：store 与 PTY 草稿机制均为 seam 之后的实现细节）。
  * deps.demoCwd 为 Fake 演示草稿 cwd（App 层经 AppInfo 注入：Main 读 KANBAN_FAKE_DEMO_CWD、缺省用户主目录）；
  * 未注入（null/undefined）前不自举 boot 演示草稿，真实会话 cwd 一律来自已注册项目（deps.resolveCwd）。
@@ -430,6 +443,12 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
       else if (event.type === "exit") store.updateStatus(event.terminalId, "disconnected");
     });
   }, [transport, manager, store]);
+
+  // session:event 订阅（#95 / ADR 0003）：摘要标题异步完成推送 → 侧栏标题本地刷新（manual 已在 main 门控不被覆盖）
+  useEffect(() => {
+    if (!transport) return;
+    return subscribeSessionEvents(store, transport);
+  }, [transport, store]);
 
   const killTerminal = useCallback(
     (terminalId: string) => {

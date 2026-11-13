@@ -282,6 +282,27 @@ describe("SessionStore 标题来源门控（#94 / ADR 0003 四态状态机）", 
     expect(() => store.renameTitle("ghost", "x")).not.toThrow();
   });
 
+  it("applySummarizedTitle（#95）单向升级：仅 derived 生效；default/manual/summarized 不被摘要触碰", () => {
+    const store = makeStore();
+    // derived → summarized：生效
+    store.insert(makeRecord({ id: "s-d", titleSource: "derived", title: "派生标题" }));
+    expect(store.applySummarizedTitle("s-d", "模型摘要标题")).toBe(true);
+    expect(store.get("s-d")).toMatchObject({ title: "模型摘要标题", titleSource: "summarized" });
+    // summarized 终态：摘要重试（如重启后重触发）不再覆盖
+    expect(store.applySummarizedTitle("s-d", "第二次摘要")).toBe(false);
+    expect(store.get("s-d")).toMatchObject({ title: "模型摘要标题", titleSource: "summarized" });
+    // default（未派生过）：无首轮对话语义，摘要不生效
+    store.insert(makeRecord({ id: "s-def" }));
+    expect(store.applySummarizedTitle("s-def", "x")).toBe(false);
+    expect(store.get("s-def")).toMatchObject({ titleSource: "default" });
+    // manual：终态权威，摘要竞态不覆盖
+    store.insert(makeRecord({ id: "s-m", titleSource: "manual", title: "我起的名字" }));
+    expect(store.applySummarizedTitle("s-m", "迟到摘要")).toBe(false);
+    expect(store.get("s-m")).toMatchObject({ title: "我起的名字", titleSource: "manual" });
+    // 已删行（摘要进行中用户删会话）：条件 UPDATE 零行命中，返回 false
+    expect(store.applySummarizedTitle("ghost", "x")).toBe(false);
+  });
+
   it("重启读回：title_source 随库文件往返（manual 权威跨重启保持）", () => {
     const store = makeStore();
     store.insert(makeRecord({ title: "新会话 · Claude" }));

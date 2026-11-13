@@ -1123,6 +1123,7 @@ defineAdapterContractTests(
     cwd: CWD,
     assistantMessages: { exactly: 1 },
     firstAssistantText: null,
+    summarizeTitle: "null", // #95：opencode 一次性摘要降级 null（prompt API 需会话上下文）
     suggestionsRequired: true,
     deny: { contains: [], notContains: [] },
     once: { outputContains: [], expectSecondAsk: false },

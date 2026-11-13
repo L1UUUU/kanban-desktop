@@ -3,6 +3,7 @@ import { test, expect, _electron, type ElectronApplication, type Page } from "@p
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { FAKE_SUMMARY_TITLE } from "./helpers/fake-summary";
 
 const PROJECT_NAME = "kb-kanban-board";
 
@@ -117,7 +118,7 @@ test("关联管理往返（#20）：卡片建会话自动关联 → 解除（会
     await expect(panel).toBeVisible();
 
     // 关联列表：CLI 色点行 + 状态徽标 + 跳转/解除（US18：活动状态只在会话行）
-    const claudeRow = panel.locator('[data-testid="related-session"]', { hasText: "看板联动的会话" });
+    const claudeRow = panel.locator('[data-testid="related-session"]').nth(0); // #95：会话1 首轮后标题已翻转摘要固定值，按关联行序定位
     await expect(claudeRow).toBeVisible();
     await expect(claudeRow.getByText("空闲", { exact: true })).toBeVisible();
     await expect(claudeRow.getByTestId("related-jump")).toBeVisible();
@@ -135,11 +136,11 @@ test("关联管理往返（#20）：卡片建会话自动关联 → 解除（会
     await win.getByRole("button", { name: "发送 ➤" }).click();
     await expect(win.locator("aside").getByText("首条消息（建立会话）").first()).toBeVisible({ timeout: 10_000 });
     await win.getByTestId("kanban-entry").click(); // 回看板（详情面板与选中卡片状态保持）
-    const openRow = panel.locator('[data-testid="related-session"]', { hasText: "首条消息（建立会话）" });
+    const openRow = panel.locator('[data-testid="related-session"]').nth(1); // 会话2 后关联（#95：两行标题同为摘要固定值，按行序）
     await expect(openRow).toBeVisible({ timeout: 15_000 });
     await expect(designCol.getByText("◍ 2 会话")).toBeVisible({ timeout: 10_000 });
     // 侧栏：新会话行出现 + 需求徽标（自动关联直达）
-    const sidebarOpen = win.locator("aside").locator('[data-testid="session-row"]', { hasText: "首条消息（建立会话）" });
+    const sidebarOpen = win.locator("aside").locator('[data-testid="session-row"]').nth(1); // 会话2（#95：标题翻转后按行序）
     await expect(sidebarOpen.getByTestId("req-badge")).toHaveText("REQ-001", { timeout: 10_000 });
 
     // 解除 OpenCode：会话数 2→1、侧栏徽标消失；阶段保持 Design（不回退）
@@ -149,11 +150,12 @@ test("关联管理往返（#20）：卡片建会话自动关联 → 解除（会
     await expect(designCol.getByText("待命名需求")).toBeVisible(); // 阶段保持
 
     // 关联已有：选择器仅列当前项目未关联会话（Claude 已关联不出列；OpenCode 可选）→ 选择即关联往返
+    // #95：两轮后两会话标题均为摘要固定值（同文）——先等会话2 翻转收敉平竞态，再按固定值选择（已关联的会话1 不出列 → 选项唯一）
+    await expect(sidebarOpen).toContainText(FAKE_SUMMARY_TITLE, { timeout: 15_000 });
     const linkSel = panel.getByTestId("link-existing-select");
     const optionTexts = await linkSel.locator("option").allTextContents();
-    expect(optionTexts.some((t) => t.includes("看板联动的会话"))).toBe(false); // 已关联排除
-    expect(optionTexts.some((t) => t.includes("首条消息（建立会话）"))).toBe(true);
-    await linkSel.selectOption({ label: "首条消息（建立会话）" });
+    expect(optionTexts.some((t) => t.includes(FAKE_SUMMARY_TITLE))).toBe(true);
+    await linkSel.selectOption({ label: FAKE_SUMMARY_TITLE });
     await expect(designCol.getByText("◍ 2 会话")).toBeVisible({ timeout: 10_000 });
     await expect(sidebarOpen.getByTestId("req-badge")).toHaveText("REQ-001", { timeout: 10_000 });
 
@@ -161,7 +163,7 @@ test("关联管理往返（#20）：卡片建会话自动关联 → 解除（会
     await claudeRow.getByTestId("related-jump").click();
     await expect(win.getByTestId("kanban-board")).toBeHidden();
     await expect(win.getByPlaceholder("输入消息，/ 开头触发 Skill…")).toBeVisible();
-    const sidebarClaude = win.locator("aside").locator('[data-testid="session-row"]', { hasText: "看板联动的会话" });
+    const sidebarClaude = win.locator("aside").locator('[data-testid="session-row"]').nth(0); // 会话1（#95：按行序）
     await expect(sidebarClaude).toHaveAttribute("data-active", "true");
 
     // 跳转方向 B：侧栏 REQ 徽标点击 → 进入看板并选中该需求（详情面板打开）
@@ -238,10 +240,10 @@ test("全流程串测（#22 验收）：入口→看板→手动建卡→卡片�
     await win.getByRole("button", { name: "发送 ➤" }).click();
     await expect(win.locator("aside").getByText("首条消息（建立会话）").first()).toBeVisible({ timeout: 10_000 });
     await win.getByTestId("kanban-entry").click(); // 回看板（详情面板保持）
-    const openRow = win.getByTestId("detail-panel").locator('[data-testid="related-session"]', { hasText: "首条消息（建立会话）" });
+    const openRow = win.getByTestId("detail-panel").locator('[data-testid="related-session"]').first(); // #95：标题翻转后按行序（此时仅会话2 关联）
     await expect(openRow).toBeVisible({ timeout: 15_000 });
     await expect(noneCol.getByText("◍ 1 会话")).toBeVisible({ timeout: 10_000 });
-    const sidebarOpen = win.locator("aside").locator('[data-testid="session-row"]', { hasText: "首条消息（建立会话）" });
+    const sidebarOpen = win.locator("aside").locator('[data-testid="session-row"]').nth(1); // 会话2（#95：按行序）
     await expect(sidebarOpen.getByTestId("req-badge")).toHaveText("REQ-001", { timeout: 10_000 });
 
     // ④ 阶段修正（S2-05）：五段条 Design → 卡片移列 + 依据「手动修正」；随后关面板（后续步骤重新点卡开）
@@ -284,7 +286,7 @@ test("全流程串测（#22 验收）：入口→看板→手动建卡→卡片�
     await second.win.getByTestId("kanban-entry").click();
     await expect(second.win.getByTestId("kanban-board")).toBeVisible();
     await expect(second.win.getByTestId("requirement-card")).toHaveCount(0, { timeout: 15_000 });
-    const sidebarOpen2 = second.win.locator("aside").locator('[data-testid="session-row"]', { hasText: "首条消息（建立会话）" });
+    const sidebarOpen2 = second.win.locator("aside").locator('[data-testid="session-row"]').nth(1); // 会话2（#95：重启后标题=摘要固定值，按行序）
     await expect(sidebarOpen2).toBeVisible({ timeout: 15_000 }); // 会话本身保留（S2-10：不删会话）
     await expect(sidebarOpen2.getByTestId("req-badge")).toHaveCount(0, { timeout: 10_000 }); // 关联已随卡清除
     await second.app.close();

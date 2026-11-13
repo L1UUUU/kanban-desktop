@@ -110,8 +110,8 @@ test("会话内五类错误卡呈现与动作流转（四类 + 未知兜底，fa
     await win.locator(".xterm").first().click();
     await win.keyboard.type("x");
     await expect(win.getByText(/^终端 · /).first()).toBeVisible({ timeout: 15_000 });
-    // 切回结构化会话继续驱动后续卡（行标题=首条派生，#94）
-    await win.locator("aside").getByText("首条消息（建立会话）").click();
+    // 切回结构化会话继续驱动后续卡（#95：错误脚本以 idle 收尾，行标题已翻转摘要固定值；结构化行在 PTY 行之前，按行序取第 0 行）
+    await win.locator('aside [data-testid="session-row"]').nth(0).click();
 
     // 卡 3（会话内形态）：找不到 CLI 程序（SPAWN_NOT_FOUND）—— 安装/PATH/配置文件指引 + 复制配置路径
     await send(win, "找不到 CLI");

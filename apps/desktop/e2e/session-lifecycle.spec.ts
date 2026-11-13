@@ -6,6 +6,7 @@ import { test, expect, _electron, type ElectronApplication, type Page } from "@p
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { FAKE_SUMMARY_TITLE } from "./helpers/fake-summary";
 
 const PROJECT_NAME = "kb-lc-repo";
 
@@ -148,10 +149,10 @@ test("归档 → 设置面板按项目分组 → 取消归档回列表（已断�
     await expect(win.getByText("空闲").first()).toBeVisible({ timeout: 30_000 });
 
     // hover 归档：行移出默认列表（数据保留），结构化分组回空态
-    const row = sessionRow(win, "首条消息（建立会话）"); // #94：行标题=首条派生
+    const row = sessionRow(win, FAKE_SUMMARY_TITLE); // #95：首轮后行标题=摘要固定值
     await row.hover();
     await row.getByRole("button", { name: "归档", exact: true }).click();
-    await expect(win.locator("aside").getByText("首条消息（建立会话）")).toHaveCount(0, { timeout: 10_000 });
+    await expect(win.locator("aside").getByText(FAKE_SUMMARY_TITLE)).toHaveCount(0, { timeout: 10_000 });
     await expect(win.locator("aside").getByText("暂无会话")).toBeVisible();
 
     // 设置面板：已归档会话按项目分组可见（当前项目分组默认展开），条目含标题/CLI/最后活跃/归档时间
@@ -162,7 +163,7 @@ test("归档 → 设置面板按项目分组 → 取消归档回列表（已断�
     await expect(group.getByTestId("archived-group-head")).toBeVisible();
     await expect(group.getByTestId("archived-group-head")).toContainText("1 条");
     const item = group.getByTestId("archived-item");
-    await expect(item).toContainText("首条消息（建立会话）"); // #94：标题=首条派生
+    await expect(item).toContainText(FAKE_SUMMARY_TITLE); // #95：标题=摘要固定值
     await expect(item).toContainText("Claude · 最后活跃");
     await expect(item).toContainText("归档于");
 
@@ -170,11 +171,11 @@ test("归档 → 设置面板按项目分组 → 取消归档回列表（已断�
     await item.getByTestId("archived-unarchive").click();
     await expect(win.getByTestId("archived-empty")).toBeVisible({ timeout: 10_000 });
     await modal.getByRole("button", { name: "完成" }).click();
-    await expect(win.locator("aside").getByText("首条消息（建立会话）")).toBeVisible({ timeout: 10_000 });
+    await expect(win.locator("aside").getByText(FAKE_SUMMARY_TITLE)).toBeVisible({ timeout: 10_000 });
     await expect(win.getByText("已断开").first()).toBeVisible();
 
     // 结构化行选中即出恢复引导条 → 读取原生历史并恢复 → 空闲可续聊
-    await win.locator("aside").getByText("首条消息（建立会话）").click();
+    await win.locator("aside").getByText(FAKE_SUMMARY_TITLE).click();
     const resumeBanner = win.getByTestId("resume-banner");
     await expect(resumeBanner).toBeVisible({ timeout: 10_000 });
     await expect(resumeBanner).toContainText("缓存消息不替代原生历史");
@@ -275,8 +276,8 @@ test("重启后历史与配置正确：会话恢复断开态 + autoArchive 开�
     const second = await launchApp(userData);
     await expect(second.win.getByText("已断开").first()).toBeVisible({ timeout: 15_000 });
     await expect(second.win.locator("aside").locator('[data-testid="session-row"]')).toHaveCount(2, { timeout: 10_000 });
-    await expect(second.win.locator("aside").getByText("重启可见的会话")).toBeVisible(); // #94：重启行标题=DB 派生值
-    await expect(second.win.locator("aside").getByText("码字会话首条")).toBeVisible();
+    // #95：两会话首轮均完成，重启行标题=DB 摘要固定值（同文两行，按数量断言两行俱在）
+    await expect(second.win.locator("aside").getByText(FAKE_SUMMARY_TITLE)).toHaveCount(2);
 
     // 配置正确：开关仍开、天数 45 仍生效；启动扫描已跑（异步，反馈最终为上次扫描结果）
     await second.win.getByRole("button", { name: "设置", exact: true }).click();

@@ -155,6 +155,14 @@ export class SessionStore {
     this.db.prepare("UPDATE sessions SET title = ?, title_source = 'manual' WHERE id = ?").run(title, id);
   }
 
+  /** #95 / ADR 0003 摘要标题门控写：仅 title_source='derived' 时升级为 summarized（单向；竞态下的 manual/已删行/已 summarized 均零行命中）；返回是否生效 */
+  applySummarizedTitle(id: string, title: string): boolean {
+    const r = this.db
+      .prepare("UPDATE sessions SET title = ?, title_source = 'summarized' WHERE id = ? AND title_source = 'derived'")
+      .run(title, id);
+    return Number(r.changes) > 0;
+  }
+
 }
 
 /** snake_case 行 → camelCase 记录 */

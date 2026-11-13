@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { shot } from "./helpers/acceptance-artifacts";
+import { FAKE_SUMMARY_TITLE } from "./helpers/fake-summary";
 
 const PROJECT_NAME = "kb-shot-repo";
 const SHOT_DIR = resolve(__dirname, "../../../docs/acceptance/stage1/screenshots");
@@ -65,7 +66,8 @@ async function createSession(win: Page, cli: string, nth = 0): Promise<void> {
   await win.getByRole("button", { name: cli, exact: true }).click();
   await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
   await send(win, "首条消息（建立会话）");
-  await expect(win.locator("aside").getByText("首条消息（建立会话）").nth(nth)).toBeVisible({ timeout: 10_000 }); // #94：标题=首条派生
+  // #95：旧会话行在首轮 idle 后标题翻转为摘要固定值——新行就绪改按行数断言（nth=新行下标，行序=创建序）
+  await expect(win.locator('aside [data-testid="session-row"]')).toHaveCount(nth + 1, { timeout: 10_000 });
 }
 
 test("原型一致项截图集：布局/新建菜单/聊天区三卡/composer/冲突条/取消/PTY", async () => {
@@ -136,7 +138,7 @@ test("原型一致项截图集：布局/新建菜单/聊天区三卡/composer/�
     await createSession(win, "Claude", 1);
     await send(win, "拆类型");
     await expect(win.getByRole("button", { name: "⏹ 停止输出" })).toBeVisible({ timeout: 10_000 });
-    await win.locator("aside").getByText("首条消息（建立会话）").nth(0).click(); // 切回 A（两行同首条派生，#94）
+    await win.locator('aside [data-testid="session-row"]').nth(0).click(); // 切回 A（#95：按行序定位）
     await send(win, "拆类型");
     const banner = win.getByTestId("conflict-banner");
     await expect(banner).toBeVisible({ timeout: 15_000 });
@@ -208,10 +210,10 @@ test("徽标与断开恢复截图：主仓库绿/worktree 蓝 + 重开断开会�
     // 第三段：重开（同一 userData）→ 断开会话顶部恢复引导条（#42）→ 恢复后可续聊
     const third = await launchApp(userData);
     await expect(third.win.getByText("已断开").first()).toBeVisible({ timeout: 15_000 });
-    await third.win.locator("aside").getByText("首条消息（建立会话）").click();
+    await third.win.locator("aside").getByText(FAKE_SUMMARY_TITLE).first().click(); // #95：重启行标题=摘要固定值
     const resumeBanner = third.win.getByTestId("resume-banner");
     await expect(resumeBanner).toBeVisible();
-    await expect(resumeBanner).toContainText("首条消息（建立会话）");
+    await expect(resumeBanner).toContainText(FAKE_SUMMARY_TITLE);
     await expect(resumeBanner).toContainText("缓存消息不替代原生历史");
     // 一致项 5（断开会话恢复入口，#42 顶部条形态）截图
     await shot(third.win, SHOT_DIR, "07-disconnected-recovery.png");

@@ -96,6 +96,7 @@ describe.skipIf(!E2E)("CodexAdapter 真实集成（env-gated）", () => {
       cwd: workdir, // 真实执行命令须真实存在的目录（占位 cwd 会导致模型不执行命令、无审批）
       assistantMessages: { atLeast: 1 },
       firstAssistantText: null,
+      summarizeTitle: "loose", // #95：真实摘要生成（单轮一次性进程，上下文零污染由契约不变量断言）
       suggestionsRequired: false,
       deny: { contains: [], notContains: [], verify: async () => { expect(existsSync(f1)).toBe(false); } },
       once: { outputContains: [], verify: async () => { expect(existsSync(f1)).toBe(true); } },

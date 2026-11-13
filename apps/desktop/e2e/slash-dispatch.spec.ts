@@ -3,6 +3,7 @@ import { test, expect, _electron, type ElectronApplication, type Page } from "@p
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { FAKE_SUMMARY_TITLE } from "./helpers/fake-summary";
 
 const PROJECT_NAME = "kb-slash-dispatch";
 /** codex prompt fixture 正文（占位符 $ARGUMENTS/$1 随发送期展开替换） */
@@ -119,7 +120,7 @@ test("codex 匹配展开 → 未匹配原样（codex /foo 与 claude 会话）�
   await expect(win.getByTestId("create-error-card")).toBeVisible({ timeout: 10_000 }); // 失败卡（不静默）
   await expect(win.getByTestId("create-error-card")).toContainText("不可读");
   await expect(box2).toHaveValue("/kb-e2e-gone 参数"); // 输入保留可重试
-  await expect(win.locator("aside").getByText("目标：alpha beta，首参=alpha，标…")).toBeVisible(); // 首个会话仍在、第二个未创建（草稿保留，无原子提交）
+  await expect(win.locator("aside").getByText(FAKE_SUMMARY_TITLE)).toBeVisible(); // 首个会话仍在（#95：首轮后标题=摘要固定值）、第二个未创建（草稿保留，无原子提交）
 
   // —— claude 会话未匹配透传：fake 目录空集（ADR 0004）→ /fake-plan 未匹配原样发送（气泡=原文，降级判据）
   await openDraft(win, "Claude");

@@ -21,6 +21,7 @@ function makeStubAdapter(): CliAdapter {
     listModels: async () => [],
     listCommands: async () => [],
     setModel: async () => ({ model: "" }),
+    summarizeTitle: async () => null,
     sendTurn: async () => {},
     interruptTurn: async () => {},
     resolveApproval: async () => {},
