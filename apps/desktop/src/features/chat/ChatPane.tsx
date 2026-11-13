@@ -3,8 +3,10 @@ import { useEffect, useRef } from "react";
 import type { ApprovalDecision } from "@kanban/ipc-schema";
 import type { SessionView } from "./chat-store";
 import type { ModelCatalog } from "./model-catalog";
+import type { ComposerCommandSource } from "./composer-command-source";
 import { ApprovalCard } from "./components/ApprovalCard";
 import { Composer, type ComposerActions } from "./components/Composer";
+import { COMPOSER_PLACEHOLDER } from "./components/ComposerTextarea";
 import { ErrorBanner } from "./components/ErrorBanner";
 import { MessageList } from "./components/MessageList";
 import { ResumeBanner } from "./components/ResumeBanner";
@@ -24,6 +26,7 @@ export interface ChatPaneActions extends ComposerActions {
 export function ChatPane({
   session,
   models,
+  commands,
   version,
   conflictTitles,
   configPath = null,
@@ -32,6 +35,8 @@ export function ChatPane({
   session: SessionView | null;
   /** 模型目录控制器（issue #77）：composer 挂载预取与 combobox 数据源 */
   models: ModelCatalog;
+  /** 斜杠命令源（issue #90）：composer 补全菜单数据 */
+  commands: ComposerCommandSource;
   version: number;
   /** 主仓库并行冲突会话名（≥2 活跃时非空；仅提示不阻止，spec I-4） */
   conflictTitles: string[] | null;
@@ -60,7 +65,7 @@ export function ChatPane({
           <div className="mx-auto max-w-[860px] rounded-[14px] border border-border bg-muted px-3.5 py-2.5">
             <textarea
               disabled
-              placeholder="输入消息，/ 开头触发 Skill…"
+              placeholder={COMPOSER_PLACEHOLDER}
               rows={2}
               className="min-h-[46px] w-full resize-none bg-transparent text-[13px] text-muted-foreground outline-none placeholder:text-fg-faint"
             />
@@ -130,14 +135,16 @@ export function ChatPane({
             onResume={() => actions.onResume(session.sessionId)}
             onRetry={() => {
               const lastUser = [...session.items].reverse().find((i) => i.kind === "user");
-              if (lastUser && lastUser.kind === "user") actions.onSend(lastUser.text);
+              // #92：onSend 为派发编排（重试文本不以 / 开头 → 直接透传重发；展开产物原文即最终文本）；
+              // 返回值（输入是否被消费）有意忽略：blocked 派发不 append 消息、错误经 setError 已刷新错误卡，重试路径安全
+              if (lastUser && lastUser.kind === "user") void actions.onSend(lastUser.text);
             }}
             onOpenPtyTerminal={() => actions.onOpenPtyTerminal(session.sessionId)}
             onDismiss={() => actions.onDismissError(session.sessionId)}
           />
         ) : null}
       </div>
-      <Composer session={session} models={models} actions={actions} />
+      <Composer session={session} models={models} commands={commands} actions={actions} />
     </section>
   );
 }

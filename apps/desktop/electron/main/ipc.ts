@@ -1,4 +1,4 @@
-// 用途：Main 入站 IPC 处理器聚合 —— kanban:ipc（信封经共享工厂 + 25 子通道编译期穷尽查表，handler 按 feature 落 main/ipc/*.ts）与 memory/residue/diff/config/cli:status 五个独立单通道路由（26 子通道）（纯函数无 Electron 依赖：dialog 与 config 经 deps 注入）；#72 C1 Step2 自 775 行 route switch 巨石拆分
+// 用途：Main 入站 IPC 处理器聚合 —— kanban:ipc（信封经共享工厂 + 27 子通道编译期穷尽查表，handler 按 feature 落 main/ipc/*.ts）与 memory/residue/diff/config/cli:status 五个独立单通道路由（27 子通道）（纯函数无 Electron 依赖：dialog 与 config 经 deps 注入）；#72 C1 Step2 自 775 行 route switch 巨石拆分
 import {
   IPC_CHANNELS,
   type AutoArchiveScanSummary,
@@ -24,6 +24,7 @@ import type { CliAdapter } from "@kanban/cli-host";
 import { TrackerEngine, type TrackerChange } from "@kanban/tracker";
 import type { AppConfig } from "./config";
 import type { WorkspaceDiff } from "./git-diff-service";
+import { CommandCatalog } from "./command-catalog";
 import { createChannelHandler, codeEnvelope, reasonEnvelope, type EnvelopeDeps } from "./ipc-envelope";
 import { type MemoryService } from "./memory-service";
 import type { PtyHost } from "./pty-host";
@@ -54,11 +55,15 @@ export interface IpcDeps extends EnvelopeDeps {
   setCurrentProjectId(id: string): void;
   /** #21（spec #15 E 节）：用户级 Claude 基准目录解析（CLAUDE_CONFIG_DIR 优先，否则 ~/.claude）；仅 session:create cli=claude 的同名 skill 检测用。缺省读 process.env + os.homedir，测试注入固定目录 */
   resolveUserClaudeDir?(): string;
+  /** #89（spec #82 E 块）：斜杠命令目录（短 TTL 缓存；缺省由 composer handler 按 adapter 惰性构建——生产单 adapter 生命周期内共享；测试注入显式实例控时钟/计扫描次数） */
+  commandCatalog?: CommandCatalog;
+  /** #92（spec #82 E 块）：用户级 codex 基准目录（composer:expandCommand 安全边界 <home>/.codex/prompts 的 home 解析，与 codex prompts 扫描口径一致）；缺省 os.homedir()，测试注入 fixture */
+  codexHomeDir?: string;
   /** #35（spec #27 J 节）：memory 面（kanban:delete 需求删除级联清理）；index.ts 经 openMemoryService 装配注入，缺省无 memory 数据可清理（旧测试/降级装配） */
   memory?: MemoryService;
 }
 
-/** 处理一条入站请求：信封（校验/门闸/错误形状化）经共享工厂，主体查 25 子通道路由表分发（spec E：Main 强制校验，非法消息明确错误码；spec H：退出中拒新请求）；
+/** 处理一条入站请求：信封（校验/门闸/错误形状化）经共享工厂，主体查 27 子通道路由表分发（spec E：Main 强制校验，非法消息明确错误码；spec H：退出中拒新请求）；
  *  通道名与请求契约引自 IPC_CHANNELS 单源（#72 Step4） */
 export async function handleIpc(deps: IpcDeps, raw: unknown): Promise<IpcResult> {
   return createChannelHandler<IpcRequest, IpcResult, IpcDeps>(

@@ -14,11 +14,11 @@ describe("App 三区布局骨架（原型一致项 1）", () => {
     expect(screen.getByText("设置")).toBeTruthy();
   });
 
-  it("侧栏：项目 / 结构化会话 / PTY 终端三分组可见；无项目时显示注册引导", () => {
+  it("侧栏：项目 / 会话（本应用创建）/ PTY 终端（本应用创建）三分组可见；无项目时显示注册引导", () => {
     render(<App />);
     expect(screen.getByText("项目")).toBeTruthy();
-    expect(screen.getByText("结构化会话")).toBeTruthy();
-    expect(screen.getByText("PTY 终端")).toBeTruthy();
+    expect(screen.getByText("会话（本应用创建）")).toBeTruthy();
+    expect(screen.getByText("PTY 终端（本应用创建）")).toBeTruthy();
     expect(screen.getByText("尚无项目")).toBeTruthy();
     expect(screen.getByRole("button", { name: "＋ 注册本地目录…" })).toBeTruthy();
   });
@@ -108,6 +108,7 @@ describe("设置面板取消归档 → 侧栏行回默认列表（#63 AppShell �
       permMode: null,
       status: null,
       lastActiveAt: null,
+      createdAt: "2026-11-09T00:00:00.000Z",
       archivedAt: "2026-11-10T08:00:00.000Z",
       dirIdentity: "none",
       worktreeName: null,

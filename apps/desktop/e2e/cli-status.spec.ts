@@ -89,6 +89,10 @@ test("两处「＋」菜单未装项灰置 + 「未安装」标注 + 点击无�
     await win.getByTestId("kanban-entry").click();
     const noneCol = win.getByTestId("kanban-col-none");
     await noneCol.getByTitle("手动新建需求（归属当前项目）").click();
+    // #84 建卡即命名：Esc 放弃命名保留缺省标题
+    const nameInput = noneCol.getByTestId("card-title-input");
+    await expect(nameInput).toBeVisible({ timeout: 10_000 });
+    await nameInput.press("Escape");
     await expect(noneCol.getByText("待命名需求")).toBeVisible({ timeout: 10_000 });
     await noneCol.getByText("待命名需求").click();
     await expect(win.getByTestId("detail-panel")).toBeVisible();

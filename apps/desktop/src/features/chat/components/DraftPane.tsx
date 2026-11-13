@@ -1,9 +1,12 @@
-// 用途：结构化会话草稿面板（#59 / spec #57 原型演示①）—— 点「＋」后的中央区草稿态：提示行（不落库、未启 CLI）+ 首条消息 composer（权限/模型可改、输入失败保留；#77 起模型为真实目录 combobox：就绪前阻塞首条发送）+ 提交失败卡（重试=重新执行创建+发送）
+// 用途：结构化会话草稿面板（#59 / spec #57 原型演示①）—— 点「＋」后的中央区草稿态：提示行（不落库、未启 CLI）+ 首条消息 composer（权限/模型可改、输入失败保留；#77 起模型为真实目录 combobox：就绪前阻塞首条发送）+ 提交失败卡（重试=重新执行创建+发送）；#85 起上缘可拖拽调高（与会话 Composer 共享同一持久化偏好）；#90 输入框带斜杠补全菜单
 import { useState } from "react";
 import type { PermMode } from "@kanban/ipc-schema";
 import type { DraftSession } from "../chat-store";
 import type { ModelCatalog } from "../model-catalog";
+import type { ComposerCommandSource } from "../composer-command-source";
+import { useComposerPanelHeight } from "../../../lib/use-panel-size";
 import { PermChip } from "./ComposerControls";
+import { ComposerTextarea } from "./ComposerTextarea";
 import { ModelCombobox } from "./ModelCombobox";
 import { CreateErrorCard } from "./CreateErrorCard";
 
@@ -21,17 +24,22 @@ export interface DraftPaneActions {
 export function DraftPane({
   draft,
   models,
+  commands,
   configPath,
   actions,
 }: {
   draft: DraftSession;
   /** 模型目录控制器（issue #77）：combobox 数据源与挂载预取 */
   models: ModelCatalog;
+  /** 斜杠命令源（issue #90）：补全菜单数据（草稿 cli/cwd 键控） */
+  commands: ComposerCommandSource;
   /** 配置文件绝对路径（spawn 失败卡「复制配置路径」数据源） */
   configPath: string | null;
   actions: DraftPaneActions;
 }) {
   const [submitting, setSubmitting] = useState(false);
+  // #85 输入框高度（与会话 Composer 共享 key：两态联动为预期行为）
+  const composer = useComposerPanelHeight();
 
   // 提交中禁用输入与按钮（防双发）；单一就绪态：模型未选（列表未就绪/未手输兜底）禁发（issue #77）；
   // 失败时 draft 仍在（输入保留在草稿上）；返回值不在此消费：成功草稿消失 / 失败经 draft.submitError 渲染失败卡（均由 store 状态驱动）
@@ -70,16 +78,26 @@ export function DraftPane({
           ) : null}
         </div>
       </div>
-      {/* 首条消息 composer：结构与会话 Composer 一致；输入受控于草稿（失败保留、丢弃即失） */}
-      <footer className="border-t border-border bg-card px-6 pb-4 pt-3">
+      {/* 首条消息 composer：结构与会话 Composer 一致；输入受控于草稿（失败保留、丢弃即失）；斜杠补全菜单（#90） */}
+      <footer className="relative border-t border-border bg-card px-6 pb-4 pt-3">
+        {/* #85 输入框上缘拖拽把手（footer 顶边全宽命中区） */}
+        <div
+          data-testid="composer-resize-handle"
+          className={`absolute inset-x-0 top-0 z-10 h-1.5 cursor-row-resize select-none hover:bg-primary/25 focus-visible:bg-primary/40 ${
+            composer.dragging ? "bg-primary/40" : ""
+          }`}
+          {...composer.handleProps}
+        />
         <div className="mx-auto max-w-[860px] rounded-[14px] border border-border bg-muted px-3.5 pb-2 pt-2.5 transition-colors focus-within:border-primary">
-          <textarea
-            placeholder="输入消息，/ 开头触发 Skill…"
-            rows={2}
-            disabled={submitting}
+          <ComposerTextarea
             value={draft.input}
-            onChange={(e) => actions.onInput(e.target.value)}
-            className="min-h-[46px] w-full resize-none bg-transparent text-[13px] outline-none placeholder:text-fg-faint disabled:text-muted-foreground"
+            onChange={(input) => actions.onInput(input)}
+            commands={commands}
+            cli={draft.cli}
+            cwd={draft.cwd}
+            disabled={submitting}
+            style={{ height: Math.round(composer.size) }}
+            className="w-full resize-none bg-transparent text-[13px] outline-none placeholder:text-fg-faint disabled:text-muted-foreground"
           />
           <div className="mt-2 flex items-center gap-2">
             <PermChip value={draft.permMode} onChange={actions.onPermChange} />

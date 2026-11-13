@@ -1,6 +1,8 @@
 // 用途：IPC 请求/结果/错误码契约 —— 单通道 kanban:ipc + channel 判别（spec E/C4；错误码形状由 ipc-schema 定义，不变量 6；#17 起 kanban:* 七通道，spec #15 C 节）
 import { z } from "zod";
 import { approvalDecisionSchema, chatEventSchema, permModeSchema, sessionIdSchema, sessionStatusSchema } from "./chat";
+import { cliKindSchema } from "./cli-kind";
+import { commandEntrySchema } from "./commands";
 import { kanbanStageInputSchema, requirementCardRowSchema } from "./kanban";
 import { terminalCreatePayloadSchema, terminalIdSchema } from "./terminal";
 
@@ -20,9 +22,8 @@ export const ERROR_CODES = [
 export const errorCodeSchema = z.enum(ERROR_CODES);
 export type ErrorCode = z.infer<typeof errorCodeSchema>;
 
-// 会话 CLI 枚举（#7 起放开三 CLI；fake 为 #6 演示链路；pty 会话不经 session:create 建）
-export const cliKindSchema = z.enum(["fake", "codex", "claude", "opencode"]);
-export type CliKind = z.infer<typeof cliKindSchema>;
+// 会话 CLI 枚举（#7 起放开三 CLI；fake 为 #6 演示链路；pty 会话不经 session:create 建）——定义已拆至 cli-kind.ts（跨域共用单源），此处 re-export 保持既有 import 面不变
+export { cliKindSchema, type CliKind } from "./cli-kind";
 
 // projects 表 wire 行（C3：id/name/canonical_path/status/created_at）
 export const projectRowSchema = z.object({
@@ -46,6 +47,8 @@ export const sessionRowSchema = z.object({
   permMode: permModeSchema.nullable(),
   status: sessionStatusSchema.nullable(),
   lastActiveAt: z.string().nullable(),
+  /** 创建时间（DB created_at 直读；#64 自动归档基准回落源、#86 启动自动选中「全部无活跃时间取最新创建」数据源） */
+  createdAt: z.string().nullable(),
   /** #58 归档时间（NULL=未归档；默认列表恒 null，归档视图（session:archivedList）行必带） */
   archivedAt: z.string().nullable(),
   /** 目录身份（spec I-3）：main=主仓库绿徽标 / worktree=蓝徽标（name 见 worktreeName）/ none=非 git 目录不渲染 */
@@ -131,6 +134,20 @@ export const ipcRequestSchema = z.discriminatedUnion("channel", [
   z.object({ channel: z.literal("kanban:link"), sessionId: sessionIdSchema, requirementId: z.string().min(1) }),
   z.object({ channel: z.literal("kanban:unlink"), sessionId: sessionIdSchema }),
   z.object({ channel: z.literal("kanban:delete"), requirementId: z.string().min(1) }),
+  /** 斜杠命令列举（issue #89 / spec #82 E 块）：按 CLI 返回统一命令目录（claude skills / codex prompts 目录扫描 + opencode 原生 API；Main 侧短 TTL 缓存） */
+  z.object({
+    channel: z.literal("composer:listCommands"),
+    cli: cliKindSchema,
+    cwd: z.string().min(1),
+  }),
+  /** codex 斜杠命令客户端展开（issue #92 / spec #82 E 块派发）：读来源文件替换参数占位符返回普通文本（app-server 不解析 / 前缀；sourcePath 越出 prompts 目录或文件不可读 → E_INTERNAL fail-closed） */
+  z.object({
+    channel: z.literal("composer:expandCommand"),
+    sourcePath: z.string().min(1),
+    args: z.string(),
+    /** 请求方 cwd（项目级 .codex/prompts 安全边界；Main 校验 sourcePath 必须位于用户级或该项目级 prompts 目录之下） */
+    cwd: z.string().min(1),
+  }),
 ]);
 export type IpcRequest = z.infer<typeof ipcRequestSchema>;
 
@@ -173,6 +190,10 @@ export const ipcOkSchema = z.object({
   requirementId: z.string().optional(),
   /** session:create（cli=claude）附带：项目级/用户级同名 skill 冲突名（#21 真实检测：项目 .claude/skills ∩ 用户级 skills；Codex/OpenCode 不带该字段） */
   skillConflicts: z.array(z.string()).optional(),
+  /** composer:listCommands 附带（issue #89 / spec #82 E 块）：该 CLI 的统一命令目录（名称/描述/参数提示/来源/所属 CLI/来源文件路径/仅用户调用标记） */
+  commands: z.array(commandEntrySchema).optional(),
+  /** composer:expandCommand 附带（issue #92 / spec #82 E 块）：展开后普通文本（frontmatter 已剥离、占位符已替换） */
+  text: z.string().optional(),
 });
 export type IpcOk = z.infer<typeof ipcOkSchema>;
 

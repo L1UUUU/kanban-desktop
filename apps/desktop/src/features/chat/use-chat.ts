@@ -4,7 +4,10 @@ import type { AdapterEvent, ApprovalDecision, ChatEvent, CliKind, IpcResult, Mod
 import type { ChatTransport } from "../../lib/kanban-api";
 import { createScopedLogger } from "../../lib/logger";
 import { ChatStore, type DraftSession, type SessionMeta, type SessionView } from "./chat-store";
+import { selectStartupSessionId } from "./startup-select";
 import { ModelCatalog } from "./model-catalog";
+import { ComposerCommandSource } from "./composer-command-source";
+import { dispatchDraftSubmit, dispatchSessionSend, type SlashDispatchEnv } from "./slash-dispatch-exec";
 import { TerminalDraftController, type TerminalDraftSnapshot } from "../terminal/terminal-draft";
 import { TerminalManager } from "../terminal/TerminalManager";
 
@@ -32,7 +35,8 @@ export type OpenDraftResult =
   | { ok: false; reason: "project-missing" };
 
 export interface ChatControllerActions {
-  send(text: string): void;
+  /** 发送编排含斜杠派发（issue #92）：透传/展开发送、内置 /pty /kanban 本地执行、fail-closed 拒绝；返回 true=输入已消费 */
+  send(text: string): Promise<boolean>;
   interrupt(): void;
   resolveApproval(decision: ApprovalDecision): void;
   /** 互斥属主唯一安装点（issue #71 S4）：cwd 解析 / 项目不存在提示 / 跨类草稿互斥替换 / replacedHint 单源，一个动作完成 */
@@ -47,6 +51,8 @@ export interface ChatControllerActions {
   switchTo(sessionId: string): void;
   /** 两类草稿齐丢（切项目 effect 单调用；不弹确认、输入不保留） */
   discardAllDrafts(): void;
+  /** #86 先手让位（项目维度）：切项目清除他项目的激活会话（含启动自动选中者，回落空态）——与 discardAllDrafts 同属切项目 effect 单调用 */
+  clearActiveIfForeignProject(currentProjectId: string | null): void;
   setPerm(mode: PermMode): void;
   setModel(model: string): void;
   /** 断开会话「读取原生历史并恢复」：readHistory 快照重建消息流 → resume 重连（状态经实时事件流回 idle） */
@@ -81,6 +87,8 @@ export interface ChatController extends ChatControllerActions, SessionRegistry {
   draft: SessionDraft | null;
   /** 模型目录控制器（issue #77）：DraftPane/Composer 挂载预取与 ModelCombobox 数据源 */
   models: ModelCatalog;
+  /** 斜杠命令源（issue #90）：composer 补全菜单数据（composer:listCommands 通道 + TTL 缓存/预热） */
+  commands: ComposerCommandSource;
   /** PTY 终端数据源与显式终止入口（TerminalWorkspace 渲染挂点） */
   terminals: { manager: TerminalManager; kill(id: string): void };
 }
@@ -92,6 +100,8 @@ export interface ChatControllerDeps {
   resolveCwd(projectId: string | null, cli: CliKind | "pty"): string | null;
   /** 项目不存在等新建拒绝提示（单源：3 份手抄归 1） */
   onNotice(message: string): void;
+  /** 内置 /kanban 命令的视图切换单源出口（issue #92：App 层 setView 经 ChatWorkspace 注入，composer 不直面 App） */
+  onSetView?(v: "chat" | "kanban"): void;
 }
 
 /**
@@ -198,10 +208,12 @@ export function discardAllDraftsAction(env: Omit<SessionDraftEnv, "resolveCwd" |
  * 成功：登记会话 + 首条消息本地回显 + 丢弃草稿；失败：草稿与输入保留（可重试），错误直达失败卡，
  * Main 回滚时事件先至的占位行按 rolledBackSessionId 撤销（不留空会话）。
  */
-export async function submitDraftChain(store: ChatStore, transport: ChatTransport): Promise<boolean> {
+export async function submitDraftChain(store: ChatStore, transport: ChatTransport, firstMessage?: string): Promise<boolean> {
   const d = store.getSnapshot().draft;
   // 单一就绪态守卫：模型未选（列表未就绪/未手输兜底）不提交——UI 发送钮同步禁用，此处为链路兜底
   if (!d || d.input.trim().length === 0 || !d.model) return false;
+  // #92 斜杠派发：codex 展开类以展开文本为首条消息（覆盖草稿原文；气泡与 wire 同文本，所见即所发）
+  const sendText = firstMessage ?? d.input;
   const r = await transport.invoke({
     channel: "session:create",
     cli: d.cli,
@@ -211,7 +223,7 @@ export async function submitDraftChain(store: ChatStore, transport: ChatTranspor
     model: d.model, // 所见即所发：默认选中项同样真实下发（无占位串）
     permMode: d.permMode,
     requirementId: d.requirementId,
-    firstMessage: d.input,
+    firstMessage: sendText,
   });
   if (r.ok && r.sessionId) {
     // #20：卡片进草稿的自动关联由 Main 原子完成（session_linked 推送回流看板 store）；拒绝仅报告不阻断会话
@@ -233,7 +245,7 @@ export async function submitDraftChain(store: ChatStore, transport: ChatTranspor
       // #21：Main 仅对 claude 会话附同名 skill 冲突名（其余 CLI 缺省无冲突）
       skillConflicts: r.skillConflicts ?? [],
     });
-    store.appendUserMessage(r.sessionId, d.input); // 首条消息本地回显（内容不经事件流回传）
+    store.appendUserMessage(r.sessionId, sendText); // 首条消息本地回显（内容不经事件流回传；= 实际发送文本）
     store.discardDraft();
     return true;
   }
@@ -316,6 +328,13 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
         Promise.resolve({ ok: false, error: { code: "E_INTERNAL", message: "transport 不可用" } } satisfies ModelsResult),
       ),
   );
+  // 斜杠命令源（issue #90）：补全菜单数据；同 models 款闭包捕获首帧 transport（App 经 useMemo 同步建桥）
+  const [commands] = useState(
+    () =>
+      new ComposerCommandSource(
+        (req) => transport?.invoke(req) ?? Promise.resolve({ ok: false, error: { code: "E_INTERNAL", message: "transport 不可用" } } satisfies IpcResult),
+      ),
+  );
   const snap = useSyncExternalStore(store.subscribe, store.getSnapshot);
   // PTY 草稿机制（issue #71 S3 吸收自 use-terminals）：草稿控制器与多路复用管理器为本 hook 实现细节
   // shortcut: drafts/manager 闭包直接捕获首帧 transport 与 store（App 经 useMemo 同步建桥、测试首帧给定，身份稳定；
@@ -380,10 +399,10 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
     });
     if (!bootRef.current && demoCwd !== null) {
       bootRef.current = true;
-      void bootstrap(transport, store, demoCwd);
+      void bootstrap(transport, store, drafts, demoCwd);
     }
     return off;
-  }, [transport, store, demoCwd]);
+  }, [transport, store, drafts, demoCwd]);
 
   // terminal:event 订阅：data/横幅进 manager；started/exit 同步会话状态徽标（store 内部自用直调）
   useEffect(() => {
@@ -406,25 +425,41 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
     [manager, killTerminal],
   );
 
-  // 稳定动作独立 useCallback：discardAllDrafts 不依赖 deps（resolveCwd/onNotice 随项目列表每帧可变），
-  // ChatWorkspace 切项目 effect 依赖它——项目列表刷新不得触发丢弃（actions 随 deps 重建不影响本引用）
+  // 稳定动作独立 useCallback：discardAllDrafts / clearActiveIfForeignProject 不依赖 deps（resolveCwd/onNotice 随项目列表每帧可变），
+  // ChatWorkspace 切项目 effect 依赖它们——项目列表刷新不得触发丢弃/清除（actions 随 deps 重建不影响本引用）
   const discardAllDrafts = useCallback(() => {
     discardAllDraftsAction({ store, drafts, manager });
   }, [store, drafts, manager]);
 
-  const actions = useMemo<Omit<ChatControllerActions, "discardAllDrafts">>(() => {
+  // #86 先手让位（项目维度）：切项目清除他项目激活会话（纯 store 委托，引用稳定供切项目 effect 依赖）
+  const clearActiveIfForeignProject = useCallback((currentProjectId: string | null) => {
+    store.clearActiveIfForeignProject(currentProjectId);
+  }, [store]);
+
+  const actions = useMemo<Omit<ChatControllerActions, "discardAllDrafts" | "clearActiveIfForeignProject">>(() => {
     const activeId = (): string | null => store.getSnapshot().activeId;
     const report = (p: Promise<IpcResult>, sessionId: string): void => {
       void p.then((r) => {
         if (!r.ok) store.setError(sessionId, r.error.code, r.error.message);
       });
     };
+    // #92 斜杠派发环境（透传/展开/内置/fail-closed 编排收口在 slash-dispatch-exec；此处只注入依赖）
+    const slashEnv = (): SlashDispatchEnv | null =>
+      transport
+        ? {
+            store,
+            transport,
+            commands,
+            openSessionDraft: (input) => openSessionDraftAction({ store, drafts, manager, resolveCwd, onNotice }, input),
+            onSetView: deps.onSetView,
+          }
+        : null;
     return {
-      send: (text) => {
+      send: async (text) => {
         const id = activeId();
-        if (!id || !transport || text.trim().length === 0) return;
-        store.appendUserMessage(id, text);
-        report(transport.invoke({ channel: "session:send", sessionId: id, text }), id);
+        const env = slashEnv();
+        if (!id || !env || text.trim().length === 0) return true;
+        return dispatchSessionSend(env, id, text);
       },
       interrupt: () => {
         const id = activeId();
@@ -448,8 +483,9 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
       },
       openSessionDraft: (input) => openSessionDraftAction({ store, drafts, manager, resolveCwd, onNotice }, input),
       submitDraft: async () => {
-        if (!transport) return false;
-        return submitDraftChain(store, transport);
+        const env = slashEnv();
+        if (!env || !transport) return false;
+        return dispatchDraftSubmit(env, (firstMessage) => submitDraftChain(store, transport, firstMessage));
       },
       updateDraft: (patch) => store.updateDraft(patch),
       clearDraftSubmitError: () => store.clearDraftSubmitError(),
@@ -489,7 +525,7 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
         }
       },
     };
-  }, [transport, store, resolveCwd, onNotice, drafts, manager]);
+  }, [transport, store, resolveCwd, onNotice, drafts, manager, commands, deps.onSetView]);
 
   const activeSession = snap.activeId ? (store.getSession(snap.activeId) ?? null) : null;
   // 草稿判别联合聚合：结构化与 PTY 两分支并一支（中央区路由单源）
@@ -505,6 +541,7 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
   return {
     ...actions,
     discardAllDrafts,
+    clearActiveIfForeignProject,
     ...registry,
     sessions: snap.sessions,
     activeSession,
@@ -512,18 +549,30 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
     version: snap.version,
     draft,
     models,
+    commands,
     terminals,
   };
 }
 
-/** 启动自举：恢复 DB 历史会话（统一断开态）；无项目且无会话时打开 Fake 演示草稿（#59：不落库，发第一条消息才成会话） */
-async function bootstrap(transport: ChatTransport, store: ChatStore, demoCwd: string): Promise<void> {
+/**
+ * 启动自举：恢复 DB 历史会话（统一断开态）；自动选中当前项目（issue #86：无=无项目会话）下最近活跃的
+ * 未归档结构化会话——只选中不恢复（不读历史、不拉起 CLI 进程，恢复横幅常驻），用户先手（已选中会话/已开
+ * 任一类草稿）则让位跳过；无项目且无会话时打开 Fake 演示草稿（#59：不落库，发第一条消息才成会话）
+ */
+async function bootstrap(transport: ChatTransport, store: ChatStore, drafts: TerminalDraftController, demoCwd: string): Promise<void> {
   const [projRes, sessRes] = await Promise.all([
     transport.invoke({ channel: "project:list" }),
     transport.invoke({ channel: "session:list" }),
   ]);
   if (sessRes.ok && sessRes.sessions) {
     for (const row of sessRes.sessions) store.registerRestored(row);
+  }
+  // issue #86 自动选中：先手让位守卫（自举在途用户已选中会话/已开结构化或 PTY 草稿 → 不动用户焦点）
+  const snap = store.getSnapshot();
+  if (snap.activeId === null && snap.draft === null && drafts.getSnapshot() === null) {
+    const currentProjectId = projRes.ok ? (projRes.currentProjectId ?? null) : null;
+    const target = selectStartupSessionId(sessRes.ok ? sessRes.sessions ?? [] : [], currentProjectId);
+    if (target) store.setActive(target);
   }
   const hasProjects = projRes.ok && (projRes.projects?.length ?? 0) > 0;
   if (!hasProjects && store.getSnapshot().sessions.length === 0) {

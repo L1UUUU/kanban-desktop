@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { AdapterEvent, ChatEvent, LogKind, ModelEntry, TranscriptEvent } from "@kanban/ipc-schema";
+import type { AdapterEvent, ChatEvent, CommandEntry, LogKind, ModelEntry, TranscriptEvent } from "@kanban/ipc-schema";
 import { utilityProcess } from "electron";
 import {
   AdapterError,
@@ -14,6 +14,7 @@ import {
   type CreateSessionInput,
   type DisposeInput,
   type HostCommand,
+  type ListCommandsInput,
   type ListModelsInput,
   type ResolveApprovalInput,
   type ReturnOf,
@@ -141,6 +142,11 @@ export class CliHostClient implements CliAdapter {
   /** 模型目录查询（issue #76）：cli 缺省 fake 显式补齐（与 Router 兜底一致，保持 wire 摘要 cli= 命中） */
   async listModels(input: ListModelsInput): Promise<ModelEntry[]> {
     return this.send({ kind: "listModels", payload: { ...input, cli: input.cli ?? "fake" } });
+  }
+
+  /** 斜杠命令列举（issue #89）：cli 缺省 fake 显式补齐（与 Router 兜底一致，保持 wire 摘要 cli= 命中） */
+  async listCommands(input: ListCommandsInput): Promise<CommandEntry[]> {
+    return this.send({ kind: "listCommands", payload: { ...input, cli: input.cli ?? "fake" } });
   }
 
   async sendTurn(input: SendTurnInput): Promise<void> {

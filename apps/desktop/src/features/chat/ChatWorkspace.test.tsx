@@ -1,11 +1,11 @@
 // 用途：聊天区组件测试（spec Testing seam 4）—— FakeAdapter 事件流直连驱动真实组件：流式/工具卡/审批三键/取消/权限切换/切会话不中断/项目注册与重启恢复（对照原型一致项 2/3/5/6/7）
 /// <reference types="node" /> <!-- 本文件用 node:fs/os/path 建持久化 fixture（重启恢复用例） -->
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AdapterEvent, CliKind, ErrorCode, IpcRequest, IpcResult, ModelEntry, ModelsRequest, ModelsResult, TerminalEvent } from "@kanban/ipc-schema";
+import type { AdapterEvent, CliKind, ErrorCode, IpcRequest, IpcResult, ModelEntry, ModelsRequest, ModelsResult, ProjectRow, SessionRow, TerminalEvent } from "@kanban/ipc-schema";
 import { AdapterError, FakeAdapter, VirtualClock, type CreateSessionInput, type ListModelsInput, type SendTurnInput } from "@kanban/cli-host";
 import { TrackerEngine } from "@kanban/tracker";
 import { openDatabase } from "../../../electron/main/db";
@@ -171,7 +171,10 @@ const STUB_MODELS: ModelsResult = {
 };
 
 /** 挂载工作区（含真实 useProjects host）并暴露 controller 与 transport（供测试直接驱动动作/取项目 id） */
-function mount(transport?: ChatTransport, opts?: { configPath?: string | null; pick?: () => Promise<string | null> }) {
+function mount(
+  transport?: ChatTransport,
+  opts?: { configPath?: string | null; pick?: () => Promise<string | null>; onSetView?: (v: "chat" | "kanban") => void },
+) {
   const clock = new VirtualClock();
   const adapter = new FakeAdapter({ clock });
   const tr = transport ?? makeTransport(adapter, opts?.pick ? { pick: opts.pick } : undefined);
@@ -188,6 +191,7 @@ function mount(transport?: ChatTransport, opts?: { configPath?: string | null; p
         demoCwd={DEMO_CWD}
         onController={onController}
         configPath={opts?.configPath ?? null}
+        onSetView={opts?.onSetView}
       />
     );
   }
@@ -1833,6 +1837,7 @@ describe("模型目录全链（#77：combobox 就绪态/阻塞/手输/恢复派�
       permMode: "auto",
       status: "idle",
       lastActiveAt: "2026-11-01T00:00:00.000Z",
+      createdAt: "2026-11-01T00:00:00.000Z",
       archivedAt: null,
       dirIdentity: "none",
       worktreeName: null,
@@ -1842,5 +1847,473 @@ describe("模型目录全链（#77：combobox 就绪态/阻塞/手输/恢复派�
     await waitFor(() => expect(model.value).toBe("Fake 标准模型"));
     expect(model.value).not.toContain("默认模型"); // 无「默认模型」占位字样
     expect(t.ctl().activeSession?.model).toBeUndefined(); // 派生显示不写入 store
+  });
+});
+
+describe("启动自动选中（issue #86：回到当前项目最近会话，只选中不恢复）", () => {
+  let tmpRoot = "";
+
+  afterEach(() => {
+    cleanup();
+    for (const db of openDbs.splice(0)) db.close();
+    if (tmpRoot) {
+      rmSync(tmpRoot, { recursive: true, force: true });
+      tmpRoot = "";
+    }
+  });
+  /** 构造 stub 项目行（name/canonicalPath 取 id，可读即可） */
+  const proj = (id: string): ProjectRow => ({ id, name: id, canonicalPath: `C:\\${id}`, status: "ok", createdAt: "2026-11-01T00:00:00.000Z" });
+
+  /** 构造 stub wire 会话行（title 取 id 便于侧栏定位；其余合法缺省） */
+  function sess(id: string, over: Partial<SessionRow> = {}): SessionRow {
+    return {
+      id,
+      kind: "structured",
+      cli: "claude",
+      nativeSessionId: null,
+      projectId: "p-1",
+      title: id,
+      cwd: "C:\\repo",
+      permMode: "auto",
+      status: "disconnected",
+      lastActiveAt: null,
+      createdAt: "2026-11-01T00:00:00.000Z",
+      archivedAt: null,
+      dirIdentity: "none",
+      worktreeName: null,
+      ...over,
+    };
+  }
+
+  /** stub transport：精确控制 project:list / session:list 启动应答（gate 给定时 session:list 挂起至释放，驱动先手让位）；
+   *  currentProjectId 可变（project:switch 原地改写，覆盖切项目刷新路径）；其余通道兜底 ok */
+  function makeBootStub(opts: { projects: ProjectRow[]; currentProjectId: string | null; sessions: SessionRow[]; gate?: Promise<void> }): { transport: ChatTransport; seen: IpcRequest[] } {
+    const seen: IpcRequest[] = [];
+    const current = { id: opts.currentProjectId };
+    const transport: ChatTransport = {
+      invoke: async (req: IpcRequest): Promise<IpcResult> => {
+        seen.push(req);
+        if (req.channel === "project:list") {
+          return { ok: true, projects: opts.projects, currentProjectId: current.id };
+        }
+        if (req.channel === "project:switch") {
+          current.id = req.projectId;
+          return { ok: true };
+        }
+        if (req.channel === "session:list") {
+          if (opts.gate) await opts.gate;
+          return { ok: true, sessions: opts.sessions };
+        }
+        return { ok: true };
+      },
+      onEvent: () => () => undefined,
+      onTerminalEvent: () => () => undefined,
+      onTrackerEvent: () => () => undefined,
+      invokeModels: async () => STUB_MODELS,
+    };
+    return { transport, seen };
+  }
+
+  it("自动选中：当前项目下最近活跃的结构化会话被选中（侧栏行高亮、恢复横幅常驻、只选中不恢复、不开演示草稿）", async () => {
+    const { transport, seen } = makeBootStub({
+      projects: [proj("p-1")],
+      currentProjectId: "p-1",
+      sessions: [
+        sess("s-old", { lastActiveAt: "2026-11-10T08:00:00.000Z", createdAt: "2026-11-02T00:00:00.000Z" }),
+        sess("s-new", { lastActiveAt: "2026-11-12T09:30:00.000Z", createdAt: "2026-11-01T00:00:00.000Z" }),
+      ],
+    });
+    const t = mount(transport);
+    await t.flush();
+    expect(t.ctl().activeId).toBe("s-new"); // 最近活跃者（不是最新创建者）
+    // 侧栏对应行高亮
+    const activeRow = screen.getAllByTestId("session-row").find((r) => r.textContent?.includes("s-new"));
+    expect(activeRow?.getAttribute("data-active")).toBe("true");
+    // 只选中不恢复：断开态恢复横幅常驻，且不读历史、不 resume
+    expect(screen.getByTestId("resume-banner").textContent).toContain("s-new");
+    expect(seen.some((r) => r.channel === "session:readHistory" || r.channel === "session:resume")).toBe(false);
+    // 有会话：不开演示草稿
+    expect(t.ctl().draft).toBeNull();
+  });
+
+  it("PTY 排除：PTY 会话更近活跃也不选，仍选结构化会话", async () => {
+    const { transport } = makeBootStub({
+      projects: [proj("p-1")],
+      currentProjectId: "p-1",
+      sessions: [
+        sess("s-pty", { kind: "pty", cli: "pty", title: "终端 · pwsh", lastActiveAt: "2026-11-12T10:00:00.000Z" }),
+        sess("s-str", { lastActiveAt: "2026-11-10T08:00:00.000Z" }),
+      ],
+    });
+    const t = mount(transport);
+    await t.flush();
+    expect(t.ctl().activeId).toBe("s-str");
+  });
+
+  it("多项目过滤：只看当前项目会话，他项目更近活跃者不干扰", async () => {
+    const { transport } = makeBootStub({
+      projects: [proj("pA"), proj("pB")],
+      currentProjectId: "pB",
+      sessions: [
+        sess("s-a", { projectId: "pA", lastActiveAt: "2026-11-12T10:00:00.000Z" }),
+        sess("s-b", { projectId: "pB", lastActiveAt: "2026-11-10T08:00:00.000Z" }),
+      ],
+    });
+    const t = mount(transport);
+    await t.flush();
+    expect(t.ctl().activeId).toBe("s-b");
+  });
+
+  it("先手让位：启动期间已开结构化草稿 → 跳过自动选中，草稿保留", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const { transport } = makeBootStub({
+      projects: [proj("p-1")],
+      currentProjectId: "p-1",
+      sessions: [sess("s-new", { lastActiveAt: "2026-11-12T09:30:00.000Z" })],
+      gate,
+    });
+    const t = mount(transport);
+    await t.flush(); // project:list 已就位；bootstrap 等 session:list 挂起中
+    await act(async () => {
+      const r = t.ctl().openSessionDraft({ projectId: "p-1", cli: "claude" }); // 用户先手开草稿
+      expect(r.ok).toBe(true);
+    });
+    await act(async () => {
+      release();
+    });
+    await t.flush();
+    expect(t.ctl().activeId).toBeNull(); // 让位：不自动选中
+    expect(t.ctl().draft?.kind).toBe("structured"); // 草稿保留未被顶掉
+  });
+
+  it("先手让位（PTY 草稿）：启动期间已开终端草稿 → 同样跳过自动选中", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const { transport } = makeBootStub({
+      projects: [proj("p-1")],
+      currentProjectId: "p-1",
+      sessions: [sess("s-new", { lastActiveAt: "2026-11-12T09:30:00.000Z" })],
+      gate,
+    });
+    const t = mount(transport);
+    await t.flush();
+    await act(async () => {
+      const r = t.ctl().openSessionDraft({ projectId: "p-1", cli: "pty" }); // 用户先手开 PTY 终端草稿
+      expect(r.ok).toBe(true);
+    });
+    await act(async () => {
+      release();
+    });
+    await t.flush();
+    expect(t.ctl().activeId).toBeNull();
+    expect(t.ctl().draft?.kind).toBe("pty"); // PTY 草稿保留
+  });
+
+  it("先手让位（项目维度）：切项目清除他项目的自动选中会话、回落空态；切回不自动重选（issue #86 验收边界）", async () => {
+    const { transport } = makeBootStub({
+      projects: [proj("p-1"), proj("p-2")],
+      currentProjectId: "p-1",
+      sessions: [sess("s-new", { lastActiveAt: "2026-11-12T09:30:00.000Z" })],
+    });
+    const t = mount(transport);
+    await t.flush();
+    expect(t.ctl().activeId).toBe("s-new"); // 启动自动选中（#86 既有五场景语义不变）
+    expect(screen.getByTestId("resume-banner").textContent).toContain("s-new");
+
+    // 点侧栏项目行切到 p-2（注册成功自动切换同款路径：currentProjectId 变化，用户先手）
+    await act(async () => {
+      fireEvent.click(screen.getByText("p-2"));
+    });
+    await waitFor(() => expect(t.ctl().activeId).toBeNull()); // 他项目的自动选中会话不跨项目残留
+    expect(screen.queryByTestId("resume-banner")).toBeNull(); // 主区回落空态：旧项目断开会话标题消失
+    expect(screen.getAllByText("暂无会话").length).toBeGreaterThan(0); // p-2 无会话（侧栏过滤；主区空态同文案）
+
+    // 切回 p-1：会话行可见但不自动重选（修复形态=清除选中，非切换到最近会话）
+    await act(async () => {
+      fireEvent.click(screen.getByText("p-1"));
+    });
+    await waitFor(() => expect(screen.getByText("s-new")).toBeTruthy());
+    expect(t.ctl().activeId).toBeNull();
+  });
+
+  it("演示草稿：无项目且无会话 → 维持演示草稿现状（不选中、无恢复横幅）", async () => {
+    const { transport } = makeBootStub({ projects: [], currentProjectId: null, sessions: [] });
+    const t = mount(transport);
+    await t.flush();
+    expect(screen.getByTestId("draft-hint").textContent).toContain("演示会话 · Fake");
+    expect(t.ctl().activeId).toBeNull();
+    expect(screen.queryByTestId("resume-banner")).toBeNull();
+  });
+
+  it("自动选中（真实链路）：FakeAdapter+DB 重启后回到当前项目最近活跃会话（lastActiveAt/createdAt 落库→wire→选中）", async () => {
+    // 临时项目 fixture（同 makeProjectFixture 模式；clock 暴露供推进 turn）
+    tmpRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "kb-ws-startup-")));
+    const projDir = join(tmpRoot, "demo-repo");
+    mkdirSync(join(projDir, ".git"), { recursive: true });
+    const dbPath = join(tmpRoot, "state.db");
+    const statePath = join(tmpRoot, "app-state.json");
+
+    // 第一次运行：注册项目 + 两个会话各跑一个 turn（后者的 lastActiveAt/createdAt 均更近）
+    const clock1 = new VirtualClock();
+    const t1 = mount(makeTransport(new FakeAdapter({ clock: clock1 }), { dbPath, statePath, pick: async () => projDir }));
+    await t1.flush();
+    const projectId = await registerProject(t1, projDir);
+    await act(async () => {
+      await createViaDraft(t1.ctl, "fake", { projectId }, "第一个会话");
+    });
+    act(() => {
+      clock1.runToIdle();
+    });
+    const firstId = t1.ctl().activeId;
+    await act(async () => {
+      await createViaDraft(t1.ctl, "fake", { projectId }, "第二个会话");
+    });
+    act(() => {
+      clock1.runToIdle();
+    });
+    const secondId = t1.ctl().activeId;
+    expect(firstId).toBeTruthy();
+    expect(secondId).not.toBe(firstId);
+
+    // 重启（同 db/状态文件）：自动选中最近活跃的第二个会话（断开态 + 恢复横幅常驻，无需点击）
+    cleanup();
+    const t2 = mount(makeTransport(new FakeAdapter({ clock: new VirtualClock() }), { dbPath, statePath, pick: async () => null }));
+    await t2.flush();
+    expect(t2.ctl().activeId).toBe(secondId);
+    expect(screen.getByTestId("resume-banner")).toBeTruthy();
+    expect(t2.ctl().draft).toBeNull(); // 已有会话：不开演示草稿
+  });
+});
+
+describe("composer:listCommands 通道（#89：renderer 经 transport 调通道拿命令目录）", () => {
+  it("fake 环境：transport.invoke 走真实 Main 路由拿到 fake 固定命令集（含仅用户调用标记与参数提示形态）", async () => {
+    const adapter = new FakeAdapter({ clock: new VirtualClock() });
+    const transport = makeTransport(adapter);
+    const res = await transport.invoke({ channel: "composer:listCommands", cli: "fake", cwd: DEMO_CWD });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.commands!.length).toBeGreaterThanOrEqual(2);
+    expect(res.commands!.every((c) => c.cli === "fake")).toBe(true);
+    expect(res.commands!.some((c) => c.userOnly)).toBe(true);
+    expect(res.commands!.some((c) => c.argsHint !== null)).toBe(true);
+  });
+});
+
+describe("斜杠补全菜单（#90：草稿态/会话态输入框接菜单，命令数据走真实通道）", () => {
+  it("草稿态：输入 / 弹菜单（FakeAdapter 固定命令集经 Main 路由可见，应用组在前）；Enter 接受把命令引用写入草稿输入", async () => {
+    const t = mount();
+    await t.flush();
+    // 无项目无会话：boot 演示草稿（DraftPane 可见）
+    expect(screen.getByTestId("draft-pane")).toBeTruthy();
+    const box = screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…");
+    // 输入 /：预热 + Main CommandCatalog + FakeAdapter 固定集 → 菜单弹出
+    fireEvent.change(box, { target: { value: "/", selectionStart: 1 } });
+    await waitFor(() => expect(screen.getByTestId("slash-menu")).toBeTruthy());
+    const names = screen.getAllByTestId("slash-menu-item").map((el) => el.textContent ?? "");
+    expect(names.some((s) => s.includes("/fake-plan"))).toBe(true); // FakeAdapter 固定集可见
+    expect(names.some((s) => s.includes("/pty"))).toBe(true); // 内置应用命令入应用组
+    // 应用组在前：/pty（app）排在 /fake-*（cli）之前
+    expect(names.findIndex((s) => s.includes("/pty"))).toBeLessThan(names.findIndex((s) => s.includes("/fake-plan")));
+    // Enter 接受（初始高亮第 0 项 /kanban）：命令引用置入输入流（不发送，派发留 #92）
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect((box as HTMLTextAreaElement).value).toBe("/kanban ");
+    expect(screen.queryByTestId("slash-menu")).toBeNull(); // 接受后菜单关闭
+    // 草稿 store 同步受控值
+    const d = t.ctl().draft;
+    expect(d && d.kind === "structured" ? d.data.input : null).toBe("/kanban ");
+  });
+
+  it("会话态：已建会话 composer 同样弹菜单（cli/cwd 键控换源）", async () => {
+    const t = mount();
+    await t.flush();
+    await createViaDraft(t.ctl, "fake", undefined, "首条消息（建立会话）");
+    t.advance(); // 首轮演示脚本跑完（running 期输入框禁用）
+    await t.flush();
+    // 会话态 composer（与草稿态同款输入框组件）：输入 / 弹菜单
+    const box = screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…");
+    fireEvent.change(box, { target: { value: "/", selectionStart: 1 } });
+    await waitFor(() => expect(screen.getByTestId("slash-menu")).toBeTruthy());
+    expect(screen.getAllByTestId("slash-menu-item").some((el) => (el.textContent ?? "").includes("/fake-skill"))).toBe(true);
+  });
+});
+
+describe("斜杠派发闭环（#92：发送期派发判定 → 透传/展开/内置本地执行，全链走真实 Main 路由）", () => {
+  let tmpRoot = "";
+
+  afterEach(() => {
+    cleanup();
+    for (const db of openDbs.splice(0)) db.close();
+    if (tmpRoot) {
+      rmSync(tmpRoot, { recursive: true, force: true });
+      tmpRoot = "";
+    }
+  });
+
+  it("内置 /kanban（草稿态）：本地执行切视图 + 清空输入保留草稿，不经任何发送通道", async () => {
+    const views: string[] = [];
+    const t = mount(undefined, { onSetView: (v) => views.push(v) });
+    await t.flush();
+    await act(async () => {
+      send("/kanban");
+    });
+    await t.flush();
+    expect(views).toEqual(["kanban"]); // App 层 setView 单源出口被调用
+    const d = t.ctl().draft;
+    expect(d?.kind === "structured" ? d.data.input : null).toBe(""); // 输入已消费、草稿保留
+    expect(screen.getByTestId("draft-hint")).toBeTruthy();
+    expect(t.ctl().sessions.length).toBe(0); // 未创建会话（未发送）
+  });
+
+  it("fake 会话未匹配 /foo：原样发送（用户气泡=原文）+ turn 正常推进", async () => {
+    const clock = new VirtualClock();
+    const t = mount(makeTransport(new FakeAdapter({ clock })));
+    await t.flush();
+    await act(async () => {
+      send("首条消息（建立会话）");
+    });
+    act(() => {
+      clock.runToIdle(); // 首轮演示脚本跑完（running 期输入框禁用）
+    });
+    await t.flush();
+    await act(async () => {
+      send("/nope 任意参数");
+    });
+    act(() => {
+      clock.runToIdle();
+    });
+    expect(screen.getByText("/nope 任意参数")).toBeTruthy(); // 未匹配：气泡为原文
+    expect(screen.getAllByText("好的，我先跑一遍现有测试确认基线，然后开始拆分。").length).toBeGreaterThanOrEqual(2); // 两轮 turn 照常（默认脚本同文案）
+  });
+
+  it("codex 草稿匹配展开：菜单数据源（FakeAdapter codex 目录模拟）→ 发送期 composer:expandCommand（真实 Main 读文件）→ 展开文本为首条消息（气泡=展开结果，占位符已替换）", async () => {
+    tmpRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "kb-ws-slash-")));
+    const projDir = join(tmpRoot, "demo-repo");
+    mkdirSync(join(projDir, ".git"), { recursive: true });
+    const promptsDir = join(projDir, ".codex", "prompts");
+    mkdirSync(promptsDir, { recursive: true });
+    writeFileSync(join(promptsDir, "kb-probe.md"), "---\ndescription: 展开探针\nargument-hint: [说明]\n---\n目标：$ARGUMENTS，首参=$1，标记 KB-CODEX-PROMPT-EXECUTED", "utf8");
+    const t = mount(makeTransport(new FakeAdapter({ clock: new VirtualClock() }), { pick: async () => projDir }));
+    await t.flush();
+    const projectId = await registerProject(t, projDir);
+    await act(async () => {
+      const r = t.ctl().openSessionDraft({ projectId, cli: "codex" });
+      if (!r.ok) throw new Error("codex 草稿打开失败");
+    });
+    // 菜单可见（codex 目录模拟 → 项目级 prompt 进菜单）
+    const box = screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…");
+    await act(async () => {
+      await waitFor(() => {
+        const d = t.ctl().draft;
+        if (d?.kind !== "structured" || d.data.model === undefined) throw new Error("模型未就绪");
+      });
+    });
+    fireEvent.change(box, { target: { value: "/kb", selectionStart: 3 } });
+    await waitFor(() => expect(screen.getByTestId("slash-menu")).toBeTruthy());
+    expect(screen.getAllByTestId("slash-menu-item").some((el) => (el.textContent ?? "").includes("/kb-probe"))).toBe(true);
+    // 接受置入 + 补实参 → 提交：展开链路（Main 读文件替换占位符）以展开文本为首条消息
+    fireEvent.keyDown(box, { key: "Enter" });
+    fireEvent.change(box, { target: { value: "/kb-probe alpha beta", selectionStart: 21 } });
+    await act(async () => {
+      send("/kb-probe alpha beta");
+    });
+    await t.flush();
+    expect(screen.getByText("目标：alpha beta，首参=alpha，标记 KB-CODEX-PROMPT-EXECUTED")).toBeTruthy(); // 气泡=展开文本
+    expect(screen.queryByText(/\$ARGUMENTS/)).toBeNull(); // 占位符已替换（无残留）
+    expect(screen.getByText("新会话 · Codex")).toBeTruthy(); // 原子创建链成功
+  });
+});
+
+describe("面板拖拽接线（#85：侧栏宽度/输入框高度）", () => {
+  // rAF 帧队列（确定性驱动帧合并；仅本套桩，afterEach 还原）
+  let frames: FrameRequestCallback[] = [];
+  const flushFrame = (): void => {
+    const cb = frames.shift();
+    if (cb) act(() => cb(0));
+  };
+
+  beforeEach(() => {
+    frames = [];
+    window.localStorage.clear();
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      frames.push(cb);
+      return frames.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (handle: number) => void handle);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    cleanup();
+    for (const db of openDbs.splice(0)) db.close();
+  });
+
+  it("侧栏把手拖拽：grid 首列宽随提交变化并持久化；拖拽中 Esc 回滚", async () => {
+    const t = mount();
+    await t.flush();
+    const handle = screen.getByTestId("sidebar-resize-handle");
+    expect(handle.getAttribute("role")).toBe("separator");
+    expect(handle.getAttribute("aria-label")).toBe("拖拽调整侧栏宽度");
+    const grid = document.querySelector("aside")!.parentElement!;
+    expect(grid.style.gridTemplateColumns).toContain("240px"); // 既有 240px 锚点经变量驱动
+
+    // 向右拖 100px → 340（提交 + 持久化）
+    act(() => {
+      fireEvent.pointerDown(handle, { button: 0, pointerId: 7, clientX: 240 });
+      fireEvent.pointerMove(handle, { pointerId: 7, clientX: 340 });
+    });
+    flushFrame();
+    expect(grid.style.gridTemplateColumns).toContain("340px"); // 预览即时跟随
+    act(() => {
+      fireEvent.pointerUp(handle, { pointerId: 7, clientX: 340 });
+    });
+    expect(grid.style.gridTemplateColumns).toContain("340px");
+    expect(window.localStorage.getItem("kanban.panel.sidebarWidth")).toBe("340");
+
+    // 拖拽中 Esc：回到拖拽前尺寸且不写存储
+    act(() => {
+      fireEvent.pointerDown(handle, { button: 0, pointerId: 8, clientX: 340 });
+      fireEvent.pointerMove(handle, { pointerId: 8, clientX: 500 });
+    });
+    flushFrame();
+    act(() => {
+      fireEvent.keyDown(handle, { key: "Escape" });
+    });
+    expect(grid.style.gridTemplateColumns).toContain("340px");
+    expect(window.localStorage.getItem("kanban.panel.sidebarWidth")).toBe("340");
+  });
+
+  it("输入框高度：草稿态拖拽增高持久化；发首条消息后会话 Composer 读同一偏好（两态联动）", async () => {
+    const t = mount();
+    await t.flush();
+    await screen.findByTestId("draft-hint"); // boot 演示草稿（Fake 链路）
+    const handle = screen.getByTestId("composer-resize-handle");
+    expect(handle.getAttribute("role")).toBe("separator");
+    const draftBox = screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…") as HTMLTextAreaElement;
+    expect(draftBox.style.height).toBe("46px"); // 默认高与既有 rows=2 视觉一致
+
+    // 向上拖 54px → 100（sign=-1：上拖增高）
+    act(() => {
+      fireEvent.pointerDown(handle, { button: 0, pointerId: 3, clientY: 500 });
+      fireEvent.pointerMove(handle, { pointerId: 3, clientY: 446 });
+    });
+    flushFrame();
+    expect(draftBox.style.height).toBe("100px");
+    act(() => {
+      fireEvent.pointerUp(handle, { pointerId: 3, clientY: 446 });
+    });
+    expect(window.localStorage.getItem("kanban.panel.composerHeight")).toBe("100");
+
+    // 草稿发首条 → 会话态 Composer 挂载，输入框高从同一持久化偏好恢复
+    send("首条消息（驱动草稿转会话）");
+    await waitFor(() => {
+      const sessionBox = screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…") as HTMLTextAreaElement;
+      expect(sessionBox.style.height).toBe("100px");
+    });
+    await t.flush();
   });
 });

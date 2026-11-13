@@ -1,7 +1,8 @@
 // 用途：模型选择 combobox（issue #77 / spec #75，替代旧 ModelSelect 硬编码下拉）—— 输入框 + 自定义下拉（形态对齐权限 chip）：就绪（isDefault 项带「默认」角标）/ 过滤（displayName·id 不分大小写）/ 加载中（只读提示）/ 拉取失败（原因行 + 手输 id 兜底）四状态；挂载即经模型目录预取；原型 docs/prototypes/model-combobox.prototype.html 五状态为一致项
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import type { CliKind } from "@kanban/ipc-schema";
 import { findDefaultModel, type ModelCatalog, type ModelsState } from "../model-catalog";
+import { useClosableOverlay } from "./use-closable-overlay";
 
 /** 目录状态订阅 + 挂载预取（草稿面板与已建会话 composer 挂载即拉取；StrictMode 双挂载经目录 in-flight 去重只发一次） */
 export function useModelsState(catalog: ModelCatalog, cli: CliKind, cwd: string | null): ModelsState {
@@ -48,10 +49,10 @@ export interface ModelComboboxProps {
 /** 模型选择 combobox：输入框（role=combobox）+ 自定义下拉；加载与错误态不提供「默认/自选」逃生项 */
 export function ModelCombobox({ cli, cwd, value, onChange, catalog, autoSelectDefault = false, disabled = false }: ModelComboboxProps) {
   const state = useModelsState(catalog, cli, cwd);
-  const [open, setOpen] = useState(false);
   // 编辑查询（null = 非编辑态，输入框显示派生值）；输入或收起时切换
   const [query, setQuery] = useState<string | null>(null);
-  const rootRef = useRef<HTMLSpanElement | null>(null);
+  // 可关闭浮层（#83 与权限菜单共享同一 hook）：外部点击/Esc 收起并放弃未确认的过滤输入
+  const { open, setOpen, rootRef } = useClosableOverlay<HTMLSpanElement>(() => setQuery(null));
 
   // 就绪后默认选中（草稿语义：经 onChange 写回 store；无默认项不强制——用户自选或手输）
   useEffect(() => {
@@ -59,19 +60,6 @@ export function ModelCombobox({ cli, cwd, value, onChange, catalog, autoSelectDe
     const def = findDefaultModel(state.models);
     if (def) onChange(def.id);
   }, [autoSelectDefault, state, value, onChange]);
-
-  // 点击外部收起（对齐 PermChip 下拉交互；收起即放弃未确认的过滤输入）
-  useEffect(() => {
-    if (!open) return;
-    const onDocMouseDown = (e: MouseEvent): void => {
-      if (!rootRef.current?.contains(e.target as Node)) {
-        setOpen(false);
-        setQuery(null);
-      }
-    };
-    document.addEventListener("mousedown", onDocMouseDown);
-    return () => document.removeEventListener("mousedown", onDocMouseDown);
-  }, [open]);
 
   const loading = state.status === "loading" || state.status === "idle";
   const models = state.status === "ready" ? state.models : [];
@@ -103,11 +91,8 @@ export function ModelCombobox({ cli, cwd, value, onChange, catalog, autoSelectDe
           setOpen(true);
         }}
         onKeyDown={(e) => {
+          // Esc 收起由共享 useClosableOverlay 统一处理（#83）；此处只管 Enter 手输提交
           if (e.key === "Enter" && query !== null && effectiveQuery.length > 0) commit(effectiveQuery);
-          else if (e.key === "Escape") {
-            setOpen(false);
-            setQuery(null);
-          }
         }}
         className={`h-7 w-[190px] rounded-full border bg-transparent pl-3 pr-7 text-xs text-muted-foreground outline-none focus:border-primary focus:text-foreground ${
           disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:border-primary hover:text-foreground"

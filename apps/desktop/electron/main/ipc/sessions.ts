@@ -32,6 +32,7 @@ function toSessionRow(rec: ReturnType<IpcDeps["sessions"]["list"]>[number]): Ses
     permMode: rec.permMode,
     status: rec.status ?? null,
     lastActiveAt: rec.lastActiveAt,
+    createdAt: rec.createdAt ?? null,
     archivedAt: rec.archivedAt,
     dirIdentity: identity.kind,
     worktreeName: identity.kind === "worktree" ? identity.name : null,

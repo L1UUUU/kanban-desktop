@@ -189,6 +189,15 @@ export class ChatStore {
     if (!wasActive) this.changed(); // 激活变化必通知；点已激活行时仅草稿丢弃自身按需通知
   }
 
+  /** issue #86 先手让位（项目维度）：切项目时激活会话若属其他项目则清除选中（回落空态，断开会话标题不跨项目残留） */
+  clearActiveIfForeignProject(currentProjectId: string | null): void {
+    if (this.activeId === null) return;
+    const s = this.sessions.get(this.activeId);
+    if (!s || (s.projectId ?? null) === currentProjectId) return;
+    this.activeId = null;
+    this.changed();
+  }
+
   /** #59：打开草稿（全局仅一个：已有草稿则替换并置 replacedHint；replacedHint 可显式传入——跨类替换由 openSessionDraft 单源判定） */
   openDraft(meta: DraftMeta): boolean {
     const replaced = meta.replacedHint ?? this.draft !== null;

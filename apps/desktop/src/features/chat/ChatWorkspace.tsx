@@ -5,6 +5,8 @@ import { Sidebar } from "../../components/Sidebar";
 import type { ProjectsController } from "../projects/use-projects";
 import type { ChatTransport } from "../../lib/kanban-api";
 import type { AppView } from "../../lib/app-view";
+import { PANEL_SIZE_KEYS, SIDEBAR_DEFAULT_WIDTH, sidebarWidthBounds } from "../../lib/panel-resize";
+import { usePanelSize, useViewportSize } from "../../lib/use-panel-size";
 import { ChatPane } from "./ChatPane";
 import { DraftPane } from "./components/DraftPane";
 import { detectMainRepoConflict } from "./conflict";
@@ -60,7 +62,8 @@ export function ChatWorkspace({
   );
   const setNotice = projects.setNotice;
   const onNotice = useCallback((message: string) => setNotice(message), [setNotice]);
-  const controller = useChatController(transport, { demoCwd: demoCwdValue, resolveCwd, onNotice });
+  // #92 内置 /kanban 命令视图切换单源（App 层 setView 注入 ChatController，composer 派发直达；prop 形参直接透传）
+  const controller = useChatController(transport, { demoCwd: demoCwdValue, resolveCwd, onNotice, onSetView });
   // 暴露 controller（App chatRef 写入/测试 holder）：effect 而非渲染期调用——废弃渲染不再触发回调（#67）
   useEffect(() => {
     onController?.(controller);
@@ -69,11 +72,14 @@ export function ChatWorkspace({
   // #59/#60：切项目丢弃两类草稿——聊天与 PTY（不弹确认、输入不保留）；单一 effect 统一覆盖所有切项目路径
   // （含 register() 成功后 Main 自动切项目——不经侧栏点击，命令式 discard 会漏，spec #57 Story 5）；
   // discardAllDrafts 引用随项目列表刷新重建时本 effect 亦重跑——丢弃幂等（无草稿时 no-op），无行为差异
+  // #86 先手让位（项目维度）：注册/切换为用户先手——他项目的激活会话（含启动自动选中者）清除选中回落空态，不跨项目残留
   const currentProjectId = projects.currentProjectId;
   const discardAllDrafts = controller.discardAllDrafts;
+  const clearActiveIfForeignProject = controller.clearActiveIfForeignProject;
   useEffect(() => {
     discardAllDrafts();
-  }, [currentProjectId, discardAllDrafts]);
+    clearActiveIfForeignProject(currentProjectId);
+  }, [currentProjectId, discardAllDrafts, clearActiveIfForeignProject]);
 
   // 活跃会话为 PTY 终端时中央渲染终端面板（与结构化聊天区并列切换，spec I）
   const active = controller.activeSession;
@@ -90,8 +96,19 @@ export function ChatWorkspace({
     if (r.ok) onSetView?.("chat"); // 草稿在中央区：从看板/记忆等视图发起时带回
   };
 
+  // #85 侧栏宽度拖拽：视口联动上限（min(固定上限, 视口宽 − 中央区最小宽)），偏好持久化到 renderer localStorage
+  const viewport = useViewportSize();
+  const sidebar = usePanelSize({
+    storageKey: PANEL_SIZE_KEYS.sidebarWidth,
+    axis: "x",
+    sign: 1, // 向右拖加宽
+    bounds: sidebarWidthBounds(viewport.width),
+    defaultSize: SIDEBAR_DEFAULT_WIDTH,
+    ariaLabel: "拖拽调整侧栏宽度",
+  });
+
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-[240px_1fr]">
+    <div className="grid min-h-0 flex-1" style={{ gridTemplateColumns: `${Math.round(sidebar.size)}px 6px 1fr` }}>
       <Sidebar
         projects={projects.projects}
         currentProjectId={projects.currentProjectId}
@@ -130,6 +147,14 @@ export function ChatWorkspace({
             {sidebarFooter}
           </>
         }
+      />
+      {/* #85 侧栏宽度拖拽把手（grid 中列，指针捕获/rAF/Esc 回滚/双击复位/键盘步进见 use-panel-size） */}
+      <div
+        data-testid="sidebar-resize-handle"
+        className={`h-full w-1.5 cursor-col-resize select-none hover:bg-primary/25 focus-visible:bg-primary/40 ${
+          sidebar.dragging ? "bg-primary/40" : ""
+        }`}
+        {...sidebar.handleProps}
       />
       {view === "kanban" ? (
         <KanbanWorkspace
@@ -172,6 +197,7 @@ export function ChatWorkspace({
           <DraftPane
             draft={controller.draft.data}
             models={controller.models}
+            commands={controller.commands}
             configPath={configPath}
             actions={{
               onSubmit: controller.submitDraft,
@@ -188,6 +214,7 @@ export function ChatWorkspace({
         <ChatPane
           session={controller.activeSession}
           models={controller.models}
+          commands={controller.commands}
           version={controller.version}
           conflictTitles={conflictTitles}
           configPath={configPath}

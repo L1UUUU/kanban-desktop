@@ -1,5 +1,5 @@
 // 用途：CodexAdapter 真实集成套（KANBAN_E2E=1 才跑）—— 契约套参数化复跑 + 权限三档可观察差异 + ≥3 会话并发 + 模型回退；短提示+effort low 控成本
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -41,6 +41,12 @@ const approvalPrompt = [
   `2) echo b > "${f2}"`,
   "每条运行完后各用一句话报告结果。",
 ].join("\n");
+
+// #89 命令源 fixture：项目级 prompts 目录写一条 prompt（契约套 listCommands atLeast 1 的确定性数据源；机器用户级 ~/.codex/prompts 是否存在不可控）
+if (E2E) {
+  mkdirSync(path.join(workdir, ".codex", "prompts"), { recursive: true });
+  writeFileSync(path.join(workdir, ".codex", "prompts", "e2e-probe.md"), "---\ndescription: e2e 命令源探针\n---\n探针正文", "utf8");
+}
 
 describe.skipIf(!E2E)("CodexAdapter 真实集成（env-gated）", () => {
   let adapter: CodexAdapter;

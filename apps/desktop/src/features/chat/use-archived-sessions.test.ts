@@ -23,6 +23,7 @@ function archRow(p: { id: string; projectId?: string | null }): SessionRow {
     permMode: "auto",
     status: "idle",
     lastActiveAt: null,
+    createdAt: "2026-11-01T00:00:00.000Z",
     archivedAt: "2026-11-11T08:00:00.000Z",
     dirIdentity: "none",
     worktreeName: null,

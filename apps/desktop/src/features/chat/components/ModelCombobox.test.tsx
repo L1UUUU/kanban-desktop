@@ -1,4 +1,5 @@
-// 用途：ModelCombobox 密封测试（A 类，issue #77 / spec #75）—— 四状态（就绪含默认角标/过滤/加载中/错误含原因行）、手输列表外 id 兜底、就绪后默认选中、会话模式派生显示不回调
+// 用途：ModelCombobox 密封测试（A 类，issue #77 / spec #75）—— 四状态（就绪含默认角标/过滤/加载中/错误含原因行）、手输列表外 id 兜底、就绪后默认选中、会话模式派生显示不回调；
+// #83 起可关闭浮层（外部点击/Esc）回归：关闭路径收起菜单并放弃未确认的过滤输入
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelEntry, ModelsResult } from "@kanban/ipc-schema";
@@ -145,5 +146,32 @@ describe("ModelCombobox（四状态与交互，原型一致项）", () => {
     fireEvent.change(t.input(), { target: { value: "gpt-6-luna" } });
     fireEvent.keyDown(t.input(), { key: "Enter" });
     expect(t.onChange).toHaveBeenCalledWith("gpt-6-luna");
+  });
+
+  it("可关闭浮层（#83）：点击外部收起并放弃过滤输入（重新打开回到全列表）", async () => {
+    const t = setup();
+    t.resolve(OK);
+    await waitFor(() => expect(t.input().value).toBe("GPT-5.6"));
+    fireEvent.focus(t.input());
+    fireEvent.change(t.input(), { target: { value: "TERRA" } }); // 未确认的过滤输入
+    expect(screen.getByText("匹配 1 项 · 回车使用输入内容")).toBeTruthy();
+    fireEvent.mouseDown(document.body); // combobox 之外任意区域
+    expect(screen.queryByText("匹配 1 项 · 回车使用输入内容")).toBeNull(); // 菜单收起
+    expect(t.input().value).toBe("GPT-5.6"); // 过滤输入被放弃，回派生显示
+    fireEvent.focus(t.input()); // 重新打开：过滤不残留
+    expect(screen.getByText("未在列表中？直接输入模型 id")).toBeTruthy();
+  });
+
+  it("可关闭浮层（#83）：Esc 收起并放弃过滤输入", async () => {
+    const t = setup();
+    t.resolve(OK);
+    await waitFor(() => expect(t.input().value).toBe("GPT-5.6"));
+    fireEvent.focus(t.input());
+    fireEvent.change(t.input(), { target: { value: "TERRA" } });
+    fireEvent.keyDown(t.input(), { key: "Escape" });
+    expect(screen.queryByText("匹配 1 项 · 回车使用输入内容")).toBeNull(); // 菜单收起
+    expect(t.input().value).toBe("GPT-5.6"); // 过滤输入被放弃
+    fireEvent.focus(t.input()); // 重新打开：过滤不残留
+    expect(screen.getByText("未在列表中？直接输入模型 id")).toBeTruthy();
   });
 });

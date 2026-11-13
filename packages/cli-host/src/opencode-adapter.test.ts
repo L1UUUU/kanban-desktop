@@ -21,8 +21,8 @@ class FakeServerClient implements OpenCodeServerClientLike {
   readonly apiCalls: Array<{ method: string; path: string; body?: unknown }> = [];
   /** GET /permission 返回的 pending 列表（测试填充） */
   pendingPermissions: Record<string, unknown>[] = [];
-  /** GET /command 返回项 */
-  commands: Array<{ name: string }> = [];
+  /** GET /command 返回项（listCommands #89 映射驱动 / matchCommand 名单数据源） */
+  commands: Array<{ name: string; description?: string }> = [];
   /** GET /session/{id}/message 返回（脚本 playback 落账） */
   history: Array<{ info: Record<string, unknown>; parts: Record<string, unknown>[] }> = [];
   /** prompt_async 到达回调（nativeId 取自 path；契约 Fake 挂自动 playback） */
@@ -183,6 +183,34 @@ describe("OpenCodeAdapter：listModels 模型目录（issue #76 / spec #75）", 
     await expect(adapter.listModels({ cwd })).rejects.toMatchObject({ code: "E_INTERNAL" }); // providers 未脚本化 → 404
     expect(host.refCount(cwd)).toBe(0);
     expect(host.stoppedCwds).toContain(cwd); // 引用归零触发 server 停止（无泄漏）
+  });
+
+  it("listCommands（issue #89）：GET /command 映射统一条目（source=native、无来源文件），临时引用必释放", async () => {
+    const { adapter, host } = makeAdapter();
+    const cwd = "C:\\op-commands";
+    await adapter.createSession({ cwd }); // 预热：拉起 server（会话引用保活，命令列举临时引用叠加其上）
+    host.serverOf(cwd)!.commands = [
+      { name: "share", description: "分享会话" },
+      { name: "no-desc" }, // description 缺失 → 空串
+      { name: "" }, // 空名跳过
+    ];
+    const commands = await adapter.listCommands({ cwd });
+    expect(commands).toHaveLength(2);
+    expect(commands.find((c) => c.name === "share")).toEqual({
+      name: "share",
+      description: "分享会话",
+      argsHint: null,
+      source: "native",
+      cli: "opencode",
+      sourcePath: null,
+      userOnly: false,
+    });
+    expect(commands.find((c) => c.name === "no-desc")!.description).toBe("");
+    expect(host.refCount(cwd)).toBe(1); // 会话引用保留，commands 临时引用已释放（引用计数不泄漏）
+    // 失败路径（api 报 500）：映射 E_INTERNAL，临时引用同样释放
+    host.serverOf(cwd)!.apiOverride = () => ({ status: 500, ok: false, json: null, text: "boom" });
+    await expect(adapter.listCommands({ cwd })).rejects.toMatchObject({ code: "E_INTERNAL" });
+    expect(host.refCount(cwd)).toBe(1);
   });
 
   it("createSession 返回实际 model：显式值透传；未指定回 GET /config 默认串", async () => {
@@ -901,6 +929,8 @@ function makeContractAdapter() {
     let turnSeq = 0;
     let completeTimer: NodeJS.Timeout | null = null;
     let approvalMsgId: string | null = null;
+    // #89 契约套命令源：GET /command 至少一条（listCommands 契约断言 atLeast 1 的数据来源）
+    server.commands = [{ name: "contract-command", description: "契约套固定命令" }];
     server.onPrompt = (nativeId, text) => {
       turnSeq += 1;
       // 用户输入落账（真实 server 将 prompt 存为 user message；readTranscript 的 user 视角来源）

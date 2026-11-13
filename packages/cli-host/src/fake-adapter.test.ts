@@ -1,5 +1,8 @@
 // 用途：FakeAdapter 测试 —— 消费 adapter.contract 契约套（六不变量可单测项）+ Fake 专属场景（审批过期/错误脚本/dispose/capabilities/中断细节）
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import type { AdapterEvent, ChatEvent } from "@kanban/ipc-schema";
 import { defineAdapterContractTests, createCollector } from "./adapter.contract";
 import { VirtualClock } from "./clock";
@@ -13,6 +16,15 @@ async function makeCtx() {
 }
 
 defineAdapterContractTests(makeCtx);
+
+let fakeTmpRoot = "";
+
+afterEach(() => {
+  if (fakeTmpRoot) {
+    rmSync(fakeTmpRoot, { recursive: true, force: true });
+    fakeTmpRoot = "";
+  }
+});
 
 describe("FakeAdapter 专属场景", () => {
   it("capabilities 全真：UI 不隐藏审批/中断/恢复/历史/技能信号控件", () => {
@@ -37,6 +49,52 @@ describe("FakeAdapter 专属场景", () => {
       expect(typeof m.displayName).toBe("string");
       expect(typeof m.description).toBe("string");
     }
+  });
+
+  it("listCommands 返回固定命令集且每次为拷贝（#89：整机 e2e 补全菜单的前提）", async () => {
+    const adapter = new FakeAdapter({ clock: new VirtualClock() });
+    const first = await adapter.listCommands({ cwd: "C:\\demo" });
+    expect(first.length).toBeGreaterThanOrEqual(2); // 固定集非空且可驱动菜单演示
+    for (const c of first) {
+      expect(c.cli).toBe("fake");
+      expect(c.name.startsWith("/")).toBe(false); // 名称不带斜杠前缀（插入时统一补 /）
+    }
+    // 字段多样性：固定集覆盖 userOnly / argsHint 两形态（菜单徽标与参数提示演示）
+    expect(first.some((c) => c.userOnly)).toBe(true);
+    expect(first.some((c) => c.argsHint !== null)).toBe(true);
+    first[0].description = "被调用方改写";
+    const second = await adapter.listCommands({ cwd: "C:\\demo" });
+    expect(second[0].description).not.toBe("被调用方改写"); // 拷贝防改写常量
+  });
+
+  it("listCommands(cli=codex) 模拟真实 codex 目录扫描（#92：KANBAN_DISABLE_CODEX 回落 Fake 时整机 e2e 可驱动展开链路）；其余 CLI 恒为固定集", async () => {
+    fakeTmpRoot = mkdtempSync(join(tmpdir(), "kb-fake-cmd-"));
+    const home = join(fakeTmpRoot, "home");
+    const project = join(fakeTmpRoot, "proj");
+    const userPrompts = join(home, ".codex", "prompts");
+    const projPrompts = join(project, ".codex", "prompts");
+    mkdirSync(userPrompts, { recursive: true });
+    mkdirSync(projPrompts, { recursive: true });
+    writeFileSync(join(userPrompts, "global-probe.md"), "---\ndescription: 用户级探针\n---\n正文", "utf8");
+    writeFileSync(join(projPrompts, "commit.md"), "---\ndescription: 提交\nargument-hint: [说明]\n---\n生成提交：$ARGUMENTS", "utf8");
+
+    const adapter = new FakeAdapter({ clock: new VirtualClock(), homeDir: home });
+    const commands = await adapter.listCommands({ cli: "codex", cwd: project });
+    const commit = commands.find((c) => c.name === "commit");
+    expect(commit).toMatchObject({
+      cli: "codex",
+      source: "project",
+      argsHint: "[说明]",
+      sourcePath: join(projPrompts, "commit.md"),
+    });
+    expect(commands.find((c) => c.name === "global-probe")).toMatchObject({ source: "user" });
+    // 无 prompts 目录的（cwd, home）→ 空集不报错；非 codex CLI 恒为固定集（fake 条目）
+    const emptyHome = join(fakeTmpRoot, "empty-home");
+    mkdirSync(emptyHome, { recursive: true });
+    expect(await new FakeAdapter({ clock: new VirtualClock(), homeDir: emptyHome }).listCommands({ cli: "codex", cwd: join(fakeTmpRoot, "empty") })).toEqual([]);
+    const fakeOnes = await adapter.listCommands({ cwd: project });
+    expect(fakeOnes.length).toBeGreaterThan(0);
+    expect(fakeOnes.every((c) => c.cli === "fake")).toBe(true);
   });
 
   it("createSession 透传请求 model；未指定为 undefined（issue #76）", async () => {

@@ -2,7 +2,9 @@
 export * from "./app-info";
 export * from "./channels";
 export * from "./chat";
+export * from "./cli-kind";
 export * from "./cli-status";
+export * from "./commands";
 export * from "./config";
 export * from "./diff";
 export * from "./ipc";
@@ -11,5 +13,6 @@ export * from "./log";
 export * from "./memory";
 export * from "./models";
 export * from "./residue";
+export * from "./session-activity";
 export * from "./terminal";
 export * from "./transcript";

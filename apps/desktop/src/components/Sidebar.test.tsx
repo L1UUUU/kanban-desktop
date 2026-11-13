@@ -170,7 +170,7 @@ describe("侧栏会话区（原型一致项 3）", () => {
     // PTY 会话出现在 PTY 分组，结构化会话不重复出现
     expect(screen.getByText("终端 · pwsh")).toBeTruthy();
     expect(screen.getByText("终端 · claude")).toBeTruthy();
-    const ptyGroup = screen.getByText("PTY 终端").closest("div") ?? document;
+    const ptyGroup = screen.getByText("PTY 终端（本应用创建）").closest("div") ?? document;
     void ptyGroup;
     // 活跃终端可停止（显式终止入口）；断开终端无停止按钮
     const killBtn = screen.getByTitle("停止终端（终止进程，保留会话记录）");
@@ -182,6 +182,21 @@ describe("侧栏会话区（原型一致项 3）", () => {
     // 点击 PTY 行切换激活（与结构化会话并列切换）
     fireEvent.click(screen.getByText("终端 · claude"));
     expect(onSelect).toHaveBeenCalledWith("tty-2");
+  });
+});
+
+describe("侧栏分组文案语义（#87 spec #82-F：列表不混入外部终端会话）", () => {
+  it("结构化分组标题「会话（本应用创建）」；PTY 分组标题 + 说明行 + 悬浮解释（tooltip）", () => {
+    mount();
+    // 两组标题都带「本应用创建」后缀：用户可分辨列表来源（#82 问题 1）
+    expect(screen.getByText("会话（本应用创建）")).toBeTruthy();
+    expect(screen.getByText("PTY 终端（本应用创建）")).toBeTruthy();
+    // PTY 分组常驻说明行：外部终端里运行的会话不进此列表
+    expect(screen.getByText("仅应用内创建的终端；外部终端会话不混入")).toBeTruthy();
+    // 悬浮解释（分组头 title tooltip）：完整说明外部 CLI 不出现在此列表
+    expect(
+      screen.getByTitle("仅列出本应用内创建的终端会话；在外部终端（系统终端 / IDE 等）里运行的 CLI 不会出现在此列表"),
+    ).toBeTruthy();
   });
 });
 

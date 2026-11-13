@@ -5,10 +5,10 @@ import type { IpcDeps } from "../ipc";
 import { allKanbanHandlers, routeByTable, type SubChannelHandlers } from "./table";
 
 describe("子通道路由表：编译期穷尽（#72）", () => {
-  it("总表类型 = 25 子通道全量映射（project 3 + session 11 + terminal 4 + kanban 7；漏任一 handler 编译失败）", () => {
+  it("总表类型 = 28 子通道全量映射（project 3 + session 11 + terminal 4 + kanban 7 + composer 2；漏任一 handler 编译失败）", () => {
     expectTypeOf(allKanbanHandlers).toEqualTypeOf<SubChannelHandlers<IpcRequest, IpcResult, IpcDeps>>();
     // 通道成员清点：schema 删通道或子表漏成员时，上方 type 断言先在编译期红；此处运行期兜底计数
-    expect(Object.keys(allKanbanHandlers)).toHaveLength(26);
+    expect(Object.keys(allKanbanHandlers)).toHaveLength(28);
   });
 });
 
