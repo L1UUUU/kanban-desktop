@@ -1,8 +1,7 @@
-// 用途：斜杠派发判定纯函数密封测试矩阵（issue #92 / spec #82 E 块）—— 三 CLI × 匹配/未匹配/重名/文件缺失/目录不可用：claude/opencode/fake=透传、codex=客户端展开（fail-closed：目录不可用或无来源文件拒绝发送）、未匹配原样、内置 /pty /kanban 优先于 CLI 同名命令
+// 用途：斜杠派发判定纯函数密封测试矩阵（issue #92 / spec #82 E 块；ADR 0004 零内置）—— 三 CLI × 匹配/未匹配/文件缺失/目录不可用：claude/opencode/fake=透传、codex=客户端展开（fail-closed：目录不可用或无来源文件拒绝发送）、未匹配原样；第一方内置命令为零（/pty /kanban 走通用矩阵）
 import { describe, expect, it } from "vitest";
 import type { CommandEntry } from "@kanban/ipc-schema";
-import { APP_SLASH_COMMANDS } from "./components/slash-trigger";
-import { APP_COMMAND_NAMES, parseSlashInvocation, resolveSlashDispatch } from "./slash-dispatch";
+import { parseSlashInvocation, resolveSlashDispatch } from "./slash-dispatch";
 
 /** 目录条目工厂（缺省 codex 带来源文件） */
 function entry(name: string, cli: CommandEntry["cli"] = "codex", sourcePath: string | null = `C:\\prompts\\${name}.md`): CommandEntry {
@@ -86,14 +85,20 @@ describe("resolveSlashDispatch（派发形态矩阵）", () => {
     }
   });
 
-  it("内置 /pty /kanban 本地执行，优先于 CLI 目录同名命令（重名内置胜出）", () => {
+  it("零内置（ADR 0004）：/pty /kanban 无本地执行分支——透传类原样发送，codex 目录同名命令可达（不再被内置遮蔽）", () => {
     const clash: CommandEntry[] = [entry("pty"), entry("kanban")];
-    expect(resolveSlashDispatch({ text: "/pty", cli: "codex", commands: clash })).toEqual({ action: "app", app: "pty" });
-    expect(resolveSlashDispatch({ text: "/kanban", cli: "claude", commands: clash })).toEqual({ action: "app", app: "kanban" });
-    // 目录不可用时内置判定仍可用（本地命令不依赖目录）
-    expect(resolveSlashDispatch({ text: "/kanban", cli: "codex", commands: null })).toEqual({ action: "app", app: "kanban" });
-    // 带参数与大小写不敏感（与菜单过滤口径一致）
-    expect(resolveSlashDispatch({ text: "/Kanban foo", cli: "fake", commands: [] })).toEqual({ action: "app", app: "kanban" });
+    // 透传类：与未匹配一致，原样发送（CLI 侧自行解析）
+    expect(resolveSlashDispatch({ text: "/kanban", cli: "claude", commands: clash })).toEqual({ action: "send-text", text: "/kanban" });
+    expect(resolveSlashDispatch({ text: "/pty foo", cli: "fake", commands: [] })).toEqual({ action: "send-text", text: "/pty foo" });
+    // codex：目录内同名命令按展开语义判定（重名优先级已随内置分支删除）
+    expect(resolveSlashDispatch({ text: "/pty", cli: "codex", commands: clash })).toEqual({
+      action: "expand",
+      name: "pty",
+      args: "",
+      sourcePath: `C:\\prompts\\pty.md`,
+    });
+    // codex 目录不可用仍 fail-closed（未匹配 ≠ 目录不可用：无法判定即拒绝，不静默发原文）
+    expect(resolveSlashDispatch({ text: "/kanban", cli: "codex", commands: null }).action).toBe("blocked");
   });
 
   it("命令名匹配大小写不敏感（Windows 语义，与目录扫描/菜单一致）", () => {
@@ -101,9 +106,5 @@ describe("resolveSlashDispatch（派发形态矩阵）", () => {
       action: "expand",
       name: "commit", // 规范形取目录条目名
     });
-  });
-
-  it("内置命令名单源：与菜单 APP_SLASH_COMMANDS 一致（隐藏同步点防漂移）", () => {
-    expect([...APP_COMMAND_NAMES].sort()).toEqual(APP_SLASH_COMMANDS.map((c) => c.name).sort());
   });
 });

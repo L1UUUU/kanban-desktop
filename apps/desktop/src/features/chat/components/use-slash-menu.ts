@@ -1,9 +1,8 @@
-// 用途：斜杠补全菜单状态机 hook（issue #90 / spec #82 E 块）—— 触发检测（纯函数）× 命令源（预热/TTL）× 键盘协议（↑↓ 循环/Enter/Tab/Esc）× IME 合成冻结（合成中用冻结快照不重算，不闪动）；IME isComposing/keyCode 229 首行守门；Esc 按 token 内容记忆（同 token 不重弹）
+// 用途：斜杠补全菜单状态机 hook（issue #90 / spec #82 E 块；ADR 0004 零内置）—— 触发检测（纯函数）× 命令源（预热/TTL）× 键盘协议（↑↓ 循环/Enter/Tab/Esc）× IME 合成冻结（合成中用冻结快照不重算，不闪动）；IME isComposing/keyCode 229 首行守门；Esc 按 token 内容记忆（同 token 不重弹）
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { CliKind } from "@kanban/ipc-schema";
 import { COMMANDS_IDLE, type ComposerCommandSource } from "../composer-command-source";
 import {
-  APP_SLASH_COMMANDS,
   applySlashCompletion,
   detectSlashTrigger,
   filterSlashCommands,
@@ -26,7 +25,7 @@ export interface UseSlashMenuArgs {
   cwd: string | null;
   /** 输入框禁用（running / 提交中）：菜单不弹 */
   disabled?: boolean;
-  /** 选中回调（#92 执行接线数据面：app 命令本地执行 / cli 命令派发前置钩子） */
+  /** 选中回调（#92 执行接线数据面：cli 命令派发前置钩子） */
   onAcceptCommand?(cmd: MenuCommand): void;
   /** 输入框 ref（接受补全后光标恢复到实参位） */
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -83,10 +82,7 @@ export function useSlashMenu(args: UseSlashMenuArgs): SlashMenuController {
   }, [source, cli, cwd, menuActive]);
 
   const entries = useMemo(() => (state.status === "ready" ? state.commands.map(toMenuCommand) : []), [state]);
-  const items = useMemo(
-    () => (trigger ? filterSlashCommands([...APP_SLASH_COMMANDS, ...entries], trigger.query) : []),
-    [trigger, entries],
-  );
+  const items = useMemo(() => (trigger ? filterSlashCommands(entries, trigger.query) : []), [trigger, entries]);
 
   const dismissKey = trigger ? slashDismissKey(value, trigger) : null;
   const open = !disabled && trigger !== null && dismissed !== dismissKey && state.status === "ready";

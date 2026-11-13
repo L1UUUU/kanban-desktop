@@ -15,7 +15,7 @@ async function makeCtx() {
   return { adapter, driveIdle: () => Promise.resolve(clock.runToIdle()) };
 }
 
-defineAdapterContractTests(makeCtx);
+defineAdapterContractTests(makeCtx, { listCommands: { atLeast: 0 } }); // ADR 0004：fake 通道零命令（无命令源），契约放宽为纯形状校验
 
 let fakeTmpRoot = "";
 
@@ -51,23 +51,16 @@ describe("FakeAdapter 专属场景", () => {
     }
   });
 
-  it("listCommands 返回固定命令集且每次为拷贝（#89：整机 e2e 补全菜单的前提）", async () => {
+  it("listCommands 非 codex 恒为空集（ADR 0004：fake 会话无命令源，斜杠菜单空态引导）", async () => {
     const adapter = new FakeAdapter({ clock: new VirtualClock() });
     const first = await adapter.listCommands({ cwd: "C:\\demo" });
-    expect(first.length).toBeGreaterThanOrEqual(2); // 固定集非空且可驱动菜单演示
-    for (const c of first) {
-      expect(c.cli).toBe("fake");
-      expect(c.name.startsWith("/")).toBe(false); // 名称不带斜杠前缀（插入时统一补 /）
-    }
-    // 字段多样性：固定集覆盖 userOnly / argsHint 两形态（菜单徽标与参数提示演示）
-    expect(first.some((c) => c.userOnly)).toBe(true);
-    expect(first.some((c) => c.argsHint !== null)).toBe(true);
-    first[0].description = "被调用方改写";
     const second = await adapter.listCommands({ cwd: "C:\\demo" });
-    expect(second[0].description).not.toBe("被调用方改写"); // 拷贝防改写常量
+    expect(first).toEqual([]);
+    expect(second).toEqual([]);
+    expect(first).not.toBe(second); // 每次新数组（不共享可变引用）
   });
 
-  it("listCommands(cli=codex) 模拟真实 codex 目录扫描（#92：KANBAN_DISABLE_CODEX 回落 Fake 时整机 e2e 可驱动展开链路）；其余 CLI 恒为固定集", async () => {
+  it("listCommands(cli=codex) 模拟真实 codex 目录扫描（#92：KANBAN_DISABLE_CODEX 回落 Fake 时整机 e2e 可驱动展开链路）", async () => {
     fakeTmpRoot = mkdtempSync(join(tmpdir(), "kb-fake-cmd-"));
     const home = join(fakeTmpRoot, "home");
     const project = join(fakeTmpRoot, "proj");
@@ -88,13 +81,11 @@ describe("FakeAdapter 专属场景", () => {
       sourcePath: join(projPrompts, "commit.md"),
     });
     expect(commands.find((c) => c.name === "global-probe")).toMatchObject({ source: "user" });
-    // 无 prompts 目录的（cwd, home）→ 空集不报错；非 codex CLI 恒为固定集（fake 条目）
+    // 无 prompts 目录的（cwd, home）→ 空集不报错；非 codex CLI 恒为空集（ADR 0004）
     const emptyHome = join(fakeTmpRoot, "empty-home");
     mkdirSync(emptyHome, { recursive: true });
     expect(await new FakeAdapter({ clock: new VirtualClock(), homeDir: emptyHome }).listCommands({ cli: "codex", cwd: join(fakeTmpRoot, "empty") })).toEqual([]);
-    const fakeOnes = await adapter.listCommands({ cwd: project });
-    expect(fakeOnes.length).toBeGreaterThan(0);
-    expect(fakeOnes.every((c) => c.cli === "fake")).toBe(true);
+    expect(await adapter.listCommands({ cwd: project })).toEqual([]);
   });
 
   it("createSession 透传请求 model；未指定为 undefined（issue #76）", async () => {

@@ -100,8 +100,6 @@ export interface ChatControllerDeps {
   resolveCwd(projectId: string | null, cli: CliKind | "pty"): string | null;
   /** 项目不存在等新建拒绝提示（单源：3 份手抄归 1） */
   onNotice(message: string): void;
-  /** 内置 /kanban 命令的视图切换单源出口（issue #92：App 层 setView 经 ChatWorkspace 注入，composer 不直面 App） */
-  onSetView?(v: "chat" | "kanban"): void;
 }
 
 /**
@@ -443,15 +441,13 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
         if (!r.ok) store.setError(sessionId, r.error.code, r.error.message);
       });
     };
-    // #92 斜杠派发环境（透传/展开/内置/fail-closed 编排收口在 slash-dispatch-exec；此处只注入依赖）
+    // #92 斜杠派发环境（透传/展开/fail-closed 编排收口在 slash-dispatch-exec；此处只注入依赖；ADR 0004 零内置后无本地执行出口）
     const slashEnv = (): SlashDispatchEnv | null =>
       transport
         ? {
             store,
             transport,
             commands,
-            openSessionDraft: (input) => openSessionDraftAction({ store, drafts, manager, resolveCwd, onNotice }, input),
-            onSetView: deps.onSetView,
           }
         : null;
     return {
@@ -525,7 +521,7 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
         }
       },
     };
-  }, [transport, store, resolveCwd, onNotice, drafts, manager, commands, deps.onSetView]);
+  }, [transport, store, resolveCwd, onNotice, drafts, manager, commands]);
 
   const activeSession = snap.activeId ? (store.getSession(snap.activeId) ?? null) : null;
   // 草稿判别联合聚合：结构化与 PTY 两分支并一支（中央区路由单源）

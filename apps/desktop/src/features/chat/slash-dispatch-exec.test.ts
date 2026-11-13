@@ -1,4 +1,4 @@
-// 用途：斜杠派发执行器密封测试（issue #92 / spec #82 E 块）—— 发送期把派发动作落到既有链路：透传/展开文本走 session:send（用户气泡=实际发送文本，所见即所发）、codex 展开经 composer:expandCommand、内置 /pty /kanban 本地执行、fail-closed 与展开/发送失败直达既有错误卡（会话 setError / 草稿 setDraftSubmitError），不静默
+// 用途：斜杠派发执行器密封测试（issue #92 / spec #82 E 块；ADR 0004 零内置）—— 发送期把派发动作落到既有链路：透传/展开文本走 session:send（用户气泡=实际发送文本，所见即所发）、codex 展开经 composer:expandCommand、fail-closed 与展开/发送失败直达既有错误卡（会话 setError / 草稿 setDraftSubmitError），不静默
 import { describe, expect, it } from "vitest";
 import type { CliKind, CommandEntry, IpcRequest, IpcResult } from "@kanban/ipc-schema";
 import type { ChatTransport } from "../../lib/kanban-api";
@@ -45,11 +45,9 @@ interface EnvHarness {
   env: SlashDispatchEnv;
   store: ChatStore;
   transport: ReturnType<typeof makeTransport>;
-  openedDrafts: Array<{ projectId: string | null; cli: string }>;
-  views: string[];
 }
 
-/** 装配执行环境：注册 codex 会话（cwd 固定）+ 记录型 openSessionDraft/onSetView */
+/** 装配执行环境：注册 codex 会话（cwd 固定）；ADR 0004 零内置后 env 仅剩 store/transport/commands */
 async function makeHarness(commands: CommandEntry[] | null): Promise<EnvHarness> {
   const store = new ChatStore();
   store.registerSession({ sessionId: "s1", cli: "codex", title: "会话", permMode: "auto", cwd: "C:\\proj", projectId: "p1" });
@@ -58,19 +56,12 @@ async function makeHarness(commands: CommandEntry[] | null): Promise<EnvHarness>
     "composer:expandCommand": { ok: true, text: "展开正文：修登录 bug" },
   });
   const source = commands ? await makeReadySource("codex", "C:\\proj", commands) : new ComposerCommandSource(async () => ({ ok: true, commands: [] }));
-  const openedDrafts: Array<{ projectId: string | null; cli: string }> = [];
-  const views: string[] = [];
   const env: SlashDispatchEnv = {
     store,
     transport,
     commands: source,
-    openSessionDraft: (input) => {
-      openedDrafts.push({ projectId: input.projectId ?? null, cli: input.cli });
-      return { ok: true, replaced: null };
-    },
-    onSetView: (v) => views.push(v),
   };
-  return { env, store, transport, openedDrafts, views };
+  return { env, store, transport };
 }
 
 describe("dispatchSessionSend（会话态发送编排）", () => {
@@ -79,7 +70,7 @@ describe("dispatchSessionSend（会话态发送编排）", () => {
     store.registerSession({ sessionId: "s1", cli: "claude", title: "会话", permMode: "auto", cwd: "C:\\proj", projectId: "p1" });
     store.setActive("s1");
     const transport = makeTransport();
-    const env: SlashDispatchEnv = { store, transport, commands: new ComposerCommandSource(async () => ({ ok: true, commands: [] })), openSessionDraft: () => ({ ok: true, replaced: null }) };
+    const env: SlashDispatchEnv = { store, transport, commands: new ComposerCommandSource(async () => ({ ok: true, commands: [] })) };
     expect(await dispatchSessionSend(env, "s1", "/plan 拆分")).toBe(true);
     const s = store.getSession("s1")!;
     expect(s.items.at(-1)).toMatchObject({ kind: "user", text: "/plan 拆分" });
@@ -110,16 +101,6 @@ describe("dispatchSessionSend（会话态发送编排）", () => {
     expect(await dispatchSessionSend(t.env, "s1", "/commit x")).toBe(false);
     expect(t.transport.calls).toEqual([]);
     expect(t.store.getSession("s1")!.lastError?.code).toBe("E_INTERNAL");
-  });
-
-  it("内置 /pty：openSessionDraft(cli=pty, fromSessionId=当前会话)，不发送；/kanban：onSetView(kanban)，不发送", async () => {
-    const t = await makeHarness([CODEX_ENTRY]);
-    expect(await dispatchSessionSend(t.env, "s1", "/pty")).toBe(true);
-    expect(t.openedDrafts).toEqual([{ projectId: "p1", cli: "pty" }]);
-    expect(t.transport.calls).toEqual([]);
-    expect(await dispatchSessionSend(t.env, "s1", "/kanban")).toBe(true);
-    expect(t.views).toEqual(["kanban"]);
-    expect(t.transport.calls).toEqual([]);
   });
 });
 
@@ -156,18 +137,5 @@ describe("dispatchDraftSubmit（草稿态提交编排）", () => {
     expect(t.submitted.length).toBe(before); // 原子链未触发
     expect(t.store.getSnapshot().draft?.submitError).toMatchObject({ code: "E_INTERNAL", message: "斜杠命令文件不可读" });
     expect(t.store.getSnapshot().draft?.input).toBe("/commit 修登录 bug"); // 输入保留
-  });
-
-  it("内置 /kanban：切视图 + 清空输入（草稿保留），不提交；/pty：草稿替换为 PTY 终端草稿", async () => {
-    const t = await makeDraftHarness([CODEX_ENTRY]);
-    t.store.updateDraft({ input: "/kanban" });
-    expect(await dispatchDraftSubmit(t.env, async (m) => (t.submitted.push(m), true))).toBe(true);
-    expect(t.views).toEqual(["kanban"]);
-    expect(t.store.getSnapshot().draft?.input).toBe("");
-    expect(t.submitted).toEqual([]);
-
-    t.store.updateDraft({ input: "/pty" });
-    expect(await dispatchDraftSubmit(t.env, async (m) => (t.submitted.push(m), true))).toBe(true);
-    expect(t.openedDrafts).toEqual([{ projectId: "p1", cli: "pty" }]);
   });
 });
