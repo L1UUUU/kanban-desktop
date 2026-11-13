@@ -1,12 +1,12 @@
 // 用途：日志系统整机验收 E2E（issue #56 / spec #52 验收 1/2/3/7 的 C 类证据）—— 读真实运行产出的 <userData>/logs/*.jsonl：
 // 四来源汇聚（main/worker/renderer + CLI stderr run-once）与到达顺序、worker 意外退出 vs 正常停机假阳性回归、E_SCHEMA 入站非法请求、
-// KANBAN_LOG_LEVEL 两态与 env 不回写 config、顶栏设置面板（#61 由两项浮层升级为 modal）日志区两项截图 + getLogPath 主文件 + openLogDir、轮转分片合并读。
+// KANBAN_LOG_LEVEL 两态与 env 不回写 config、顶栏设置面板（#61 由两项浮层升级为 modal）日志区两项截图 + getLogPath 主文件存在性校验、轮转分片合并读。
 // 全部 Fake 注入驱动（KANBAN_DISABLE_*；CLI stderr 经 run-once 以 where.exe 假 exe 触发，不真实调用 codex/claude 模型、不设 KANBAN_CODEX_MODEL/KANBAN_REAL_E2E）。
 // 多启动文件选取（N17）：按启动横幅 + <pid>（app.evaluate 取真主进程 pid，与文件名 pid 一致）选当前运行文件组，禁止跨启动拼接；
 // 分片按 <pid> 前缀合并全部 .1/.2 再按到达顺序读取（M9：分片属同次运行续写）。
 import { test, expect, _electron, type ElectronApplication, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { readRunEntries, runPrefixOf, type LogEntry } from "./log-run";
@@ -318,7 +318,7 @@ test("验收 3：KANBAN_LOG_LEVEL 两态 —— debug 生效（debug 条目落�
   }
 });
 
-test("验收 7：设置面板展开态截图（日志区两项）+ getLogPath 返回含横幅主文件 + openLogDir 定位主文件", async () => {
+test("验收 7：设置面板展开态截图（日志区两项）+ getLogPath 返回含横幅且真实存在的主文件", async () => {
   const { userData, repoDir, repoRoot } = makeFixture();
   try {
     const { app, win } = await launchApp(userData, repoDir);
@@ -339,18 +339,14 @@ test("验收 7：设置面板展开态截图（日志区两项）+ getLogPath �
     });
     expect(logPath).toBe(join(userData, "logs", `${runPrefixOf(readdirSync(join(userData, "logs")), pid)}.jsonl`));
     expect(/^[0-9]{8}-[0-9]{6}-\d+\.jsonl$/.test(logPath.split(/[\\/]/).pop() ?? "")).toBe(true);
+    // 主文件真实存在且首条为启动横幅（openLogDir 的 native 定位目标即此路径）
+    expect(existsSync(logPath)).toBe(true);
     const firstLine = readFileSync(logPath, "utf8").split("\n", 1)[0];
     expect((JSON.parse(firstLine) as LogEntry).message).toBe("启动横幅");
 
-    // openLogDir：invoke 成功（Main 侧 shell.showItemInFolder 传主文件，在资源管理器中定位/选中）
-    const opened = await win.evaluate(async () => {
-      const api = (window as unknown as { api?: { openLogDir: () => Promise<void> } }).api;
-      if (!api) throw new Error("window.api 不可用");
-      await api.openLogDir();
-      return true;
-    });
-    expect(opened).toBe(true);
-
+    // 不在此触发 openLogDir：Main 侧 shell.showItemInFolder 发起即返回，explorer 晚于本机删 userData 会弹
+    // 「位置不可用」系统框并留下无人值守窗口；按钮→openLogDir 接线由 SettingsModal/TopBar 密封测试覆盖，
+    // currentFilePath 指向主文件由 logger.test.ts 覆盖，此处只校验真实返回路径。
     await app.close();
   } finally {
     await rmBestEffort(userData);
