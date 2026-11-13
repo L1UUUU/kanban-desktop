@@ -93,9 +93,10 @@ test("切页不停止（§6.1）：A 流式中切 B 再切回，增量无缝、�
     await send(win, "第二轮：再确认一遍导出面");
     await expect(win.getByText("新会话 · Claude").nth(1)).toBeVisible({ timeout: 10_000 });
     // 切回 A（流式中）：B 继续在后台跑（切页不停止）
+    // .first()：A 两轮同文案（脚本固定），第二轮流式追平瞬间 DOM 有两份（完成版+▍流式版），取首份断言可见性（0 份=消息丢失仍失败）
     await win.getByText("新会话 · Claude").nth(0).click();
-    await expect(win.getByText("好的，我先跑一遍现有测试确认基线，然后开始拆分。")).toBeVisible({ timeout: 20_000 });
-    await expect(win.getByText("基线全绿。现在把 chat 与 session 两个命名空间拆成独立文件，并在 index 里保持原导出面不变。")).toBeVisible({ timeout: 20_000 });
+    await expect(win.getByText("好的，我先跑一遍现有测试确认基线，然后开始拆分。").first()).toBeVisible({ timeout: 20_000 });
+    await expect(win.getByText("基线全绿。现在把 chat 与 session 两个命名空间拆成独立文件，并在 index 里保持原导出面不变。").first()).toBeVisible({ timeout: 20_000 });
     // A 完整收尾后切到 B：B 也在后台完成了（不因切走而停止/丢失）
     await win.getByText("新会话 · Claude").nth(1).click();
     await expect(win.getByText("基线全绿。现在把 chat 与 session 两个命名空间拆成独立文件，并在 index 里保持原导出面不变。")).toBeVisible({ timeout: 20_000 });

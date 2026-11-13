@@ -20,11 +20,17 @@ async function launchApp(userData: string): Promise<{ app: ElectronApplication; 
   return { app, win };
 }
 
-/** 元素当前渲染宽/高（boundingBox 取整；面板尺寸断言统一入口） */
-async function boxSize(loc: ReturnType<Page["locator"]>): Promise<{ w: number; h: number }> {
-  const bb = await loc.boundingBox();
-  if (!bb) throw new Error("元素不可见，无法取 boundingBox");
-  return { w: Math.round(bb.width), h: Math.round(bb.height) };
+/** 轮询断言元素渲染宽/高（expect.poll 重试：负载下 rAF 提交与重启后挂载均有延迟，单次快照会偶发读到中间值；未挂载以 -1 表达继续等） */
+async function expectSize(loc: ReturnType<Page["locator"]>, axis: "w" | "h", expected: number): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const bb = await loc.boundingBox();
+        return bb ? Math.round(axis === "w" ? bb.width : bb.height) : -1;
+      },
+      { timeout: 10_000 },
+    )
+    .toBe(expected);
 }
 
 /** 拖拽把手：从当前中心按位移拖动（steps 细分保证 pointermove 序列；release=false 留在按下态驱动 Esc 用例） */
@@ -49,38 +55,38 @@ test("侧栏宽度：拖拽调整 → Esc 回滚 → 键盘步进/Home-End → �
     // 把手为 separator 角色；默认宽 240（既有布局锚点经变量驱动）
     await expect(handle).toHaveAttribute("role", "separator");
     await expect(win.getByRole("separator", { name: "拖拽调整侧栏宽度" })).toBeVisible();
-    await expect((await boxSize(aside)).w).toBe(240);
+    await expectSize(aside, "w", 240);
 
     // 拖拽中 Esc：回滚到拖拽前尺寸（指针捕获下 Esc 生效；预览 360 → 回滚 240）
     await dragBy(win, handle, 120, 0, false);
-    await expect((await boxSize(aside)).w).toBe(360); // 预览即时跟随
+    await expectSize(aside, "w", 360); // 预览即时跟随
     await win.keyboard.press("Escape");
-    await expect((await boxSize(aside)).w).toBe(240); // Esc 回滚
+    await expectSize(aside, "w", 240); // Esc 回滚
     await win.mouse.up();
 
     // 拖拽提交 +100 → 340
     await dragBy(win, handle, 100, 0);
-    await expect((await boxSize(aside)).w).toBe(340);
+    await expectSize(aside, "w", 340);
 
     // 键盘：ArrowRight +16 → 356；End → 480（宽视口下固定上限生效）；Home → 180
     await handle.click(); // 聚焦（pointerDown 即 focus，click 无位移不提交）
     await win.keyboard.press("ArrowRight");
-    await expect((await boxSize(aside)).w).toBe(356);
+    await expectSize(aside, "w", 356);
     await win.keyboard.press("End");
-    await expect((await boxSize(aside)).w).toBe(480);
+    await expectSize(aside, "w", 480);
     await win.keyboard.press("Home");
-    await expect((await boxSize(aside)).w).toBe(180);
+    await expectSize(aside, "w", 180);
 
     // 双击复位默认 240，再拖到 300 作为重启断言目标
     await handle.dblclick();
-    await expect((await boxSize(aside)).w).toBe(240);
+    await expectSize(aside, "w", 240);
     await dragBy(win, handle, 60, 0);
-    await expect((await boxSize(aside)).w).toBe(300);
+    await expectSize(aside, "w", 300);
     await app.close();
 
     // 重启（同一 userData）：localStorage 持久化恢复 300
     const second = await launchApp(userData);
-    await expect((await boxSize(second.win.locator("aside"))).w).toBe(300);
+    await expectSize(second.win.locator("aside"), "w", 300);
     await second.app.close();
   } finally {
     await rmBestEffort(userData);
@@ -97,24 +103,24 @@ test("输入框高度：草稿态拖拽增高 → 发首条转会话（共享偏
     // boot 演示草稿（Fake 链路）：默认高 46
     await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 15_000 });
     await expect(handle).toHaveAttribute("role", "separator");
-    await expect((await boxSize(box)).h).toBe(46);
+    await expectSize(box, "h", 46);
 
     // 上拖 54px → 100（上缘拖拽增高）
     await dragBy(win, handle, 0, -54);
-    await expect((await boxSize(box)).h).toBe(100);
+    await expectSize(box, "h", 100);
 
     // 发首条消息：草稿转会话，会话 Composer 读同一持久化偏好（两态联动）
     await box.fill("首条消息（驱动草稿转会话）");
     await win.getByRole("button", { name: "发送 ➤" }).click();
     await expect(win.getByTestId("session-row").first()).toBeVisible({ timeout: 15_000 });
-    await expect((await boxSize(box)).h).toBe(100);
+    await expectSize(box, "h", 100);
     await app.close();
 
     // 重启（同一 userData）：点击恢复的会话行 → Composer 高度从持久化偏好恢复
     const second = await launchApp(userData);
     await second.win.getByTestId("session-row").first().click();
     await expect(second.win.getByPlaceholder("输入消息，/ 开头触发 Skill…")).toBeVisible({ timeout: 15_000 });
-    await expect((await boxSize(second.win.getByPlaceholder("输入消息，/ 开头触发 Skill…"))).h).toBe(100);
+    await expectSize(second.win.getByPlaceholder("输入消息，/ 开头触发 Skill…"), "h", 100);
     await second.app.close();
   } finally {
     await rmBestEffort(userData);
