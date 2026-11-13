@@ -2102,58 +2102,51 @@ describe("启动自动选中（issue #86：回到当前项目最近会话，只�
 });
 
 describe("composer:listCommands 通道（#89：renderer 经 transport 调通道拿命令目录）", () => {
-  it("fake 环境：transport.invoke 走真实 Main 路由拿到 fake 固定命令集（含仅用户调用标记与参数提示形态）", async () => {
+  it("fake 环境：transport.invoke 走真实 Main 路由拿到空命令集（ADR 0004：fake 会话无命令源）", async () => {
     const adapter = new FakeAdapter({ clock: new VirtualClock() });
     const transport = makeTransport(adapter);
     const res = await transport.invoke({ channel: "composer:listCommands", cli: "fake", cwd: DEMO_CWD });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    expect(res.commands!.length).toBeGreaterThanOrEqual(2);
-    expect(res.commands!.every((c) => c.cli === "fake")).toBe(true);
-    expect(res.commands!.some((c) => c.userOnly)).toBe(true);
-    expect(res.commands!.some((c) => c.argsHint !== null)).toBe(true);
+    expect(res.commands).toEqual([]);
   });
 });
 
 describe("斜杠补全菜单（#90：草稿态/会话态输入框接菜单，命令数据走真实通道）", () => {
-  it("草稿态：输入 / 弹菜单（FakeAdapter 固定命令集经 Main 路由可见，应用组在前）；Enter 接受把命令引用写入草稿输入", async () => {
+  it("草稿态：输入 / 弹菜单为空态引导（ADR 0004 零内置 + fake 无命令源；不填充占位命令），Enter 不改输入", async () => {
     const t = mount();
     await t.flush();
     // 无项目无会话：boot 演示草稿（DraftPane 可见）
     expect(screen.getByTestId("draft-pane")).toBeTruthy();
     const box = screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…");
-    // 输入 /：预热 + Main CommandCatalog + FakeAdapter 固定集 → 菜单弹出
+    // 输入 /：预热 + Main CommandCatalog + FakeAdapter 空集 → 菜单弹空态引导文案
     fireEvent.change(box, { target: { value: "/", selectionStart: 1 } });
     await waitFor(() => expect(screen.getByTestId("slash-menu")).toBeTruthy());
-    const names = screen.getAllByTestId("slash-menu-item").map((el) => el.textContent ?? "");
-    expect(names.some((s) => s.includes("/fake-plan"))).toBe(true); // FakeAdapter 固定集可见
-    expect(names.some((s) => s.includes("/pty"))).toBe(true); // 内置应用命令入应用组
-    // 应用组在前：/pty（app）排在 /fake-*（cli）之前
-    expect(names.findIndex((s) => s.includes("/pty"))).toBeLessThan(names.findIndex((s) => s.includes("/fake-plan")));
-    // Enter 接受（初始高亮第 0 项 /kanban）：命令引用置入输入流（不发送，派发留 #92）
+    const menu = screen.getByTestId("slash-menu");
+    expect(menu.textContent).toContain("无可用命令"); // 空态引导文案（降级判据：未匹配按原样发送）
+    expect(screen.queryAllByTestId("slash-menu-item")).toEqual([]); // 无条目（零内置：无 /pty /kanban 占位）
+    // 空候选 Enter/ArrowDown 走默认行为：输入不被菜单消费
+    fireEvent.keyDown(box, { key: "ArrowDown" });
     fireEvent.keyDown(box, { key: "Enter" });
-    expect((box as HTMLTextAreaElement).value).toBe("/kanban ");
-    expect(screen.queryByTestId("slash-menu")).toBeNull(); // 接受后菜单关闭
-    // 草稿 store 同步受控值
-    const d = t.ctl().draft;
-    expect(d && d.kind === "structured" ? d.data.input : null).toBe("/kanban ");
+    expect((box as HTMLTextAreaElement).value).toBe("/");
   });
 
-  it("会话态：已建会话 composer 同样弹菜单（cli/cwd 键控换源）", async () => {
+  it("会话态：已建会话 composer 同样弹空态菜单（cli/cwd 键控换源，fake 源为空）", async () => {
     const t = mount();
     await t.flush();
     await createViaDraft(t.ctl, "fake", undefined, "首条消息（建立会话）");
     t.advance(); // 首轮演示脚本跑完（running 期输入框禁用）
     await t.flush();
-    // 会话态 composer（与草稿态同款输入框组件）：输入 / 弹菜单
+    // 会话态 composer（与草稿态同款输入框组件）：输入 / 弹空态菜单
     const box = screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…");
     fireEvent.change(box, { target: { value: "/", selectionStart: 1 } });
     await waitFor(() => expect(screen.getByTestId("slash-menu")).toBeTruthy());
-    expect(screen.getAllByTestId("slash-menu-item").some((el) => (el.textContent ?? "").includes("/fake-skill"))).toBe(true);
+    expect(screen.getByTestId("slash-menu").textContent).toContain("无可用命令");
+    expect(screen.queryAllByTestId("slash-menu-item")).toEqual([]);
   });
 });
 
-describe("斜杠派发闭环（#92：发送期派发判定 → 透传/展开/内置本地执行，全链走真实 Main 路由）", () => {
+describe("斜杠派发闭环（#92：发送期派发判定 → 透传/展开，全链走真实 Main 路由；ADR 0004 零内置）", () => {
   let tmpRoot = "";
 
   afterEach(() => {
@@ -2163,21 +2156,6 @@ describe("斜杠派发闭环（#92：发送期派发判定 → 透传/展开/内
       rmSync(tmpRoot, { recursive: true, force: true });
       tmpRoot = "";
     }
-  });
-
-  it("内置 /kanban（草稿态）：本地执行切视图 + 清空输入保留草稿，不经任何发送通道", async () => {
-    const views: string[] = [];
-    const t = mount(undefined, { onSetView: (v) => views.push(v) });
-    await t.flush();
-    await act(async () => {
-      send("/kanban");
-    });
-    await t.flush();
-    expect(views).toEqual(["kanban"]); // App 层 setView 单源出口被调用
-    const d = t.ctl().draft;
-    expect(d?.kind === "structured" ? d.data.input : null).toBe(""); // 输入已消费、草稿保留
-    expect(screen.getByTestId("draft-hint")).toBeTruthy();
-    expect(t.ctl().sessions.length).toBe(0); // 未创建会话（未发送）
   });
 
   it("fake 会话未匹配 /foo：原样发送（用户气泡=原文）+ turn 正常推进", async () => {

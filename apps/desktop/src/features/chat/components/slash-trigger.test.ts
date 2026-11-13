@@ -1,7 +1,6 @@
 // 用途：斜杠触发检测纯函数密封测试（issue #90 / spec #82 E 块）—— 首 token 触发 / 空 query / 边界字符 / 过滤分组 / 补全替换 / 高亮环移
 import { describe, expect, it } from "vitest";
 import {
-  APP_SLASH_COMMANDS,
   applySlashCompletion,
   detectSlashTrigger,
   filterSlashCommands,
@@ -10,7 +9,7 @@ import {
 } from "./slash-trigger";
 import type { CommandEntry } from "@kanban/ipc-schema";
 
-/** fake 固定命令集拷贝（驱动过滤/分组断言；与 FakeAdapter.FAKE_COMMANDS 同形不直引——纯函数模块不依赖 cli-host） */
+/** 测试用命令目录条目（驱动过滤断言；纯函数模块不依赖 cli-host——ADR 0004 后 fake 通道恒空集，条目仅为 fixture） */
 const FAKE_ENTRIES: CommandEntry[] = [
   { name: "fake-plan", description: "演示命令：请求一份轻量计划", argsHint: null, source: "native", cli: "fake", sourcePath: null, userOnly: false },
   { name: "fake-skill", description: "演示 Skill：模拟技能观察信号", argsHint: "$ARGUMENTS", source: "native", cli: "fake", sourcePath: null, userOnly: false },
@@ -51,12 +50,12 @@ describe("detectSlashTrigger（首 token 以 / 开头激活）", () => {
   });
 });
 
-describe("filterSlashCommands（前缀/模糊过滤 + 应用组在前）", () => {
-  const items = [...APP_SLASH_COMMANDS, ...FAKE_ENTRIES.map(toMenuCommand)];
+describe("filterSlashCommands（前缀/模糊过滤，单组名称序）", () => {
+  const items = FAKE_ENTRIES.map(toMenuCommand);
 
-  it("空 query：全部返回，应用命令组在前、CLI 命令组在后，组内按名称序", () => {
+  it("空 query：全部返回，按名称序（ADR 0004：菜单单组，无应用命令组）", () => {
     const got = filterSlashCommands(items, "");
-    expect(got.map((c) => c.name)).toEqual(["kanban", "pty", "fake-plan", "fake-skill", "fake-user-only"]);
+    expect(got.map((c) => c.name)).toEqual(["fake-plan", "fake-skill", "fake-user-only"]);
   });
 
   it("前缀命中：名称前缀优先于子串命中", () => {

@@ -4,23 +4,26 @@ import { AdapterError, FakeAdapter, type ListCommandsInput } from "@kanban/cli-h
 import { COMMAND_LIST_CACHE_TTL_MS, type CommandEntry } from "@kanban/ipc-schema";
 import { CommandCatalog } from "./command-catalog";
 
-/** 计数型 FakeAdapter 子类：记录 listCommands 调用（TTL 命中率断言依据） */
+/** 本地 fixture 命令条目（被测对象是 Catalog 缓存而非 FakeAdapter；ADR 0004 后 fake 通道恒空集，条目与通道内容解耦） */
+const FIXTURE: CommandEntry[] = [{ name: "probe", description: "探针", argsHint: null, source: "user", cli: "claude", sourcePath: "C:\\prompts\\probe.md", userOnly: false }];
+
+/** 计数型 FakeAdapter 子类：记录 listCommands 调用并回放 fixture（TTL 命中率断言依据） */
 class CountingAdapter extends FakeAdapter {
   listCommandsCalls = 0;
-  override async listCommands(input: ListCommandsInput): Promise<CommandEntry[]> {
+  override async listCommands(_input: ListCommandsInput): Promise<CommandEntry[]> {
     this.listCommandsCalls += 1;
-    return super.listCommands(input);
+    return FIXTURE.map((c) => ({ ...c }));
   }
 }
 
-/** 可切换失败的 FakeAdapter 子类（失败保持冷的断言依据） */
+/** 可切换失败的 FakeAdapter 子类（失败保持冷的断言依据；成功回放 fixture） */
 class FlakyAdapter extends FakeAdapter {
   failListCommands = true;
   listCommandsCalls = 0;
-  override async listCommands(input: ListCommandsInput): Promise<CommandEntry[]> {
+  override async listCommands(_input: ListCommandsInput): Promise<CommandEntry[]> {
     this.listCommandsCalls += 1;
     if (this.failListCommands) throw new AdapterError("E_SPAWN_NOT_FOUND", "注入失败");
-    return super.listCommands(input);
+    return FIXTURE.map((c) => ({ ...c }));
   }
 }
 

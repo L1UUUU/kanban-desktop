@@ -1,6 +1,5 @@
-// 用途：斜杠触发检测与菜单纯逻辑（issue #90 / spec #82 E 块）—— 首 token 触发/过滤分组/补全替换/高亮环移全部纯函数，与 React 和 IME 时序解耦（IME 合成冻结由调用方传标志驱动，见 use-slash-menu）
+// 用途：斜杠触发检测与菜单纯逻辑（issue #90 / spec #82 E 块；ADR 0004 零内置）—— 首 token 触发/过滤分组/补全替换/高亮环移全部纯函数，与 React 和 IME 时序解耦（IME 合成冻结由调用方传标志驱动，见 use-slash-menu）
 import type { CliKind, CommandEntry } from "@kanban/ipc-schema";
-import { APP_COMMAND_NAMES, type AppCommandName } from "../slash-dispatch";
 
 /** token 边界字符（空白一族；与 PI composer-trigger 的 WHITESPACE 集一致） */
 const WHITESPACE = new Set([" ", "\t", "\n", "\r"]);
@@ -17,7 +16,7 @@ export interface SlashTrigger {
 
 /**
  * 触发检测：首个 token 以 / 开头且光标位于 / 之后（含尾随边界位）才激活；
- * 后继 slash token 不触发（应用命令只在草稿开头引用一次）。
+ * 后继 slash token 不触发（命令只在草稿开头引用一次）。
  */
 export function detectSlashTrigger(value: string, cursor: number): SlashTrigger | null {
   if (cursor <= 0 || cursor > value.length) return null;
@@ -29,7 +28,7 @@ export function detectSlashTrigger(value: string, cursor: number): SlashTrigger 
   return { query: value.slice(1, cursor), tokenStart: 0, tokenEnd: end };
 }
 
-/** 菜单条目视图：分组=应用命令（内置 /pty /kanban，本地执行留 #92）在前、CLI 命令（列举通道）在后 */
+/** 菜单条目视图：内容源仅 CLI 命令目录（ADR 0004：第一方内置命令冻结为零，group 单值） */
 export interface MenuCommand {
   /** 命令名（不带 / 前缀；菜单展示与补全匹配键） */
   name: string;
@@ -38,33 +37,18 @@ export interface MenuCommand {
   argsHint: string | null;
   /** 仅用户调用标记（菜单可示；行为语义在派发层 #92 消费） */
   userOnly: boolean;
-  group: "app" | "cli";
-  /** CLI 命令的来源 CLI（应用命令无） */
+  group: "cli";
+  /** CLI 命令的来源 CLI */
   cli?: CliKind;
 }
-
-/** 内置应用命令展示元数据（按名键控：名称单源在 slash-dispatch.APP_COMMAND_NAMES，此处只补菜单展示字段；缺项为编译错，防两处漂移） */
-const APP_COMMAND_META: Record<AppCommandName, { description: string }> = {
-  pty: { description: "打开 PTY 终端" },
-  kanban: { description: "切换到看板视图" },
-};
-
-/** 内置应用命令（#90 只入菜单展示；本地执行接线在 #92：/pty 开终端草稿、/kanban 切看板视图；名称自 APP_COMMAND_NAMES 派生单源） */
-export const APP_SLASH_COMMANDS: MenuCommand[] = APP_COMMAND_NAMES.map((name) => ({
-  name,
-  description: APP_COMMAND_META[name].description,
-  argsHint: null,
-  userOnly: false,
-  group: "app",
-}));
 
 /** 通道列举条目 → 菜单条目（cli 组标记 + 透传展示字段） */
 export function toMenuCommand(entry: CommandEntry): MenuCommand {
   return { name: entry.name, description: entry.description, argsHint: entry.argsHint, userOnly: entry.userOnly, group: "cli", cli: entry.cli };
 }
 
-/** 分组顺序常量：应用命令组在前、CLI 命令组在后 */
-export const MENU_GROUP_ORDER: Record<MenuCommand["group"], number> = { app: 0, cli: 1 };
+/** 分组顺序常量（ADR 0004 后单组；保留键控 Record 使 group 再扩张时编译期同步） */
+export const MENU_GROUP_ORDER: Record<MenuCommand["group"], number> = { cli: 0 };
 
 /** 匹配得分（小者优）：0=名称前缀 < 1=名称子串 < 2=名称子序列（模糊） < 3=描述包含；不命中返回 null */
 function scoreCommand(cmd: MenuCommand, q: string): number | null {
@@ -86,7 +70,7 @@ function scoreCommand(cmd: MenuCommand, q: string): number | null {
   return null;
 }
 
-/** 过滤排序：空 query 全量；命中按（分组序，得分，名称）排序——组内前缀命中优先于模糊/描述命中 */
+/** 过滤排序：空 query 全量；命中按（分组序，得分，名称）排序——前缀命中优先于模糊/描述命中（ADR 0004 单组后分组序为常量） */
 export function filterSlashCommands(items: MenuCommand[], query: string): MenuCommand[] {
   const q = query.trim().toLowerCase();
   if (q === "") return [...items].sort((a, b) => MENU_GROUP_ORDER[a.group] - MENU_GROUP_ORDER[b.group] || a.name.localeCompare(b.name));

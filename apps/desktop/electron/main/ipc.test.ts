@@ -2007,20 +2007,12 @@ describe("models:ipc 通道（#76 spec #75：models:list 按 cli 经 adapter 分
 
 
 describe("composer:listCommands 通道（#89 斜杠命令列举）", () => {
-  it("fake 环境：renderer 经 kanban:ipc 通道拿到 fake 固定命令集（统一条目字段完整）", async () => {
+  it("fake 环境：renderer 经 kanban:ipc 通道拿到空命令集（ADR 0004：fake 会话无命令源，菜单空态）", async () => {
     const deps = makeDeps(new FakeAdapter({ clock: new VirtualClock() }));
     const res = await handleIpc(deps, { channel: "composer:listCommands", cli: "fake", cwd: "C:\\demo" });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    expect(res.commands!.length).toBeGreaterThanOrEqual(2);
-    for (const c of res.commands!) {
-      expect(c.cli).toBe("fake");
-      expect(c.name.length).toBeGreaterThan(0);
-      expect(["user", "project", "native"]).toContain(c.source);
-    }
-    // 固定集形态：名称不含斜杠、覆盖 userOnly/argsHint 两形态（菜单演示前提）
-    expect(res.commands!.every((c) => !c.name.startsWith("/"))).toBe(true);
-    expect(res.commands!.some((c) => c.userOnly)).toBe(true);
+    expect(res.commands).toEqual([]);
   });
 
   it("短 TTL 缓存：注入 commandCatalog 时重复调用不重复扫描（适配器只被调用一次）", async () => {
