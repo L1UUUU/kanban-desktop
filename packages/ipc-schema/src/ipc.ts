@@ -107,6 +107,8 @@ export const ipcRequestSchema = z.discriminatedUnion("channel", [
   z.object({ channel: z.literal("session:archivedList") }),
   /** #62 删除（spec #57 D 节）：先解除看板关联（落 unlink 事件）→ 终止进程 → 删记录；幂等（记录不存在返回成功）；不删 CLI 原生历史 */
   z.object({ channel: z.literal("session:delete"), sessionId: sessionIdSchema }),
+  /** #94 / ADR 0003 手动重命名：置 title_source=manual（终态权威，此后自动派生/摘要不再覆盖）；PTY 行不经此通道 */
+  z.object({ channel: z.literal("session:rename"), sessionId: sessionIdSchema, title: z.string().min(1) }),
   z.object({ channel: z.literal("project:list") }),
   /** 注册项目：Main 弹原生目录选择对话框，路径归一化与去重在 Main 侧完成 */
   z.object({ channel: z.literal("project:register") }),

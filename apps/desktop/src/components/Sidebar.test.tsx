@@ -40,6 +40,7 @@ function mount(props: Partial<Parameters<typeof Sidebar>[0]> = {}) {
   const onKillTerminal = vi.fn();
   const onArchiveSession = vi.fn();
   const onDeleteSession = vi.fn();
+  const onRenameSession = vi.fn(() => Promise.resolve(null));
   render(
     <Sidebar
       projects={[]}
@@ -54,10 +55,11 @@ function mount(props: Partial<Parameters<typeof Sidebar>[0]> = {}) {
       onKillTerminal={onKillTerminal}
       onArchiveSession={onArchiveSession}
       onDeleteSession={onDeleteSession}
+      onRenameSession={onRenameSession}
       {...props}
     />,
   );
-  return { onSelectProject, onRegisterProject, onCreateSession, onCreatePtySession, onKillTerminal, onArchiveSession, onDeleteSession };
+  return { onSelectProject, onRegisterProject, onCreateSession, onCreatePtySession, onKillTerminal, onArchiveSession, onDeleteSession, onRenameSession };
 }
 
 describe("侧栏项目区（原型一致项 2）", () => {
@@ -326,3 +328,81 @@ describe("「＋」菜单未装 CLI 灰置（#80 spec #75：与详情面板菜�
 });
 
 afterEach(cleanup);
+
+describe("侧栏会话行 hover 铅笔行内重命名（#94 / ADR 0003：手动主权，#84 同款交互）", () => {
+  function mountRenamable(onRenameSession = vi.fn((): Promise<string | null> => Promise.resolve(null))) {
+    mount({
+      projects: [P1],
+      currentProjectId: "p-1",
+      sessions: [
+        makeSession(),
+        makeSession({ sessionId: "tty-1", cli: "pty", title: "终端 · pwsh", status: "idle", projectId: "p-1" }),
+      ],
+      onRenameSession,
+    });
+    return { onRenameSession };
+  }
+
+  it("铅笔仅结构化行提供：PTY 行无重命名入口（豁免，行为零变化）", () => {
+    mountRenamable();
+    expect(screen.getAllByTitle("重命名会话")).toHaveLength(1); // 只有结构化行
+  });
+
+  it("点击铅笔进入行内编辑：input 初值=当前标题；Enter 提交触发 onRenameSession 并退出编辑", async () => {
+    const h = mountRenamable();
+    fireEvent.click(screen.getByTitle("重命名会话"));
+    const input = screen.getByTestId("session-rename-input") as HTMLInputElement;
+    expect(input.value).toBe("调研 Vite 配置");
+    fireEvent.change(input, { target: { value: "我起的名字" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(h.onRenameSession).toHaveBeenCalledWith("s-1", "我起的名字");
+    await waitFor(() => expect(screen.queryByTestId("session-rename-input")).toBeNull());
+  });
+
+  it("Esc 还原：放弃草稿退出，不触发提交", () => {
+    const h = mountRenamable();
+    fireEvent.click(screen.getByTitle("重命名会话"));
+    const input = screen.getByTestId("session-rename-input");
+    fireEvent.change(input, { target: { value: "改了又后悔" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(h.onRenameSession).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("session-rename-input")).toBeNull();
+  });
+
+  it("blur 提交；Enter 后残余 blur 不重复提交（一次编辑会话只提交一次）", async () => {
+    const h = mountRenamable();
+    fireEvent.click(screen.getByTitle("重命名会话"));
+    const input = screen.getByTestId("session-rename-input");
+    fireEvent.change(input, { target: { value: "A" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.blur(input); // Enter 提交后 input 卸载前的残余 blur
+    expect(h.onRenameSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("空白或未变：直接退出编辑，不提交", () => {
+    const h = mountRenamable();
+    fireEvent.click(screen.getByTitle("重命名会话"));
+    let input = screen.getByTestId("session-rename-input");
+    fireEvent.change(input, { target: { value: "   " } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(h.onRenameSession).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("session-rename-input")).toBeNull();
+  });
+
+  it("提交失败：行内错误提示（不再静默）；再次进入编辑时清除", async () => {
+    mountRenamable(vi.fn(() => Promise.resolve("重命名失败：会话不存在")));
+    fireEvent.click(screen.getByTitle("重命名会话"));
+    const input = screen.getByTestId("session-rename-input");
+    fireEvent.change(input, { target: { value: "新名字" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(screen.getByTestId("session-rename-error").textContent).toBe("重命名失败：会话不存在"));
+    // 再次进入编辑：错误清除
+    fireEvent.click(screen.getByTitle("重命名会话"));
+    expect(screen.queryByTestId("session-rename-error")).toBeNull();
+  });
+
+  it("未注入 onRenameSession：不渲染铅笔（接口面可选）", () => {
+    mount({ projects: [P1], currentProjectId: "p-1", sessions: [makeSession()], activeId: null, onRenameSession: undefined });
+    expect(screen.queryByTitle("重命名会话")).toBeNull();
+  });
+});

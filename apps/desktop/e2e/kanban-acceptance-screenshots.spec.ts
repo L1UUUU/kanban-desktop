@@ -82,8 +82,8 @@ test("原型一致项截图集（spec #15 H 节 7 条 + S2-18 空板）：入口
     await win.getByRole("button", { name: "Claude", exact: true }).click();
     // #59 草稿：发首条消息才创建会话（行出现；banner 在会话视图）
     await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
-    await send(win, "首条消息（建立会话）");
-    await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
+    await send(win, "看板联动的会话");
+    await expect(win.locator("aside").getByText("看板联动的会话")).toBeVisible({ timeout: 10_000 }); // #94：标题=首条派生
     const banner = win.getByTestId("skill-conflict-banner");
     await expect(banner).toBeVisible({ timeout: 10_000 });
     await expect(banner).toContainText("design-feature");
@@ -143,9 +143,9 @@ test("原型一致项截图集（spec #15 H 节 7 条 + S2-18 空板）：入口
     // #59 草稿：卡片入口只开草稿（切到聊天视图）——发首条消息才创建（requirementId 随之落自动关联），再回看板
     await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
     await send(win, "首条消息（建立会话）");
-    await expect(win.locator("aside").getByText("新会话 · OpenCode").first()).toBeVisible({ timeout: 10_000 });
+    await expect(win.locator("aside").getByText("首条消息（建立会话）").first()).toBeVisible({ timeout: 10_000 });
     await win.getByTestId("kanban-entry").click(); // 回看板（详情面板保持）
-    const openRow = win.getByTestId("detail-panel").locator('[data-testid="related-session"]', { hasText: "新会话 · OpenCode" });
+    const openRow = win.getByTestId("detail-panel").locator('[data-testid="related-session"]', { hasText: "首条消息（建立会话）" });
     await expect(openRow).toBeVisible({ timeout: 15_000 });
     await expect(implCol.getByText("◍ 2 会话")).toBeVisible({ timeout: 10_000 });
 
@@ -169,8 +169,8 @@ test("原型一致项截图集（spec #15 H 节 7 条 + S2-18 空板）：入口
 
     // 一致项 6：侧栏会话行需求徽标（REQ-id）—— 两会话（Claude/OpenCode）均挂 REQ-001
     await win.getByTestId("kanban-entry").click();
-    const claudeRow = win.locator("aside").locator('[data-testid="session-row"]', { hasText: "新会话 · Claude" });
-    const openSideRow = win.locator("aside").locator('[data-testid="session-row"]', { hasText: "新会话 · OpenCode" });
+    const claudeRow = win.locator("aside").locator('[data-testid="session-row"]', { hasText: "看板联动的会话" });
+    const openSideRow = win.locator("aside").locator('[data-testid="session-row"]', { hasText: "首条消息（建立会话）" });
     await expect(claudeRow.getByTestId("req-badge")).toHaveText("REQ-001");
     await expect(openSideRow.getByTestId("req-badge")).toHaveText("REQ-001");
     await shot(win, SHOT_DIR, "09-sidebar-req-badge.png");

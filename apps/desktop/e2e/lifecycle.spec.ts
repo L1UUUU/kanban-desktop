@@ -46,7 +46,7 @@ async function launchApp(userData: string, repoDir?: string): Promise<{ app: Ele
   return { app, win };
 }
 
-/** 注册项目 + 建首个 Claude（Fake）会话 */
+/** 注册项目 + 建首个 Claude（Fake）会话（#94：会话行标题=首条消息派生） */
 async function registerAndCreate(win: Page): Promise<void> {
   await win.getByRole("button", { name: "＋ 注册", exact: true }).click();
   await expect(win.locator("aside").getByText(PROJECT_NAME, { exact: true })).toBeVisible({ timeout: 15_000 });
@@ -56,7 +56,7 @@ async function registerAndCreate(win: Page): Promise<void> {
   // #59 草稿：点 CLI 只开草稿，发出首条消息才创建会话（侧栏行出现）
   await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
   await send(win, "首条消息（建立会话）");
-  await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
+  await expect(win.locator("aside").getByText("首条消息（建立会话）")).toBeVisible({ timeout: 10_000 }); // #94：标题=首条派生
 }
 
 /** 在 composer 输入并发送 */
@@ -91,18 +91,18 @@ test("切页不停止（§6.1）：A 流式中切 B 再切回，增量无缝、�
     // #59 草稿：第二会话以「第二轮：再确认一遍导出面」为首条（随创建原子发出，行出现）
     await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
     await send(win, "第二轮：再确认一遍导出面");
-    await expect(win.getByText("新会话 · Claude").nth(1)).toBeVisible({ timeout: 10_000 });
+    await expect(win.locator("aside").getByText("第二轮：再确认一遍导出面")).toBeVisible({ timeout: 10_000 }); // B 行标题=其首条派生（#94）
     // 切回 A（流式中）：B 继续在后台跑（切页不停止）
     // .first()：A 两轮同文案（脚本固定），第二轮流式追平瞬间 DOM 有两份（完成版+▍流式版），取首份断言可见性（0 份=消息丢失仍失败）
-    await win.getByText("新会话 · Claude").nth(0).click();
+    await win.locator("aside").getByText("首条消息（建立会话）").click(); // 切回 A（行标题=首条派生，#94）
     await expect(win.getByText("好的，我先跑一遍现有测试确认基线，然后开始拆分。").first()).toBeVisible({ timeout: 20_000 });
     await expect(win.getByText("基线全绿。现在把 chat 与 session 两个命名空间拆成独立文件，并在 index 里保持原导出面不变。").first()).toBeVisible({ timeout: 20_000 });
     // A 完整收尾后切到 B：B 也在后台完成了（不因切走而停止/丢失）
-    await win.getByText("新会话 · Claude").nth(1).click();
+    await win.locator("aside").getByText("第二轮：再确认一遍导出面").click(); // 切到 B
     await expect(win.getByText("基线全绿。现在把 chat 与 session 两个命名空间拆成独立文件，并在 index 里保持原导出面不变。")).toBeVisible({ timeout: 20_000 });
     // 回切增量无缝：A 的首段回复恰出现两次——A 跑过两轮（#59 草稿首条消息 + 拆类型各一轮，同文案各一份）；
     // 若流式重复 delta 会多出第三份（回归断言语义：每轮恰一份）
-    await win.getByText("新会话 · Claude").nth(0).click();
+    await win.locator("aside").getByText("首条消息（建立会话）").click(); // 回切 A
     await expect(win.getByText("好的，我先跑一遍现有测试确认基线，然后开始拆分。")).toHaveCount(2);
     await expect(win.getByText("空闲").first()).toBeVisible({ timeout: 20_000 });
 
@@ -166,13 +166,13 @@ test("重开恢复（§6.1）：项目/会话恢复 + 断开会话「读取原�
     // 重启（同一 userData）：项目与会话恢复（断开态），Main 侧已对结构化会话统一收养
     const second = await launchApp(userData);
     await expect(second.win.locator("aside").getByText(PROJECT_NAME, { exact: true })).toBeVisible({ timeout: 15_000 });
-    await expect(second.win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 15_000 });
+    await expect(second.win.locator("aside").getByText("首条消息（建立会话）")).toBeVisible({ timeout: 15_000 }); // 重启行标题=DB 派生值（#94）
     await expect(second.win.getByText("已断开").first()).toBeVisible();
     // 点会话 → 顶部恢复引导条（#42：会话名 + 缓存不替代原生历史 + 恢复入口；底部弱入口已移除）
-    await second.win.getByText("新会话 · Claude").first().click();
+    await second.win.locator("aside").getByText("首条消息（建立会话）").click();
     const resumeBanner = second.win.getByTestId("resume-banner");
     await expect(resumeBanner).toBeVisible();
-    await expect(resumeBanner).toContainText("新会话 · Claude");
+    await expect(resumeBanner).toContainText("首条消息（建立会话）");
     await expect(resumeBanner).toContainText("缓存消息不替代原生历史");
     // 恢复：readHistory → resume → 空闲 → banner 收敛消失
     await second.win.getByRole("button", { name: "读取原生历史并恢复" }).click();
@@ -200,17 +200,17 @@ test("冲突提示条（spec I-4）：主仓库两会话并行运行出现（列
     await win.getByRole("button", { name: "Claude", exact: true }).click();
     await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
     await send(win, "首条消息（建立会话）");
-    await expect(win.getByText("新会话 · Claude").nth(1)).toBeVisible({ timeout: 10_000 });
+    await expect(win.locator("aside").getByText("首条消息（建立会话）").nth(1)).toBeVisible({ timeout: 10_000 }); // 两行同首条派生（#94）
     // #59 迁移补拍：两会话的首条 turn 几乎同时收尾（A 等发送键恢复期间 B 已空闲），无法构成并行——
     // 等 B 空闲后向 B（当前激活）再发一轮「拆类型」，随后立即切 A 发送，两会话并行窗口由 Fake turn ~4s 保证
     await expect(win.locator("aside [data-testid=\"session-row\"]").nth(1)).toContainText("空闲", { timeout: 15_000 });
     await send(win, "拆类型");
-    await win.getByText("新会话 · Claude").nth(0).click();
+    await win.locator("aside").getByText("首条消息（建立会话）").nth(0).click(); // 切 A（同首条两行取首行）
     await send(win, "拆类型");
     const banner = win.getByTestId("conflict-banner");
     await expect(banner).toBeVisible({ timeout: 15_000 });
     await expect(banner).toContainText("主仓库并行会话（2 个）");
-    await expect(banner).toContainText("新会话 · Claude、新会话 · Claude");
+    await expect(banner).toContainText("首条消息（建立会话）、首条消息（建立会话）"); // 同首条派生同文（#94）
     // 仅提示不阻止：composer 仍可输入
     await expect(win.getByPlaceholder("输入消息，/ 开头触发 Skill…")).toBeEnabled();
 

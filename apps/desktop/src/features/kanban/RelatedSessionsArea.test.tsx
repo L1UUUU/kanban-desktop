@@ -250,7 +250,7 @@ describe("详情面板关联区（#20；原型一致项 4 关联区）", () => {
     await act(async () => {
       await createViaDraft(t.ctl, "claude", { projectId: await currentProjectId() }, "/design-feature verified");
     });
-    await screen.findByText("新会话 · Claude");
+    await waitFor(() => expect(sidebarRow("/design-feature verified")).toBeTruthy()); // #94：标题=首条派生
     t.advance();
   }
 
@@ -268,7 +268,7 @@ describe("详情面板关联区（#20；原型一致项 4 关联区）", () => {
     await act(async () => {
       await createViaDraft(t.ctl, "opencode", { projectId });
     });
-    await screen.findByText("新会话 · OpenCode");
+    await waitFor(() => expect(sidebarRow("默认演示")).toBeTruthy()); // #94：标题=首条派生
     const s = t.ctl().sessions.find((x) => x.cli === "opencode");
     if (!s) throw new Error("OpenCode 会话未登记");
     return s.sessionId;
@@ -305,7 +305,7 @@ describe("详情面板关联区（#20；原型一致项 4 关联区）", () => {
 
     // 关联行：CLI 色点（claude）+ 标题 + 状态徽标（空闲）+ 跳转 + 解除
     const row = screen.getByTestId("related-session");
-    expect(row.textContent).toContain("新会话 · Claude");
+    expect(row.textContent).toContain("/design-feature verified"); // #94：标题=首条派生
     expect(row.querySelector(".bg-claude")).toBeTruthy();
     expect(within(row).getByText("空闲")).toBeTruthy();
     expect(within(row).getByTestId("related-jump")).toBeTruthy();
@@ -323,7 +323,7 @@ describe("详情面板关联区（#20；原型一致项 4 关联区）", () => {
     await bootWithLinkedCard();
     await openLinkedCardPanel();
     await waitFor(() => expect(within(col("Design")).getByText("◍ 1 会话")).toBeTruthy());
-    expect(within(sidebarRow("新会话 · Claude")).getByTestId("req-badge").textContent).toBe("REQ-001");
+    expect(within(sidebarRow("/design-feature verified")).getByTestId("req-badge").textContent).toBe("REQ-001");
 
     // 解除 → 卡片会话数即时更新 + 阶段保持（卡片仍在 Design 列）
     fireEvent.click(within(screen.getByTestId("related-session")).getByTestId("related-unlink"));
@@ -333,7 +333,7 @@ describe("详情面板关联区（#20；原型一致项 4 关联区）", () => {
 
     // 面板列表清空 + 侧栏徽标消失
     await waitFor(() => expect(screen.getByTestId("detail-sessions").textContent).toContain("暂无关联会话"));
-    await waitFor(() => expect(within(sidebarRow("新会话 · Claude")).queryByTestId("req-badge")).toBeNull());
+    await waitFor(() => expect(within(sidebarRow("/design-feature verified")).queryByTestId("req-badge")).toBeNull());
   });
 
   it("关联已有：仅列当前项目未关联会话（含 PTY；排除已关联与无项目）；选择即关联——面板行/会话数/侧栏徽标实时出现", async () => {
@@ -345,19 +345,19 @@ describe("详情面板关联区（#20；原型一致项 4 关联区）", () => {
     // 候选过滤：同项目未关联（OpenCode + PTY）入选；已关联本卡的 Claude 与无项目演示会话排除
     const select = screen.getByTestId("link-existing-select") as HTMLSelectElement;
     const options = Array.from(select.querySelectorAll("option")).map((o) => o.textContent ?? "");
-    expect(options.some((txt) => txt.includes("新会话 · OpenCode"))).toBe(true);
+    expect(options.some((txt) => txt.includes("默认演示"))).toBe(true); // OpenCode 候选行（标题=首条派生，#94）
     expect(options.some((txt) => txt.includes("终端 · pwsh"))).toBe(true);
-    expect(options.some((txt) => txt.includes("新会话 · Claude"))).toBe(false);
+    expect(options.some((txt) => txt.includes("/design-feature verified"))).toBe(false);
     expect(options.some((txt) => txt.includes("演示会话"))).toBe(false);
 
     // 选择 OpenCode 会话 → 关联成功：会话数 1→2、面板出现第二行、侧栏徽标出现
     fireEvent.change(select, { target: { value: openId } });
     await waitFor(() => expect(within(col("Design")).getByText("◍ 2 会话")).toBeTruthy());
     await waitFor(() => expect(screen.getAllByTestId("related-session").length).toBe(2));
-    await waitFor(() => expect(within(sidebarRow("新会话 · OpenCode")).getByTestId("req-badge").textContent).toBe("REQ-001"));
+    await waitFor(() => expect(within(sidebarRow("默认演示")).getByTestId("req-badge").textContent).toBe("REQ-001"));
     // 已关联会话从候选中消失（再列会被拒绝，列表应只剩 PTY）
     const optionsAfter = Array.from(select.querySelectorAll("option")).map((o) => o.textContent ?? "");
-    expect(optionsAfter.some((txt) => txt.includes("新会话 · OpenCode"))).toBe(false);
+    expect(optionsAfter.some((txt) => txt.includes("默认演示"))).toBe(false);
     expect(optionsAfter.some((txt) => txt.includes("终端 · pwsh"))).toBe(true);
   });
 
@@ -399,12 +399,12 @@ describe("详情面板关联区（#20；原型一致项 4 关联区）", () => {
     await act(async () => {
       send("从卡片来的首条");
     });
-    await screen.findAllByText("新会话 · OpenCode"); // 侧栏行（同名多处，易踩坑 3）
+    await screen.findAllByText("从卡片来的首条"); // 侧栏行与气泡同文（#94 标题=首条派生）
     // 切回看板验证：关联列表 + 会话数 + 徽标（requirementId 随首条消息落到新会话）
     enterKanban();
     await waitFor(() => expect(within(col("Design")).getByText("◍ 2 会话")).toBeTruthy());
     await waitFor(() => expect(screen.getAllByTestId("related-session").length).toBe(2));
-    await waitFor(() => expect(within(sidebarRow("新会话 · OpenCode")).getByTestId("req-badge").textContent).toBe("REQ-001"));
+    await waitFor(() => expect(within(sidebarRow("从卡片来的首条")).getByTestId("req-badge").textContent).toBe("REQ-001"));
 
     // PTY 终端：草稿首输入触发创建即关联（terminal:create+requirementId 随首输入落）；
     // #60：点菜单项自动切回聊天视图显示草稿 → 键入后回看板断言
@@ -422,16 +422,16 @@ describe("详情面板关联区（#20；原型一致项 4 关联区）", () => {
     await openLinkedCardPanel();
 
     // 方向 A：面板 Claude 行「跳转」→ 切回聊天视图 + 选中 Claude（OpenCode 让位）
-    const claudeRow = screen.getAllByTestId("related-session").find((r) => r.textContent?.includes("新会话 · Claude"));
+    const claudeRow = screen.getAllByTestId("related-session").find((r) => r.textContent?.includes("/design-feature verified"));
     if (!claudeRow) throw new Error("Claude 关联行未出现");
     fireEvent.click(within(claudeRow).getByTestId("related-jump"));
     expect(screen.queryByTestId("kanban-board")).toBeNull();
     expect(screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…")).toBeTruthy();
-    await waitFor(() => expect(sidebarRow("新会话 · Claude").getAttribute("data-active")).toBe("true"));
-    expect(sidebarRow("新会话 · OpenCode").getAttribute("data-active")).toBe("false");
+    await waitFor(() => expect(sidebarRow("/design-feature verified").getAttribute("data-active")).toBe("true"));
+    expect(sidebarRow("默认演示").getAttribute("data-active")).toBe("false");
 
     // 方向 B：侧栏 Claude 行 REQ 徽标点击 → 进入看板 + 选中该需求（详情面板打开）
-    fireEvent.click(within(sidebarRow("新会话 · Claude")).getByTestId("req-badge"));
+    fireEvent.click(within(sidebarRow("/design-feature verified")).getByTestId("req-badge"));
     expect(screen.getByTestId("kanban-board")).toBeTruthy();
     expect(screen.getByTestId("detail-panel")).toBeTruthy();
     expect((screen.getByTestId("detail-title-input") as HTMLInputElement).value).toBe("待命名需求");

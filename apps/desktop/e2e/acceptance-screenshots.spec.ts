@@ -65,7 +65,7 @@ async function createSession(win: Page, cli: string, nth = 0): Promise<void> {
   await win.getByRole("button", { name: cli, exact: true }).click();
   await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
   await send(win, "首条消息（建立会话）");
-  await expect(win.getByText("新会话 · Claude").nth(nth)).toBeVisible({ timeout: 10_000 });
+  await expect(win.locator("aside").getByText("首条消息（建立会话）").nth(nth)).toBeVisible({ timeout: 10_000 }); // #94：标题=首条派生
 }
 
 test("原型一致项截图集：布局/新建菜单/聊天区三卡/composer/冲突条/取消/PTY", async () => {
@@ -93,7 +93,7 @@ test("原型一致项截图集：布局/新建菜单/聊天区三卡/composer/�
     // #59 草稿：发首条消息才创建会话（行出现）
     await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
     await send(win, "首条消息（建立会话）");
-    await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
+    await expect(win.locator("aside").getByText("首条消息（建立会话）")).toBeVisible({ timeout: 10_000 }); // #94：标题=首条派生
 
     // 一致项 1 完整形态截图（已注册+会话行+空聊天区）
     await shot(win, SHOT_DIR, "03-layout-three-panes.png");
@@ -136,7 +136,7 @@ test("原型一致项截图集：布局/新建菜单/聊天区三卡/composer/�
     await createSession(win, "Claude", 1);
     await send(win, "拆类型");
     await expect(win.getByRole("button", { name: "⏹ 停止输出" })).toBeVisible({ timeout: 10_000 });
-    await win.getByText("新会话 · Claude").nth(0).click();
+    await win.locator("aside").getByText("首条消息（建立会话）").nth(0).click(); // 切回 A（两行同首条派生，#94）
     await send(win, "拆类型");
     const banner = win.getByTestId("conflict-banner");
     await expect(banner).toBeVisible({ timeout: 15_000 });
@@ -196,7 +196,7 @@ test("徽标与断开恢复截图：主仓库绿/worktree 蓝 + 重开断开会�
     // #59 草稿：发首条消息才创建会话（行出现）
     await expect(second.win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
     await send(second.win, "首条消息（建立会话）");
-    await expect(second.win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
+    await expect(second.win.locator("aside").getByText("首条消息（建立会话）")).toBeVisible({ timeout: 10_000 });
     // 一致项 3（会话行徽标）：CLI 色点+标题+目录身份徽标+状态徽标；侧栏按当前项目过滤，两形态各截一张
     await expect(second.win.getByText(/worktree: kb-shot-wt/).first()).toBeVisible({ timeout: 10_000 });
     await shot(second.win, SHOT_DIR, "06-session-badges-worktree.png");
@@ -208,10 +208,10 @@ test("徽标与断开恢复截图：主仓库绿/worktree 蓝 + 重开断开会�
     // 第三段：重开（同一 userData）→ 断开会话顶部恢复引导条（#42）→ 恢复后可续聊
     const third = await launchApp(userData);
     await expect(third.win.getByText("已断开").first()).toBeVisible({ timeout: 15_000 });
-    await third.win.getByText("新会话 · Claude").first().click();
+    await third.win.locator("aside").getByText("首条消息（建立会话）").click();
     const resumeBanner = third.win.getByTestId("resume-banner");
     await expect(resumeBanner).toBeVisible();
-    await expect(resumeBanner).toContainText("新会话 · Claude");
+    await expect(resumeBanner).toContainText("首条消息（建立会话）");
     await expect(resumeBanner).toContainText("缓存消息不替代原生历史");
     // 一致项 5（断开会话恢复入口，#42 顶部条形态）截图
     await shot(third.win, SHOT_DIR, "07-disconnected-recovery.png");

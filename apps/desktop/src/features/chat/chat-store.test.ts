@@ -444,3 +444,14 @@ describe("removeSession（#58）", () => {
     expect(store.getSnapshot().sessions).toHaveLength(1);
   });
 });
+
+describe("chat-store updateSession 扩 title（#94 / ADR 0003：派生/重命名标题的本地刷新出口）", () => {
+  it("patch 携带 title 即更新会话行标题；未知 id no-op", () => {
+    const store = new ChatStore();
+    store.registerSession({ sessionId: "s-1", cli: "claude", title: "默认演示", permMode: "auto" });
+    store.updateSession("s-1", { title: "我起的名字" });
+    expect(store.getSession("s-1")?.title).toBe("我起的名字");
+    store.updateSession("ghost", { title: "x" }); // 未知 id：不抛不改
+    expect(store.getSnapshot().sessions).toHaveLength(1);
+  });
+});

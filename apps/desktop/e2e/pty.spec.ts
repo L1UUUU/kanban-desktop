@@ -82,7 +82,7 @@ test("PTY 终端：草稿 → 首输入创建 → 回显 → 切结构化会话�
     await expect(first.win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
     await first.win.getByPlaceholder("输入消息，/ 开头触发 Skill…").fill("首条消息（建立会话）");
     await first.win.getByRole("button", { name: "发送 ➤" }).click();
-    await expect(first.win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
+    await expect(first.win.locator("aside").getByText("首条消息（建立会话）")).toBeVisible({ timeout: 10_000 }); // #94：标题=首条派生
     await expect(first.win.getByPlaceholder("输入消息，/ 开头触发 Skill…")).toBeVisible();
     await expect(first.win.locator(".xterm")).toHaveCount(0);
 

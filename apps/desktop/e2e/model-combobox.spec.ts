@@ -112,7 +112,7 @@ test("就绪：默认自动选中（角标+id 副行）→ 过滤命中/零命�
     await expect(combo).toHaveValue("Fake 轻量模型");
     await expect(listbox).toBeHidden();
     await win.getByRole("button", { name: "发送 ➤" }).click();
-    await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
+    await expect(win.locator("aside").getByText("首条消息（建立会话）")).toBeVisible({ timeout: 10_000 }); // #94：标题=首条派生
     // 已建会话 composer 不自动改选：chip 保持切换后的模型
     await expect(win.getByRole("combobox")).toHaveValue("Fake 轻量模型");
 
@@ -145,7 +145,7 @@ test("默认选中真实下发（所见即所发）：创建失败卡原文携�
     await win.getByRole("listbox", { name: "模型列表" }).getByRole("option", { name: /Fake 轻量模型/ }).click();
     await expect(combo).toHaveValue("Fake 轻量模型");
     await card.getByRole("button", { name: "重试发送" }).click();
-    await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
+    await expect(win.locator("aside").getByText("首条消息（建立会话）")).toBeVisible({ timeout: 10_000 }); // #94：标题=首条派生
     await expect(win.getByRole("combobox")).toHaveValue("Fake 轻量模型");
 
     await app.close();
@@ -175,7 +175,7 @@ test("加载中：列表未就绪阻塞首条发送（输入可编辑、发送�
     await expect(combo).toHaveValue("Fake 标准模型", { timeout: 15_000 });
     await expect(win.getByRole("button", { name: "发送 ➤" })).toBeEnabled();
     await send(win, "首条消息（建立会话）");
-    await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
+    await expect(win.locator("aside").getByText("首条消息（建立会话）")).toBeVisible({ timeout: 10_000 }); // #94：标题=首条派生
 
     await app.close();
   } finally {
@@ -206,7 +206,7 @@ test("拉取失败：原因行展示 + 手输列表外 id 兜底发送（列表�
     await expect(combo).toHaveValue("my-custom-model"); // 不在列表：展示原始 id
     await shot(win, SHOT_DIR, "04-combobox-error-manual.png");
     await send(win, "首条消息（建立会话）");
-    await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
+    await expect(win.locator("aside").getByText("首条消息（建立会话）")).toBeVisible({ timeout: 10_000 }); // #94：标题=首条派生
     // 已建会话 chip 沿用手输 id（列表外原始展示）
     await expect(win.getByRole("combobox")).toHaveValue("my-custom-model");
 

@@ -26,12 +26,17 @@ function snapshotCommands(env: SlashDispatchEnv, cli: CliKind, cwd: string | nul
   return st.status === "ready" ? st.commands : null;
 }
 
-/** 会话内发送并回流错误卡（与 use-chat 既有 report 同款：失败 setError → ErrorBanner） */
+/** 会话内发送并回流错误卡与派生标题（#94：响应带 title 即本地刷新——侧栏标题即时更新，无需事件推送） */
 function reportSend(env: SlashDispatchEnv, sessionId: string, text: string): void {
   void env.transport
     .invoke({ channel: "session:send", sessionId, text })
     .then((r: IpcResult) => {
-      if (!r.ok) env.store.setError(sessionId, r.error.code, r.error.message);
+      if (!r.ok) {
+        env.store.setError(sessionId, r.error.code, r.error.message);
+        return;
+      }
+      // #94：sendTurn 成功后 Main 派生（仅 default 态生效）；未带 title = 门控未生效，标题保持
+      if (r.title) env.store.updateSession(sessionId, { title: r.title });
     })
     .catch((err: unknown) => {
       env.store.setError(sessionId, "E_INTERNAL", err instanceof Error ? err.message : String(err));

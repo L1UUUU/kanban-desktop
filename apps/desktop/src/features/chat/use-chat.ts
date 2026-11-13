@@ -61,6 +61,8 @@ export interface ChatControllerActions {
   archiveSession(sessionId: string): Promise<void>;
   /** #62 删除会话（侧栏 hover「删除」经二次确认）：Main 编排 unlink+终止+删记录；成功后本地移除行（含激活切换），失败在该会话上报错（行保留可重试） */
   deleteSession(sessionId: string): Promise<void>;
+  /** #94 / ADR 0003 手动重命名（侧栏行内铅笔 → session:rename → manual 终态）：成功本地刷新标题返回 null；失败返回错误文案（行内提示） */
+  renameSession(sessionId: string, title: string): Promise<string | null>;
   /** #21：关闭同名 skill 冲突提示条（仅隐藏不影响会话） */
   dismissSkillConflict(sessionId: string): void;
   /** #46：错误卡「知道了」清除会话 lastError（仅隐藏） */
@@ -310,6 +312,23 @@ export async function setModelChain(store: ChatStore, transport: ChatTransport, 
 }
 
 /**
+ * #94 / ADR 0003 手动重命名编排（模块级可直测）：session:rename → 成功本地刷新标题并返回 null（无错误）；
+ * 失败/异常返回错误文案（行内提示用），标题不动（DB 单一事实源，无乐观更新）。
+ */
+export async function renameSessionChain(store: ChatStore, transport: ChatTransport, sessionId: string, title: string): Promise<string | null> {
+  try {
+    const r = await transport.invoke({ channel: "session:rename", sessionId, title });
+    if (r.ok) {
+      store.updateSession(sessionId, { title });
+      return null;
+    }
+    return r.error.message;
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+}
+
+/**
  * 会话控制器 hook（issue #71：store 与 PTY 草稿机制均为 seam 之后的实现细节）。
  * deps.demoCwd 为 Fake 演示草稿 cwd（App 层经 AppInfo 注入：Main 读 KANBAN_FAKE_DEMO_CWD、缺省用户主目录）；
  * 未注入（null/undefined）前不自举 boot 演示草稿，真实会话 cwd 一律来自已注册项目（deps.resolveCwd）。
@@ -524,6 +543,8 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
           log.error("会话删除失败", { sessionId, code: r.error.code, message: r.error.message });
         }
       },
+      renameSession: (sessionId, title): Promise<string | null> =>
+        transport ? renameSessionChain(store, transport, sessionId, title) : Promise.resolve("transport 不可用"),
     };
   }, [transport, store, resolveCwd, onNotice, drafts, manager, commands, deps.onSetView]);
 

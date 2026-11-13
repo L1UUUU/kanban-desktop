@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ChatEvent, IpcRequest, IpcResult, ProjectRow } from "@kanban/ipc-schema";
 import type { ChatTransport } from "../../lib/kanban-api";
 import { ChatStore } from "./chat-store";
-import { discardAllDraftsAction, openSessionDraftAction, resolveSessionCwd, resumeChain, setModelChain, submitDraftChain, switchToAction, type SessionDraftEnv } from "./use-chat";
+import { discardAllDraftsAction, openSessionDraftAction, renameSessionChain, resolveSessionCwd, resumeChain, setModelChain, submitDraftChain, switchToAction, type SessionDraftEnv } from "./use-chat";
 import { TerminalDraftController } from "../terminal/terminal-draft";
 import { TerminalManager } from "../terminal/TerminalManager";
 
@@ -387,5 +387,37 @@ describe("setModelChain（issue #79：session:setModel 中途切换编排）", (
     const { transport, requests } = makeTransport();
     await expect(setModelChain(store, transport, "s-sw", "fake-standard")).resolves.toBe(true);
     expect(requests).toHaveLength(0);
+  });
+});
+
+describe("renameSessionChain（session:rename 手动重命名，#94 / ADR 0003）", () => {
+  it("成功：invoke session:rename → 本地刷新标题，返回 null（无错误）", async () => {
+    const store = new ChatStore();
+    store.registerSession({ sessionId: "s-1", cli: "claude", title: "默认演示", permMode: "auto" });
+    const { transport, requests } = makeTransport({ "session:rename": { ok: true, title: "我起的名字" } });
+    await expect(renameSessionChain(store, transport, "s-1", "我起的名字")).resolves.toBeNull();
+    expect(store.getSession("s-1")?.title).toBe("我起的名字");
+    expect(requests).toEqual([{ channel: "session:rename", sessionId: "s-1", title: "我起的名字" }]);
+  });
+
+  it("IPC 失败：返回错误文案（行内提示），标题不动", async () => {
+    const store = new ChatStore();
+    store.registerSession({ sessionId: "s-1", cli: "claude", title: "默认演示", permMode: "auto" });
+    const { transport } = makeTransport({ "session:rename": { ok: false, error: { code: "E_SESSION_NOT_FOUND", message: "会话不存在：s-1" } } });
+    await expect(renameSessionChain(store, transport, "s-1", "我起的名字")).resolves.toBe("会话不存在：s-1");
+    expect(store.getSession("s-1")?.title).toBe("默认演示");
+  });
+
+  it("transport 异常：返回异常文案，标题不动（不静默）", async () => {
+    const store = new ChatStore();
+    store.registerSession({ sessionId: "s-1", cli: "claude", title: "默认演示", permMode: "auto" });
+    const transport: ChatTransport = {
+      invoke: () => Promise.reject(new Error("桥已断")),
+      onEvent: () => () => undefined,
+      onTerminalEvent: () => () => undefined,
+      onTrackerEvent: () => () => undefined,
+    };
+    await expect(renameSessionChain(store, transport, "s-1", "我起的名字")).resolves.toBe("桥已断");
+    expect(store.getSession("s-1")?.title).toBe("默认演示");
   });
 });

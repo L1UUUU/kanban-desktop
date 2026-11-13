@@ -171,3 +171,27 @@ describe("dispatchDraftSubmit（草稿态提交编排）", () => {
     expect(t.openedDrafts).toEqual([{ projectId: "p1", cli: "pty" }]);
   });
 });
+
+describe("session:send 响应 title 消费（#94：派生标题即时刷新侧栏）", () => {
+  it("响应带 title：本地回写会话标题（无需事件推送）", async () => {
+    const store = new ChatStore();
+    store.registerSession({ sessionId: "s1", cli: "claude", title: "新会话 · Claude", permMode: "auto", cwd: "C:\\proj", projectId: "p1" });
+    store.setActive("s1");
+    const transport = makeTransport({ "session:send": { ok: true, title: "第一条正经消息" } });
+    const source = new ComposerCommandSource(async () => ({ ok: true, commands: [] }));
+    const env: SlashDispatchEnv = { store, transport, commands: source, openSessionDraft: () => ({ ok: true, replaced: null }) };
+    await dispatchSessionSend(env, "s1", "第一条正经消息");
+    expect(store.getSession("s1")?.title).toBe("第一条正经消息");
+  });
+
+  it("响应不带 title（已派生/manual 门控未生效）：标题保持不动", async () => {
+    const store = new ChatStore();
+    store.registerSession({ sessionId: "s1", cli: "claude", title: "我起的名字", permMode: "auto", cwd: "C:\\proj", projectId: "p1" });
+    store.setActive("s1");
+    const transport = makeTransport({ "session:send": { ok: true } });
+    const source = new ComposerCommandSource(async () => ({ ok: true, commands: [] }));
+    const env: SlashDispatchEnv = { store, transport, commands: source, openSessionDraft: () => ({ ok: true, replaced: null }) };
+    await dispatchSessionSend(env, "s1", "第二条消息");
+    expect(store.getSession("s1")?.title).toBe("我起的名字");
+  });
+});

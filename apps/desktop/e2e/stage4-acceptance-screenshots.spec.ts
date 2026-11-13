@@ -112,7 +112,7 @@ async function registerAndCreate(win: Page, projectName: string): Promise<void> 
   // #59 草稿：点 CLI 只开草稿，发出首条消息才创建会话（行出现）
   await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
   await send(win, "首条消息（建立会话）");
-  await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
+  await expect(win.locator("aside").getByText("首条消息（建立会话）")).toBeVisible({ timeout: 10_000 }); // #94：标题=首条派生
 }
 
 test("I-1/I-5 Diff 视图：入口激活态 + 头部统计 + 五类文件行 + 展开行级红绿/untracked 全文 + 折叠/刷新实测 + 空态", async () => {
@@ -279,7 +279,7 @@ test("I-2 补充：spawn 创建失败侧栏卡（F1 形态，无会话视图可�
     // 动作实测：「重试发送」→ 重新执行创建+发送首条消息 → 卡消失 + 会话登记 + 草稿丢弃
     await card.getByRole("button", { name: "重试发送" }).click();
     await expect(card).toHaveCount(0, { timeout: 15_000 });
-    await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
+    await expect(win.locator("aside").getByText("要重试的首条")).toBeVisible({ timeout: 10_000 }); // #94：标题=首条派生
     await second.app.close();
   } finally {
     for (const r of roots) await rmBestEffort(r);
@@ -299,12 +299,12 @@ test("I-3 恢复条成功流转：待恢复 → 恢复中（不可中断）→ �
     // 重启（同一 userData，注入 4s resume 延迟使「恢复中」态可截图）
     const second = await launchApp(userData, undefined, { KANBAN_FAKE_RESUME_DELAY_MS: "4000" });
     await expect(second.win.getByText("已断开").first()).toBeVisible({ timeout: 15_000 });
-    await second.win.getByText("新会话 · Claude").first().click();
+    await second.win.locator("aside").getByText("首条消息（建立会话）").click();
 
     // 待恢复态（原型 d3 banner 1）：会话名 + 缓存不替代原生历史说明 + 主按钮（文案保留，F12）
     const banner = second.win.getByTestId("resume-banner");
     await expect(banner).toBeVisible();
-    await expect(banner).toContainText("新会话 · Claude");
+    await expect(banner).toContainText("首条消息（建立会话）");
     await expect(banner).toContainText("缓存消息不替代原生历史");
     await shot(second.win, SHOT_DIR, "11-resume-banner-pending.png");
 
@@ -339,7 +339,7 @@ test("I-3 恢复条失败流转：失败原因 + 重试 + 复制错误详情（�
     // 重启（同一 userData，注入首次 resume 失败）
     const second = await launchApp(userData, undefined, { KANBAN_FAKE_RESUME_FAIL_FIRST: "1" });
     await expect(second.win.getByText("已断开").first()).toBeVisible({ timeout: 15_000 });
-    await second.win.getByText("新会话 · Claude").first().click();
+    await second.win.locator("aside").getByText("首条消息（建立会话）").click();
 
     // 失败态（原型 d3 banner 3）：原因 + 错误码 + 重试 + 复制错误详情，会话保持断开
     const banner = second.win.getByTestId("resume-banner");

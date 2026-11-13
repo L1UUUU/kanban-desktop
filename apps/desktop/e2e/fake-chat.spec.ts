@@ -15,7 +15,7 @@ function makeFixture(): { userData: string; repoDir: string } {
   return { userData, repoDir };
 }
 
-/** 启动应用并完成：注册项目 → 新建首个会话（等「新会话 · Claude」就绪） */
+/** 启动应用并完成：注册项目 → 新建首个会话（侧栏行标题=首条消息派生，#94） */
 async function launchApp(): Promise<{ app: ElectronApplication; win: Page; cleanup(): Promise<void> }> {
   const { userData, repoDir } = makeFixture();
   const app = await _electron.launch({
@@ -58,14 +58,14 @@ async function send(win: Page, text: string): Promise<void> {
   await win.getByRole("button", { name: "发送 ➤" }).click();
 }
 
-/** 经项目行「＋」新建 Claude 会话（原型一致项 2；#59 草稿：点 CLI 只开草稿，发出首条消息才创建会话） */
-async function createSession(win: Page, firstText = "首条消息（建立会话）"): Promise<void> {
+/** 经项目行「＋」新建 Claude 会话（原型一致项 2；#59 草稿：点 CLI 只开草稿，发出首条消息才创建会话；#94：行标题=首条派生） */
+async function createSession(win: Page, firstText = "首条消息（建立会话）", nth = 0): Promise<void> {
   await win.locator("aside").getByText(PROJECT_NAME, { exact: true }).hover(); // 悬浮项目行显示「＋」
   await win.getByRole("button", { name: "＋", exact: true }).click();
   await win.getByRole("button", { name: "Claude", exact: true }).click();
   await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 }); // 草稿面板出现（侧栏无新行）
-  await send(win, firstText); // 首条消息 = 创建+落库+发送原子链
-  await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
+  await send(win, firstText); // 首条消息 = 创建+落库+发送原子链（#94：行标题=首条派生，侧栏限定避开同文气泡）
+  await expect(win.locator("aside").getByText(firstText).nth(nth)).toBeVisible({ timeout: 10_000 }); // 同首条多会话时按序号区分（#94）
 }
 
 test("多轮对话：两轮流式 + 工具卡完成 + 权限 chip 三档切换", async () => {
@@ -75,7 +75,7 @@ test("多轮对话：两轮流式 + 工具卡完成 + 权限 chip 三档切换",
   // 经「＋」建会话：首条消息即「把 ipc-schema…」（#59 草稿：发首条才创建）
   await createSession(win, "把 ipc-schema 的类型拆成独立文件");
   // 第一轮：流式助手文本 + 工具卡终态（时长/输出）
-  await expect(win.getByText("把 ipc-schema 的类型拆成独立文件")).toBeVisible();
+  await expect(win.getByText("把 ipc-schema 的类型拆成独立文件").first()).toBeVisible(); // 气泡（侧栏行同文，#94）
   await expect(win.getByText("好的，我先跑一遍现有测试确认基线，然后开始拆分。")).toBeVisible({ timeout: 20_000 });
   await expect(win.getByText("完成 · 3.6s")).toBeVisible({ timeout: 20_000 });
   await expect(win.getByText(/Tests\s+13 passed/)).toBeVisible();
@@ -104,7 +104,7 @@ test("审批三键：拒绝 / 允许一次（二次仍问）/ 总是允许（二
   const { app, win } = t;
 
   // —— 拒绝：工具被拒 + 道歉文本 + 回到空闲（首条「审批演示」随会话创建发出）
-  await createSession(win, "审批演示");
+  await createSession(win, "审批演示", 0);
   await expect(win.getByText(/⚙ 需要审批：Edit packages\/ipc-schema\/src\/index\.ts/)).toBeVisible({ timeout: 20_000 });
   await expect(win.getByText("等待审批")).toBeVisible();
   await win.getByRole("button", { name: "拒绝" }).click();
@@ -113,7 +113,7 @@ test("审批三键：拒绝 / 允许一次（二次仍问）/ 总是允许（二
   await expect(win.getByText("空闲").first()).toBeVisible({ timeout: 20_000 });
 
   // —— 允许一次：仅本次允许 + 第二个审批仍会询问 → 再允许后完成（第二个会话，首条「审批演示」）
-  await createSession(win, "审批演示");
+  await createSession(win, "审批演示", 1);
   await expect(win.getByText(/⚙ 需要审批：Edit packages\/ipc-schema\/src\/index\.ts/)).toBeVisible({ timeout: 20_000 });
   await win.getByRole("button", { name: "允许一次" }).click();
   await expect(win.getByText(/仅本次允许/)).toBeVisible({ timeout: 20_000 });
@@ -122,9 +122,9 @@ test("审批三键：拒绝 / 允许一次（二次仍问）/ 总是允许（二
   await expect(win.getByText("拆分完成，index.ts 的导出面保持不变，测试仍然全绿。")).toBeVisible({ timeout: 20_000 });
 
   // —— 总是允许：记住规则 + 第二个审批直接跳过
-  // —— 总是允许（第三个会话，首条「审批演示」随建发；nth(1) 为第二个会话行）
-  await createSession(win, "审批演示");
-  await expect(win.getByText("新会话 · Claude").nth(1)).toBeVisible({ timeout: 10_000 });
+  // —— 总是允许（第三个会话，首条「审批演示」随建发）
+  await createSession(win, "审批演示", 2);
+  // 第三个会话行就绪由 createSession nth=2 断言（同首条派生同文，#94）
   await expect(win.getByText(/⚙ 需要审批：Edit packages\/ipc-schema\/src\/index\.ts/)).toBeVisible({ timeout: 20_000 });
   await win.getByRole("button", { name: "总是允许" }).click();
   await expect(win.getByText(/记住规则，后续同类不再询问/).first()).toBeVisible({ timeout: 20_000 });

@@ -1,4 +1,4 @@
-// 用途：SQLite 迁移单测 —— v2（#16，spec #15 F 节）：v1 库加 project_id 列 + 按最早关联会话回填 + 补写旧事件 payload projectId + 单事务（中断重入幂等、无关联会话失败回滚）+ 迁移后重放态=迁移前在线态 + TD6 跨项目旧 link 重放兼容性钉子；v3（#30，spec #27 D 节）：memory 三表单事务迁移/幂等重入/新库直建；v4（#58，spec #57）：sessions 加 archived_at 可空列（现存行全部未归档）/单事务/中断回滚/新库直建
+// 用途：SQLite 迁移单测 —— v2（#16，spec #15 F 节）：v1 库加 project_id 列 + 按最早关联会话回填 + 补写旧事件 payload projectId + 单事务（中断重入幂等、无关联会话失败回滚）+ 迁移后重放态=迁移前在线态 + TD6 跨项目旧 link 重放兼容性钉子；v3（#30，spec #27 D 节）：memory 三表单事务迁移/幂等重入/新库直建；v4（#58，spec #57）：sessions 加 archived_at 可空列（现存行全部未归档）/单事务/中断回滚/新库直建；v5（#94，ADR 0003）：sessions 加 title_source（存量回填 default）/幂等重入/新库直建
 import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -127,6 +127,7 @@ describe("迁移 v2：v1 库 → project_id 回填 + payload 补写", () => {
       { version: 2, name: "v2-requirements-project" },
       { version: 3, name: "v3-memory-tables" },
       { version: 4, name: "v4-sessions-archived" },
+      { version: 5, name: "v5-sessions-title-source" },
     ]);
   });
 
@@ -319,7 +320,7 @@ describe("迁移 v2：单事务（失败回滚 + 中断重入幂等）", () => {
     const again = openDatabase(path);
     openDbs.push(again);
     const migrations = again.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as unknown as Array<{ version: number }>;
-    expect(migrations.map((m) => m.version)).toEqual([1, 2, 3, 4]);
+    expect(migrations.map((m) => m.version)).toEqual([1, 2, 3, 4, 5]);
   });
 });
 
@@ -353,7 +354,7 @@ describe("迁移 v3：v2 老库 → memory 三表", () => {
     );
     expect(db.prepare("SELECT title, project_id FROM requirements WHERE id = 'REQ-001'").get()).toEqual({ title: "老需求", project_id: "p-1" });
     const versions = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as unknown as Array<{ version: number }>;
-    expect(versions.map((r) => r.version)).toEqual([1, 2, 3, 4]);
+    expect(versions.map((r) => r.version)).toEqual([1, 2, 3, 4, 5]);
   });
 
   it("v3 幂等重入：同库二次 openDatabase 不重复迁移、记录唯一", () => {
@@ -373,10 +374,10 @@ describe("迁移 v3：v2 老库 → memory 三表", () => {
       "projects", "requirements", "schema_migrations", "sessions", "stage_events",
     ]);
     const versions = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as unknown as Array<{ version: number }>;
-    expect(versions.map((r) => r.version)).toEqual([1, 2, 3, 4]);
+    expect(versions.map((r) => r.version)).toEqual([1, 2, 3, 4, 5]);
     const again = openDatabase(":memory:");
     openDbs.push(again);
-    expect(again.prepare("SELECT count(*) AS n FROM schema_migrations").get()).toEqual({ n: 4 });
+    expect(again.prepare("SELECT count(*) AS n FROM schema_migrations").get()).toEqual({ n: 5 });
   });
 
   it("迁移后 memory 三表可用（批次行写入往返）", () => {
@@ -401,7 +402,7 @@ describe("迁移 v2：新库", () => {
     expect(columnsOf(db, "requirements")).toContain("project_id");
     const again = openDatabase(":memory:");
     openDbs.push(again);
-    expect(again.prepare("SELECT count(*) AS n FROM schema_migrations").get()).toEqual({ n: 4 });
+    expect(again.prepare("SELECT count(*) AS n FROM schema_migrations").get()).toEqual({ n: 5 });
   });
 });
 
@@ -439,7 +440,7 @@ describe("迁移 v4：v3 老库 → sessions.archived_at", () => {
     expect(db.prepare("SELECT count(*) AS n FROM sessions WHERE archived_at IS NOT NULL").get()).toEqual({ n: 0 });
     expect(db.prepare("SELECT count(*) AS n FROM sessions").get()).toEqual({ n: 2 });
     const versions = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as unknown as Array<{ version: number }>;
-    expect(versions.map((r) => r.version)).toEqual([1, 2, 3, 4]);
+    expect(versions.map((r) => r.version)).toEqual([1, 2, 3, 4, 5]);
   });
 
   it("v4 幂等重入：同库二次 openDatabase 不重复迁移、版本记录唯一", () => {
@@ -476,6 +477,63 @@ describe("迁移 v4：v3 老库 → sessions.archived_at", () => {
     openDbs.push(db);
     expect(columnsOf(db, "sessions")).toContain("archived_at");
     const versions = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as unknown as Array<{ version: number }>;
-    expect(versions.map((r) => r.version)).toEqual([1, 2, 3, 4]);
+    expect(versions.map((r) => r.version)).toEqual([1, 2, 3, 4, 5]);
+  });
+});
+
+// ========== 迁移 v5（sessions 标题来源列，#94 / ADR 0003：四态 title_source 状态机） ==========
+describe("迁移 v5：v4 老库 → sessions.title_source", () => {
+  /** v4 形态库：C3 五表（sessions 含 archived_at、无 title_source）+ memory 三表 + 版本行 [1,2,3,4]（真实 v4 库形状） */
+  function buildV4Db(path: string, seed: (db: nodeSqlite.DatabaseSync) => void = () => {}): void {
+    const raw = new RawDb(path);
+    raw.exec(`
+      CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, canonical_path TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'ok', created_at TEXT NOT NULL);
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, kind TEXT NOT NULL, cli TEXT NOT NULL, native_session_id TEXT, project_id TEXT REFERENCES projects(id), title TEXT, cwd TEXT, perm_mode TEXT, status TEXT, last_active_at TEXT, archived_at TEXT, created_at TEXT NOT NULL);
+      CREATE TABLE requirements (id TEXT PRIMARY KEY, title TEXT NOT NULL, stage TEXT, stage_basis_at INTEGER, stage_basis_json TEXT, uncertain INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, project_id TEXT);
+      CREATE TABLE stage_events (event_id TEXT PRIMARY KEY, kind TEXT NOT NULL, session_id TEXT, cli TEXT, skill TEXT, stage TEXT, requirement_id TEXT, occurred_at TEXT, received_at TEXT, seq TEXT, evidence_level TEXT NOT NULL, source TEXT, payload_json TEXT NOT NULL, processed_at TEXT NOT NULL);
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+      INSERT INTO schema_migrations (version, name, applied_at) VALUES (1, 'v1-c3-base', '2026-11-05T00:00:00.000Z');
+      INSERT INTO schema_migrations (version, name, applied_at) VALUES (2, 'v2-requirements-project', '2026-11-06T00:00:00.000Z');
+      INSERT INTO schema_migrations (version, name, applied_at) VALUES (3, 'v3-memory-tables', '2026-11-07T00:00:00.000Z');
+      INSERT INTO schema_migrations (version, name, applied_at) VALUES (4, 'v4-sessions-archived', '2026-11-08T00:00:00.000Z');
+    `);
+    ensureMemoryTables(raw);
+    seed(raw);
+    raw.close();
+  }
+
+  it("v4 老库迁移：sessions 加 title_source（NOT NULL DEFAULT 'default'）、存量行回填 default、记录 v5", () => {
+    const path = tmpDbPath("v5-from-v4");
+    buildV4Db(path, (db) => {
+      seedProject(db, "p-1");
+      seedSession(db, "s-1", "p-1");
+    });
+    const db = openDatabase(path);
+    openDbs.push(db);
+    expect(columnsOf(db, "sessions")).toContain("title_source");
+    // 存量行回填 default（ADR 0003 决策 5：老会话恢复后发下一条消息即触发派生覆盖默认标题）
+    expect(db.prepare("SELECT title_source FROM sessions WHERE id = 's-1'").get()).toEqual({ title_source: "default" });
+    const versions = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as unknown as Array<{ version: number }>;
+    expect(versions.map((r) => r.version)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("v5 幂等重入：同库二次 openDatabase 不重复迁移、版本记录唯一", () => {
+    const path = tmpDbPath("v5-idempotent");
+    buildV4Db(path);
+    openDbs.push(openDatabase(path));
+    openDbs.push(openDatabase(path)); // 二次打开：v5 已记录 → 快路径跳过
+    const n = (openDbs[openDbs.length - 1].prepare("SELECT count(*) AS n FROM schema_migrations WHERE version = 5").get() as { n: number }).n;
+    expect(n).toBe(1);
+  });
+
+  it("新库直建 v5：sessions 含 title_source 列且缺省 default，版本链 [1..5]", () => {
+    const db = openDatabase(":memory:");
+    openDbs.push(db);
+    expect(columnsOf(db, "sessions")).toContain("title_source");
+    db.prepare("INSERT INTO projects (id, name, canonical_path, status, created_at) VALUES ('p-1','n','C:\\x','ok','2026-11-05T00:00:00.000Z')").run();
+    db.prepare("INSERT INTO sessions (id, kind, cli, project_id, created_at) VALUES ('s-1','structured','claude','p-1','2026-11-05T00:00:00.000Z')").run();
+    expect(db.prepare("SELECT title_source FROM sessions WHERE id = 's-1'").get()).toEqual({ title_source: "default" });
+    const versions = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as unknown as Array<{ version: number }>;
+    expect(versions.map((r) => r.version)).toEqual([1, 2, 3, 4, 5]);
   });
 });

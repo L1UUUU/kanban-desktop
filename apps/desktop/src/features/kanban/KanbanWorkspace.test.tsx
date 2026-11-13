@@ -290,7 +290,7 @@ describe("五列看板：列映射/建卡/移列/徽标/会话数/删除（#18�
     await act(async () => {
       await createViaDraft(t.ctl, "claude", { projectId: await currentProjectId() });
     });
-    await screen.findByText("新会话 · Claude");
+    await within(screen.getByRole("complementary")).findByText("默认演示"); // #94：标题=首条派生（与气泡同文，限侧栏）
     t.advance(); // 首条 turn 完成回空闲（供后续用例继续发消息）
   }
 
@@ -467,7 +467,7 @@ describe("按项目过滤（#18；S2-08）", () => {
     await act(async () => {
       await createViaDraft(t.ctl, "claude", { projectId: pidA }, "/design-feature verified");
     });
-    await screen.findByText("新会话 · Claude");
+    await within(screen.getByRole("complementary")).findByText("/design-feature verified"); // #94：标题=首条派生（与气泡同文，限侧栏）
     t.advance();
     enterKanban();
     await waitFor(() => expect(within(col("Design")).getAllByText("待命名需求").length).toBeGreaterThan(0));
@@ -520,7 +520,7 @@ describe("重启再水化（#18；S2-17）", () => {
     await act(async () => {
       await createViaDraft(t1.ctl, "claude", { projectId: pid }, "/design-feature verified");
     });
-    await screen.findByText("新会话 · Claude");
+    await within(screen.getByRole("complementary")).findByText("/design-feature verified"); // #94：标题=首条派生（与气泡同文，限侧栏）
     act(() => {
       t1.advance();
     });

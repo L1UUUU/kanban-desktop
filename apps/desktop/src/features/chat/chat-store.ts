@@ -258,8 +258,8 @@ export class ChatStore {
     this.changed();
   }
 
-  /** 本地会话设置更新（权限档位/模型 chip；modelChangePending 为 #79 切换成功标注，「下一轮起生效」提示数据源） */
-  updateSession(id: string, patch: Partial<Pick<SessionView, "permMode" | "model" | "modelChangePending">>): void {
+  /** 本地会话设置更新（权限档位/模型 chip/标题（#94：派生与重命名标题的本地刷新出口）；modelChangePending 为 #79 切换成功标注，「下一轮起生效」提示数据源） */
+  updateSession(id: string, patch: Partial<Pick<SessionView, "permMode" | "model" | "modelChangePending" | "title">>): void {
     const s = this.sessions.get(id);
     if (!s) return;
     Object.assign(s, patch);

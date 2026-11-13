@@ -1145,7 +1145,7 @@ describe("session:create 首条消息原子化（#59：草稿提交 = 创建原�
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.sessionId).toBeTruthy();
-      expect(r.title).toBe("新会话 · Fake");
+      expect(r.title).toBe("首条消息"); // #94：firstMessage 携带时标题 = 派生标题（随行原子落库）
     }
     // 落库（重启恢复依据）+ 首条消息送达 adapter（turn 已提交，事件流可见）
     expect(deps.sessions.get(r.ok ? r.sessionId! : "")).toMatchObject({ cli: "fake", status: "idle" });
@@ -1232,6 +1232,140 @@ describe("session:create 首条消息原子化（#59：草稿提交 = 创建原�
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe("E_INTERNAL");
     expect(deps.sessions.get("s-internal")).toBeNull();
+  });
+});
+
+describe("会话标题派生与手动重命名（#94 / ADR 0003：四态状态机 + 派生挂 IPC）", () => {
+  it("session:create 无 firstMessage：默认标题 + title_source=default（既有行为不变）", async () => {
+    const deps = makeDeps(new FakeAdapter({ clock: new VirtualClock() }));
+    const handle = (raw: unknown) => handleIpc(deps, raw);
+    const r = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p" });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.title).toBe("新会话 · Fake");
+    expect(deps.sessions.get(r.ok ? r.sessionId! : "")).toMatchObject({ title: "新会话 · Fake", titleSource: "default" });
+  });
+
+  it("session:create+firstMessage：标题随行原子派生（去/压空白），落库 derived", async () => {
+    const deps = makeDeps(new FakeAdapter({ clock: new VirtualClock() }));
+    const handle = (raw: unknown) => handleIpc(deps, raw);
+    const r = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p", firstMessage: "  调研\tVite 构建\n配置  " });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.title).toBe("调研 Vite 构建 配置");
+    expect(deps.sessions.get(r.ok ? r.sessionId! : "")).toMatchObject({ title: "调研 Vite 构建 配置", titleSource: "derived" });
+  });
+
+  it("session:create+firstMessage+显式 title：派生仍优先（请求 title 仅为草稿占位名，非用户意图命名）", async () => {
+    const deps = makeDeps(new FakeAdapter({ clock: new VirtualClock() }));
+    const handle = (raw: unknown) => handleIpc(deps, raw);
+    const r = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p", title: "新会话 · Fake", firstMessage: "首条意图消息" });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.title).toBe("首条意图消息");
+    expect(deps.sessions.get(r.ok ? r.sessionId! : "")).toMatchObject({ title: "首条意图消息", titleSource: "derived" });
+  });
+
+  it("session:create+firstMessage 纯空白：派生为空回退默认标题（default，不落空标题）", async () => {
+    const deps = makeDeps(new FakeAdapter({ clock: new VirtualClock() }));
+    const handle = (raw: unknown) => handleIpc(deps, raw);
+    const r = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p", firstMessage: "   " });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.title).toBe("新会话 · Fake");
+    expect(deps.sessions.get(r.ok ? r.sessionId! : "")).toMatchObject({ title: "新会话 · Fake", titleSource: "default" });
+  });
+
+  it("session:create+firstMessage 发送失败回滚：派生标题随行删除（回滚天然一致，不留「来自未发出消息」的标题）", async () => {
+    const clock = new VirtualClock();
+    const base = new FakeAdapter({ clock });
+    const adapter = {
+      capabilities: base.capabilities,
+      createSession: async () => ({ sessionId: "s-rollback-title" }),
+      sendTurn: async () => {
+        throw new AdapterError("E_INTERNAL", "发送失败（注入）");
+      },
+      interruptTurn: async () => {},
+      resolveApproval: async () => {},
+      readHistory: async () => [],
+      resume: async () => {},
+      dispose: async () => {},
+      subscribe: () => () => undefined,
+    };
+    const deps = makeDeps(adapter as unknown as CliAdapter);
+    const r = await handleIpc(deps, { channel: "session:create", cli: "fake", cwd: "C:\\p", firstMessage: "不会成功的首条" });
+    expect(r.ok).toBe(false);
+    expect(deps.sessions.get("s-rollback-title")).toBeNull(); // 整行回滚（标题随行消失）
+  });
+
+  it("session:send 成功：sendTurn 后派生（响应带回新标题，renderer 即时刷新无需推送）", async () => {
+    const deps = makeDeps(new FakeAdapter({ clock: new VirtualClock() }));
+    const handle = (raw: unknown) => handleIpc(deps, raw);
+    const created = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p" });
+    const sessionId = created.ok ? created.sessionId! : "";
+    const r = await handle({ channel: "session:send", sessionId, text: "第一条正经消息" });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.title).toBe("第一条正经消息");
+    expect(deps.sessions.get(sessionId)).toMatchObject({ title: "第一条正经消息", titleSource: "derived" });
+  });
+
+  it("session:send 派生单向：已 derived 后第二条消息不覆盖（响应不带 title）", async () => {
+    const deps = makeDeps(new FakeAdapter({ clock: new VirtualClock() }));
+    const handle = (raw: unknown) => handleIpc(deps, raw);
+    const created = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p" });
+    const sessionId = created.ok ? created.sessionId! : "";
+    await handle({ channel: "session:send", sessionId, text: "第一条消息" });
+    const r2 = await handle({ channel: "session:send", sessionId, text: "第二条消息" });
+    expect(r2.ok).toBe(true);
+    if (r2.ok) expect(r2.title).toBeUndefined();
+    expect(deps.sessions.get(sessionId)).toMatchObject({ title: "第一条消息", titleSource: "derived" });
+  });
+
+  it("session:send 失败：不派生（标题保持原值，无「来自未发出消息」的标题）", async () => {
+    const clock = new VirtualClock();
+    const base = new FakeAdapter({ clock });
+    const adapter = {
+      capabilities: base.capabilities,
+      createSession: async () => ({ sessionId: "s-send-fail" }),
+      sendTurn: async () => {
+        throw new Error("boom");
+      },
+      interruptTurn: async () => {},
+      resolveApproval: async () => {},
+      readHistory: async () => [],
+      resume: async () => {},
+      dispose: async () => {},
+      subscribe: () => () => undefined,
+    };
+    const deps = makeDeps(adapter as unknown as CliAdapter);
+    const handle = (raw: unknown) => handleIpc(deps, raw);
+    await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p" });
+    const r = await handle({ channel: "session:send", sessionId: "s-send-fail", text: "失败消息" });
+    expect(r.ok).toBe(false);
+    expect(deps.sessions.get("s-send-fail")).toMatchObject({ title: "新会话 · Fake", titleSource: "default" });
+  });
+
+  it("session:rename：置 manual 并回带标题；此后 session:send 派生不覆盖（手动主权）", async () => {
+    const deps = makeDeps(new FakeAdapter({ clock: new VirtualClock() }));
+    const handle = (raw: unknown) => handleIpc(deps, raw);
+    const created = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p" });
+    const sessionId = created.ok ? created.sessionId! : "";
+    const r = await handle({ channel: "session:rename", sessionId, title: "我起的名字" });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.title).toBe("我起的名字");
+    expect(deps.sessions.get(sessionId)).toMatchObject({ title: "我起的名字", titleSource: "manual" });
+    // manual 终态：后续消息派生被门控拒绝
+    const send = await handle({ channel: "session:send", sessionId, text: "重命名后的消息" });
+    expect(send.ok).toBe(true);
+    if (send.ok) expect(send.title).toBeUndefined();
+    expect(deps.sessions.get(sessionId)).toMatchObject({ title: "我起的名字", titleSource: "manual" });
+  });
+
+  it("session:rename 未知会话 → E_SESSION_NOT_FOUND；空标题 → E_SCHEMA", async () => {
+    const deps = makeDeps(new FakeAdapter({ clock: new VirtualClock() }));
+    const handle = (raw: unknown) => handleIpc(deps, raw);
+    const ghost = await handle({ channel: "session:rename", sessionId: "ghost", title: "x" });
+    expect(ghost.ok).toBe(false);
+    if (!ghost.ok) expect(ghost.error.code).toBe("E_SESSION_NOT_FOUND");
+    const empty = await handle({ channel: "session:rename", sessionId: "ghost", title: "" });
+    expect(empty.ok).toBe(false);
+    if (!empty.ok) expect(empty.error.code).toBe("E_SCHEMA");
   });
 });
 
@@ -1347,7 +1481,8 @@ describe("会话归档通道（#58 spec #57）", () => {
     expect(listed.ok && listed.sessions).toEqual([]);
     const archived = await handle({ channel: "session:archivedList" });
     expect(archived.ok && archived.sessions).toEqual([
-      expect.objectContaining({ id: sessionId, cli: "fake", title: "调研", archivedAt: expect.any(String) }),
+      // #94：create 显式 title 仅为占位名，send「拆类型」成功后派生覆盖（default→derived）
+      expect.objectContaining({ id: sessionId, cli: "fake", title: "拆类型", archivedAt: expect.any(String) }),
     ]);
     // 终止后 adapter 无该会话（readHistory 报 SESSION_NOT_FOUND）
     const read = await handle({ channel: "session:readHistory", sessionId });

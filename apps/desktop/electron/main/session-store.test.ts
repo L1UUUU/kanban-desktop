@@ -235,3 +235,60 @@ describe("SessionStore applyEvent 落库收口（#70 C2）", () => {
     expect(store.list()[0]).toMatchObject({ id: "s-no-status", status: "idle" });
   });
 });
+
+describe("SessionStore 标题来源门控（#94 / ADR 0003 四态状态机）", () => {
+  it("insert 列清单含 title_source：缺省 default、显式 derived 往返读回", () => {
+    const store = makeStore();
+    store.insert(makeRecord({ id: "s-1" }));
+    store.insert(makeRecord({ id: "s-2", titleSource: "derived" }));
+    const byId = new Map(store.list().map((s) => [s.id, s]));
+    expect(byId.get("s-1")?.titleSource).toBe("default");
+    expect(byId.get("s-2")?.titleSource).toBe("derived");
+  });
+
+  it("applyDerivedTitle 单向升级：仅 default 生效（返回 true）；derived 不再被派生覆盖", () => {
+    const store = makeStore();
+    store.insert(makeRecord({ title: "新会话 · Claude" }));
+    expect(store.applyDerivedTitle("s-1", "首条消息标题")).toBe(true);
+    expect(store.get("s-1")).toMatchObject({ title: "首条消息标题", titleSource: "derived" });
+    // derived 态再派生（如老会话恢复后发第二条消息）：门控拒绝，标题保持首次派生值
+    expect(store.applyDerivedTitle("s-1", "第二条消息标题")).toBe(false);
+    expect(store.get("s-1")).toMatchObject({ title: "首条消息标题", titleSource: "derived" });
+  });
+
+  it("manual 吸收一切前态：renameTitle 后自动派生永不再覆盖（终态权威）", () => {
+    const store = makeStore();
+    store.insert(makeRecord({ title: "新会话 · Claude" }));
+    store.renameTitle("s-1", "我起的名字");
+    expect(store.get("s-1")).toMatchObject({ title: "我起的名字", titleSource: "manual" });
+    expect(store.applyDerivedTitle("s-1", "随便什么消息")).toBe(false);
+    expect(store.get("s-1")).toMatchObject({ title: "我起的名字", titleSource: "manual" });
+    // derived → manual 同样吸收（重命名派生后的会话）
+    store.insert(makeRecord({ id: "s-2", titleSource: "derived", title: "派生标题" }));
+    store.renameTitle("s-2", "手动覆盖");
+    expect(store.get("s-2")).toMatchObject({ title: "手动覆盖", titleSource: "manual" });
+  });
+
+  it("PTY 豁免：updateTitle 无条件写且不动 title_source（终端 shell 回写路径，行为零变化）", () => {
+    const store = makeStore();
+    store.insert(makeRecord({ id: "tty-1", kind: "pty", cli: "pty", title: "终端" }));
+    store.updateTitle("tty-1", "终端 · pwsh");
+    expect(store.get("tty-1")).toMatchObject({ title: "终端 · pwsh", titleSource: "default" });
+  });
+
+  it("未知会话：applyDerivedTitle 返回 false、renameTitle 安全 no-op", () => {
+    const store = makeStore();
+    expect(store.applyDerivedTitle("ghost", "x")).toBe(false);
+    expect(() => store.renameTitle("ghost", "x")).not.toThrow();
+  });
+
+  it("重启读回：title_source 随库文件往返（manual 权威跨重启保持）", () => {
+    const store = makeStore();
+    store.insert(makeRecord({ title: "新会话 · Claude" }));
+    store.renameTitle("s-1", "跨重启的手动标题");
+    const reopenedDb = openDatabase(dbPath);
+    const reopened = new SessionStore(reopenedDb);
+    expect(reopened.get("s-1")).toMatchObject({ title: "跨重启的手动标题", titleSource: "manual" });
+    reopenedDb.close();
+  });
+});
