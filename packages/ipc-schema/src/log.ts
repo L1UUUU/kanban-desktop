@@ -21,6 +21,8 @@ export const LOG_KINDS = [
   "server-stderr",
   "job-guard",
   "worker-exit-pending",
+  // review S2：标题摘要一次性进程 exit 0 但输出文件缺失/为空（降级 null 前留痕）
+  "title-empty",
   // error / cli-host
   "dead",
   "server-dead",

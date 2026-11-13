@@ -1,7 +1,7 @@
 // 用途：CodexAdapter 协议映射单测 —— FakeRpc 手动注入通知/服务端请求，断言 C1 事件映射、审批三态、终文自愈、忙态排队、interrupt 幂等、进程退出报错（不依赖真实 codex）
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { CodexAdapter, type CodexRpcClientLike } from "./codex-adapter";
 import { ExeNotFoundError } from "./adapter";
@@ -771,5 +771,85 @@ describe("CodexAdapter：listCommands（issue #89：用户级+项目级 prompts 
     const adapter = new CodexAdapter({ homeDir: path.join(root, "none"), clientFactory: () => new FakeRpc() });
     expect(await adapter.listCommands({ cwd: path.join(root, "no-proj") })).toEqual([]);
     rmSync(root, { recursive: true, force: true });
+  });
+});
+
+// 用途：summarizeTitle 一次性进程的 spawn 参数与降级留痕密封测试（review S1/S2）—— node 自身充当 fake codex：
+// exe 注入 process.execPath，fixture 目录放名为 exec 的脚本（node 首个位置参数即脚本入口，其余参数成为脚本 argv），
+// 脚本经 env 开关决定是否写出 --output-last-message 文件并把完整 argv 落盘供断言
+describe("CodexAdapter：summarizeTitle 一次性进程（review S1/S2）", () => {
+  /** node fake codex fixture：cwd 内放 exec 脚本（argv 落盘 + 按 env 决定是否写标题输出文件）；返回会话 cwd 与清理函数 */
+  function makeFakeCodexFixture(): { cwd: string; cleanup: () => void } {
+    const root = path.join(tmpdir(), `kb-codex-title-fx-${process.pid}-${Date.now() % 10000}`);
+    mkdirSync(root, { recursive: true });
+    writeFileSync(
+      path.join(root, "exec"),
+      [
+        "const fs = require('fs');",
+        "const argv = process.argv.slice(2);",
+        "const dump = process.env.KB_TEST_93_ARGV_DUMP;",
+        "if (dump) fs.writeFileSync(dump, JSON.stringify(argv));",
+        "const ix = argv.indexOf('--output-last-message');",
+        "if (ix >= 0 && process.env.KB_TEST_93_TITLE) fs.writeFileSync(argv[ix + 1], process.env.KB_TEST_93_TITLE);",
+      ].join("\n"),
+      "utf8",
+    );
+    return { cwd: root, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  }
+
+  /** 被测 adapter + 预置 thread/read 原生 transcript（user 文本素材）+ 日志收集 */
+  function makeTitleAdapter() {
+    const logs: Array<{ kind: string; detail: string }> = [];
+    const rpc = new FakeRpc();
+    rpc.responses["thread/read"] = { thread: { turns: [{ items: [{ type: "userMessage", content: "帮我拆类型并补测试" }] }] } };
+    const adapter = new CodexAdapter({
+      clientFactory: () => rpc,
+      resolveModel: async () => "gpt-fake",
+      exe: process.execPath, // fake codex = node 自身（args 首位 exec 即脚本入口）
+      summarizeTimeoutMs: 15_000,
+      log: (kind, detail) => logs.push({ kind, detail }),
+    });
+    return { adapter, logs };
+  }
+
+  it("S1：--output-last-message 参数为 posix 路径（无反斜杠），子进程按同串写出并被读回", async () => {
+    const fx = makeFakeCodexFixture();
+    const argvDump = path.join(fx.cwd, "argv-dump.json");
+    process.env.KB_TEST_93_ARGV_DUMP = argvDump;
+    process.env.KB_TEST_93_TITLE = "集成修复验证标题";
+    try {
+      const { adapter } = makeTitleAdapter();
+      const { sessionId } = await adapter.createSession({ cwd: fx.cwd });
+      const title = await adapter.summarizeTitle(sessionId);
+      expect(title).toBe("集成修复验证标题"); // 子进程确实按该 posix 路径写出（Node fs 接受 /）
+      const argv = JSON.parse(readFileSync(argvDump, "utf8")) as string[];
+      const ix = argv.indexOf("--output-last-message");
+      expect(ix).toBeGreaterThan(-1);
+      const out = argv[ix + 1];
+      expect(out.endsWith(".txt")).toBe(true);
+      expect(out.includes("\\")).toBe(false); // CODING_STANDARDS：传子进程参数用 posix 形态
+      expect(out.startsWith(tmpdir().replace(/\\/g, "/"))).toBe(true);
+    } finally {
+      delete process.env.KB_TEST_93_ARGV_DUMP;
+      delete process.env.KB_TEST_93_TITLE;
+      fx.cleanup();
+    }
+  });
+
+  it("S2：exit 0 但输出文件缺失 → 返回 null 且留 warn 级日志（失败可定位）", async () => {
+    const fx = makeFakeCodexFixture();
+    delete process.env.KB_TEST_93_TITLE; // fake 不写输出文件：exit 0 但文件缺失
+    delete process.env.KB_TEST_93_ARGV_DUMP;
+    try {
+      const { adapter, logs } = makeTitleAdapter();
+      const { sessionId } = await adapter.createSession({ cwd: fx.cwd });
+      const title = await adapter.summarizeTitle(sessionId);
+      expect(title).toBeNull();
+      expect(logs).toContainEqual(
+        expect.objectContaining({ kind: "title-empty", detail: expect.stringContaining("输出文件") }),
+      );
+    } finally {
+      fx.cleanup();
+    }
   });
 });

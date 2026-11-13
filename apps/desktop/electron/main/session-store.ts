@@ -1,9 +1,9 @@
 // 用途：sessions 表 store（纯数据面，#70 C2 微加深）—— 会话落库/列表/状态与活跃时间更新（C3 表已在 db.ts 建好；重启恢复 = 新实例读同一库文件）；#58 起归档/取消归档/删除与未归档守卫（spec #57 D 节：迟到事件不得复活归档行）；#70 起 ChatEvent 落库收口 applyEvent + insert 缺省 idle（「新建恒 idle」决策收进 store），状态流转编排决策在 session-lifecycle；#94 起标题来源四态门控（ADR 0003：applyDerivedTitle 单向升级 / renameTitle 置 manual 终态 / updateTitle 保持 PTY 无条件写豁免）
-import type { ChatEvent, PermMode, SessionStatus } from "@kanban/ipc-schema";
+import type { ChatEvent, PermMode, SessionStatus, TitleSource } from "@kanban/ipc-schema";
 import type { SqliteDb } from "./db";
 
-/** 会话标题来源四态（#94 / ADR 0003）：default（默认）→ derived（首条消息截断派生，单向）→ summarized（首轮摘要，T2）；manual（用户重命名，终态权威，吸收一切前态） */
-export type TitleSource = "default" | "derived" | "summarized" | "manual";
+/** 会话标题来源四态（#94 / ADR 0003）：default（默认）→ derived（首条消息截断派生，单向）→ summarized（首轮摘要，T2）；manual（用户重命名，终态权威，吸收一切前态）——枚举单源于 ipc-schema（review A1），此处 re-export 保持既有导入面 */
+export type { TitleSource };
 
 /** sessions 行（wire 形状见 sessionRowSchema；此处为 DB 记录面，目录身份由 Main 按需判定不入库） */
 export interface SessionRecord {

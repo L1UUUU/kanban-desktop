@@ -76,4 +76,18 @@ describe("buildSummaryTranscript / toTitleLine（纯函数）", () => {
     expect(toTitleLine("x".repeat(80))).toHaveLength(48);
     expect(toTitleLine("   ")).toBe("");
   });
+
+  it("toTitleLine：按 Unicode 码点截断（review S3：增补平面 emoji 不截半，与 title-derive 同型语义）", () => {
+    // 第 48 个码点是 astral emoji（占 2 个 UTF-16 单元）：码点截断保留完整 emoji（49 单元），UTF-16 slice 会截出孤立代理项
+    const boundary = "x".repeat(47) + "😀";
+    expect(toTitleLine(boundary)).toBe(boundary);
+    expect(toTitleLine(boundary)).toHaveLength(49); // 47 BMP + 1 完整 emoji 的 UTF-16 长度
+    // 全 emoji 串：截到 48 个码点（96 单元），无孤立代理项
+    const emojiOnly = "😀".repeat(60);
+    const cut = toTitleLine(emojiOnly);
+    expect(Array.from(cut)).toHaveLength(48);
+    expect(cut.endsWith("😀")).toBe(true);
+    // 界内不截：恰 48 个码点原样返回
+    expect(toTitleLine("y".repeat(48))).toHaveLength(48);
+  });
 });

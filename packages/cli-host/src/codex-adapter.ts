@@ -244,7 +244,8 @@ export class CodexAdapter implements CliAdapter {
     // 原生 transcript 为空（如 CLI 版本漂移下 thread/read 无内容）时回退本地素材：user 文本（startTurn 记录）+ assistant 终文（delta 累计）
     const material = transcript.length > 0 ? transcript : this.localSummaryMaterial(s);
     if (material.length === 0) return null;
-    const out = path.join(tmpdir(), `kb-codex-title-${randomUUID().slice(0, 8)}.txt`);
+    // CODING_STANDARDS「路径分隔符」：传给子进程的参数用 posix 形态（Windows 平台感知 join 的 \ 可能被对端静默拒绝）；fs 读/删同串通用（Node 在 Windows 接受 /）
+    const out = path.posix.join(tmpdir().replace(/\\/g, "/"), `kb-codex-title-${randomUUID().slice(0, 8)}.txt`);
     const args = ["exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "--color", "never", "--output-last-message", out];
     if (s.model) args.push("--model", s.model);
     args.push("-"); // prompt 经 stdin
@@ -265,9 +266,12 @@ export class CodexAdapter implements CliAdapter {
       try {
         text = readFileSync(out, "utf8");
       } catch {
-        /* 未写出：按空产出处理 */
+        /* 未写出：按空产出处理（下方统一留痕） */
       }
-      return toTitleLine(text) || null;
+      const title = toTitleLine(text);
+      // review S2：exit 0 但空产出（文件缺失/为空）降级 null 前留 warn——失败可定位（ADR 0003：摘要失败不阻塞对话）
+      if (!title) this.log("title-empty", `Codex 标题摘要 exit 0 但输出文件缺失或为空：${out}`);
+      return title || null;
     } catch (e) {
       // #46 对齐 ensureStarted：exe 解析失败协议级映射；启动/超时/exit 非零包装均为 AdapterError 原样透传
       if (e instanceof ExeNotFoundError) throw new AdapterError("E_SPAWN_NOT_FOUND", e.message);

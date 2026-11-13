@@ -438,6 +438,7 @@ describe("session 通道（#7）", () => {
         cli: "claude",
         projectId: projectId ?? null,
         title: "新会话 · Claude",
+        titleSource: "default", // review A1：wire 行回带标题来源（#94 验收「session:list 回带 source」）
         dirIdentity: "main",
         status: "idle",
       });
@@ -1317,6 +1318,19 @@ describe("会话标题派生与手动重命名（#94 / ADR 0003：四态状态�
     expect(deps.sessions.get(sessionId)).toMatchObject({ title: "第一条消息", titleSource: "derived" });
   });
 
+  it("session:list 回带 titleSource（review A1：状态机各态经 wire 行透出，#94 验收）", async () => {
+    const deps = makeDeps(new FakeAdapter({ clock: new VirtualClock() }));
+    const handle = (raw: unknown) => handleIpc(deps, raw);
+    const created = await handle({ channel: "session:create", cli: "fake", cwd: "C:\\p" });
+    const sessionId = created.ok ? created.sessionId! : "";
+    await handle({ channel: "session:send", sessionId, text: "首条消息" }); // default → derived
+    await handle({ channel: "session:rename", sessionId, title: "手动名" }); // → manual
+    const list = await handle({ channel: "session:list" });
+    if (!list.ok) throw new Error("session:list 失败");
+    expect(list.sessions).toHaveLength(1);
+    expect(list.sessions![0]).toMatchObject({ title: "手动名", titleSource: "manual" });
+  });
+
   it("session:send 失败：不派生（标题保持原值，无「来自未发出消息」的标题）", async () => {
     const clock = new VirtualClock();
     const base = new FakeAdapter({ clock });
@@ -1366,6 +1380,30 @@ describe("会话标题派生与手动重命名（#94 / ADR 0003：四态状态�
     const empty = await handle({ channel: "session:rename", sessionId: "ghost", title: "" });
     expect(empty.ok).toBe(false);
     if (!empty.ok) expect(empty.error.code).toBe("E_SCHEMA");
+  });
+
+  it("session:rename PTY 行拒绝（review S5/C1：ADR 0003「PTY 永不进状态机」，标题/来源不被改写）", async () => {
+    const deps = makeDeps(new FakeAdapter({ clock: new VirtualClock() }));
+    const handle = (raw: unknown) => handleIpc(deps, raw);
+    deps.sessions.insert({
+      id: "tty-rn-1",
+      kind: "pty",
+      cli: "pty",
+      nativeSessionId: null,
+      projectId: null,
+      title: "终端 · pwsh",
+      cwd: null,
+      permMode: null,
+      lastActiveAt: null,
+      archivedAt: null,
+    });
+    const r = await handle({ channel: "session:rename", sessionId: "tty-rn-1", title: "不该生效的名字" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe("E_INTERNAL");
+      expect(r.error.message).toContain("PTY");
+    }
+    expect(deps.sessions.get("tty-rn-1")).toMatchObject({ title: "终端 · pwsh", titleSource: "default" });
   });
 });
 

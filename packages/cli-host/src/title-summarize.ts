@@ -9,7 +9,7 @@ export const DEFAULT_SUMMARIZE_TIMEOUT_MS = 60_000;
 /** 喂给摘要模型的最近对话文本上限（字符；超长截尾——最近上下文最能代表会话主题） */
 const MAX_TRANSCRIPT_CHARS = 4_000;
 
-/** 摘要标题单行长度上限（防御模型 disobey：多行/超长压成单行短标题） */
+/** 摘要标题单行码点数上限（防御模型 disobey：多行/超长压成单行短标题；按 Unicode 码点计，review S3） */
 const TITLE_MAX_CHARS = 48;
 
 export interface TitleOneShotOptions {
@@ -118,8 +118,10 @@ export function buildSummaryPrompt(transcript: TranscriptEvent[]): string {
   return `${SUMMARY_INSTRUCTION}\n\n${buildSummaryTranscript(transcript)}`;
 }
 
-/** 摘要产出整形：压成单行（空白折叠）、去首尾、限长（超长截断不加省略号——标题自短） */
+/** 摘要产出整形：压成单行（空白折叠）、去首尾、按 Unicode 码点限长截断（review S3：与 main title-derive 同型语义——Array.from 迭代码点，增补平面 emoji 不截半；超长截断不加省略号——标题自短） */
 export function toTitleLine(raw: string): string {
   const line = raw.replace(/\s+/g, " ").trim();
-  return line.slice(0, TITLE_MAX_CHARS);
+  const chars = Array.from(line);
+  if (chars.length <= TITLE_MAX_CHARS) return line;
+  return chars.slice(0, TITLE_MAX_CHARS).join("");
 }

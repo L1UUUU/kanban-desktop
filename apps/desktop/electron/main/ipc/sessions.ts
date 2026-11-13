@@ -29,6 +29,7 @@ function toSessionRow(rec: ReturnType<IpcDeps["sessions"]["list"]>[number]): Ses
     nativeSessionId: rec.nativeSessionId,
     projectId: rec.projectId,
     title: rec.title,
+    ...(rec.titleSource ? { titleSource: rec.titleSource } : {}), // review A1：标题来源回带（#94 验收）
     cwd: rec.cwd,
     permMode: rec.permMode,
     status: rec.status ?? null,
@@ -174,7 +175,12 @@ export const sessionHandlers: SubChannelHandlers<SessionRequest, IpcResult, IpcD
   },
   "session:rename": async (req, deps) => {
     // #94 / ADR 0003 手动重命名：置 manual（终态权威，吸收一切前态）；renderer 请求-响应后本地刷新（单窗口，无推送）
-    if (!deps.sessions.get(req.sessionId)) return sessionNotFound(req.sessionId);
+    const rec = deps.sessions.get(req.sessionId);
+    if (!rec) return sessionNotFound(req.sessionId);
+    // review S5/C1：PTY 行拒绝（ADR 0003「PTY 永不进状态机」——终端标题由 shell 回写，rename 不改写其标题/来源）
+    if (rec.kind !== "structured") {
+      return { ok: false, error: { code: "E_INTERNAL", message: "PTY 会话不支持重命名（标题由终端回写维护）" } };
+    }
     deps.sessions.renameTitle(req.sessionId, req.title);
     return { ok: true, title: req.title };
   },
