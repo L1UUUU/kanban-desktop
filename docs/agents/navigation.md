@@ -32,6 +32,7 @@
 | `docs/prototypes/stage*.prototype.html` | 四个阶段的 UI 原型（验收依据，已入库） |
 | `docs/acceptance/stage*/`、`docs/acceptance/logging/` | 各阶段验收报告与归档截图 |
 | `GLOSSARY.md`、`docs/agents/domain.md` | 领域术语与 domain docs 布局 |
+| `.out-of-scope/README.md` | 范围外决策账本（优先级声明 + 条目模板；"不做的决策"记这里，与 ADR 互补） |
 | `docs/agents/issue-tracker.md` | gh CLI 能力、关单惯例 |
 | `docs/agents/triage-labels.md` | 角色标签 |
 
@@ -39,7 +40,9 @@
 
 - **新增 config 字段**：`apps/desktop/electron/main/config.ts` 的 interface / defaultConfig / loadConfig 白名单 / index 传参，四处同步。
 - **新增 workspace 包**：`apps/desktop/electron.vite.config.ts` 的 `workspacePackages`、`pnpm-workspace.yaml`、各包 `package.json`、`pnpm-lock.yaml`；漏 vite 登记会让 Playwright 启动即崩（`pnpm check:gates` 已拦截）。
-- **新增测试 env 开关**：`docs/testing.md` 门禁协议表 + `scripts/check-gates.mjs`（B 类门控、`workspacePackages`、归档 PNG）；测试写入 `docs/acceptance/` 走 `KANBAN_UPDATE_SCREENSHOTS=1`。
+- **新增测试 env 开关**：`docs/testing.md` 门禁协议表 + `scripts/check-gates.mjs`（B 类门控、`workspacePackages`、归档 PNG、文档互链）；测试写入 `docs/acceptance/` 走 `KANBAN_UPDATE_SCREENSHOTS=1`。
+- **新增 CLI adapter**：对照现有三 CLI（claude/codex/opencode）同步登记：`packages/cli-host/src/<cli>/`（exe 探测链）+ `<cli>-adapter.ts`（含同名密封测试）+ `router-adapter.ts` + `host/desktop-adapters.ts`（注册与 Fake/`KANBAN_DISABLE_*` 开关）+ `apps/desktop/electron/main/command-catalog.ts` + `cli-status-service.ts` + `packages/cli-host/tests/e2e/` B 类件 + `docs/cli-compatibility-matrix.md`。
+- **推翻范围外决策**：落地 PR 内删除对应 `.out-of-scope/` 条目，并在 `docs/adr/` 记录反转理由（账本与现实同进退；条目语义见 `.out-of-scope/README.md`）。
 - **新增日志字段/枚举**：`packages/ipc-schema/src/log.ts` 单源定义，主进程与 renderer 一律导入，禁止各自定义同名枚举。
 - **搬测试文件**：改相对导入 + 扩 tsconfig/vitest include；双 e2e 目录别混（`apps/desktop/tests/e2e/` = vitest B 类，`apps/desktop/e2e/` = Playwright C 类）。
 - **改 UI 文案/结构**：`docs/acceptance/` 归档截图与 e2e 定位器可能同步失效；e2e 断言的字符串字面量（`packaged-smoke.cjs` 等）改前先 grep。

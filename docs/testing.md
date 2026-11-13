@@ -117,6 +117,14 @@ Playwright（`apps/desktop/playwright.config.ts`）：testDir `./e2e`，workers 
 - **测试归属跟随被测代码所在包**；**无根级 tests/**——不建根级大杂烩测试目录。
 - `adapter.contract.ts` 留在 `packages/cli-host/src/`：它是 A 类共置测试设施（被 `fake-adapter.test.ts` 等直接导入），B 类从 `tests/e2e/` 以 `../../src/adapter.contract` 引用。
 
+## 测试写法（判断性）
+
+归属、目录与门禁是机械规则（见上）；单个测试**写得好不好**按以下判断：
+
+- **验证行为，不验证实现**：通过公共接口断言可观察结果（"创建后能取回"），不测私有方法、不断言内部调用的次数或顺序。实现完全重写而行为未变时，测试不应变红；测试名描述"做了什么"（what）而非"怎么做的"（how）。
+- **mock 只打系统边界**：外部 API、CLI 子进程、时间与随机性、真实实例不切实际的 fs/db。**不 mock 自己的内部协作者**——若不 mock 内部就难测，先改接口（见 `CODING_STANDARDS.md`「接口设计」）而不是加 mock。A 类密封测试中的 fake adapter 是 CLI 系统边界的替身，不属"mock 内部"。
+- **纵向切片推进**（TDD）：一个测试 → 对应实现 → 再下一个测试，交替进行；不先写完全部测试再写实现——后者产出的是验证"想象中行为"的测试，对真实变化不敏感。
+
 ## 新增 B 类接线清单（零配置）
 
 include 均已通配（`packages/cli-host/vitest.config.ts`、`apps/desktop/vitest.config.ts` node project 含 `tests/**/*.test.ts`；两处 tsconfig 含 `tests/**/*.ts`），落对位置写对导入即可，不需要改任何配置：
@@ -140,7 +148,7 @@ include 均已通配（`packages/cli-host/vitest.config.ts`、`apps/desktop/vite
 
 ## 验收门禁命令（pre-commit / CI 强制）
 
-`.githooks/pre-commit` 与 `.github/workflows/checks.yml` 依次执行：`pnpm check:gates` → `pnpm lint:strict` → `pnpm typecheck` → `pnpm test`。`lint:strict` 是 `oxlint --deny-warnings`（warning 级违规如孤儿 import 也会让门禁失败）；`pnpm lint` 保留宽松语义仅供本地快速查看。`check:gates` 校验 B 类后缀门控、`workspacePackages` 与 workspace 包一致、归档 PNG 不被意外提交。CI 与本地跑同一套命令，不另立一套。
+`.githooks/pre-commit` 与 `.github/workflows/checks.yml` 依次执行：`pnpm check:gates` → `pnpm lint:strict` → `pnpm typecheck` → `pnpm test`。`lint:strict` 是 `oxlint --deny-warnings`（warning 级违规如孤儿 import 也会让门禁失败）；`pnpm lint` 保留宽松语义仅供本地快速查看。`check:gates` 校验 B 类后缀门控、`workspacePackages` 与 workspace 包一致、归档 PNG 不被意外提交、根与 docs 下 md 的相对链接目标存在（文档互链不腐化）。CI 与本地跑同一套命令，不另立一套。
 
 ## flaky 台账
 

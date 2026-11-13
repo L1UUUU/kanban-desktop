@@ -1,6 +1,6 @@
 // 用途：门禁契约确定性校验 —— 供 pre-commit / CI 调用，避免 docs/testing.md 与代码实况漂移靠人工终审发现
 import { readFileSync, readdirSync, existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, resolve, dirname, relative } from "node:path";
 import { execFileSync } from "node:child_process";
 
 const root = resolve(import.meta.dirname, "..");
@@ -61,6 +61,28 @@ if (checked) {
     ok(pngDirty.length ? `归档 PNG：${pngDirty.length} 个已由 KANBAN_ALLOW_ARCHIVE_PNG=1 显式放行` : "归档 PNG 无未预期改动");
   }
 }
+
+// 4) 文档互链不腐化：根 *.md + docs/**/*.md 的相对链接目标必须存在（防文件改名后链接静默 404）
+//    外链（http/https/mailto）与纯锚点不判；代码块内的内容不视为链接。
+const mdFiles = [
+  ...readdirSync(root).filter((f) => f.endsWith(".md")).map((f) => join(root, f)),
+  ...walk(join(root, "docs")).filter((f) => f.endsWith(".md")),
+];
+const linkRe = /\[[^\]]*\]\(([^)\s]+)\)/g;
+const brokenLinks = [];
+for (const md of mdFiles) {
+  const text = readFileSync(md, "utf8").replace(/```[\s\S]*?```/g, "");
+  for (const m of text.matchAll(linkRe)) {
+    const target = m[1].trim();
+    if (/^(https?:|mailto:|#)/i.test(target)) continue;
+    const pathPart = target.split("#")[0];
+    if (!pathPart) continue;
+    if (!existsSync(resolve(dirname(md), pathPart)))
+      brokenLinks.push(`${relative(root, md)} -> ${target}`);
+  }
+}
+if (brokenLinks.length) bad("文档互链", `以下相对链接目标不存在（改名的文档请同步改链接）：\n  ${brokenLinks.join("\n  ")}`);
+else ok(`文档互链：${mdFiles.length} 个 md 的相对链接全部有效`);
 
 if (failures.length) {
   console.error(`[check-gates] FAIL ${failures.length} 项：`);
