@@ -1,6 +1,6 @@
-// 用途：contextBridge 薄层 —— 向 renderer 暴露最小 IPC 面（app:getInfo + kanban:ipc/memory:ipc/residue:ipc/diff:ipc/config:ipc/models:ipc/cli:status 单通道 invoke + chat:event/terminal:event/tracker:event/memory:event/app:event/app:shutdown 订阅 + log:write 单向日志/log:getPath/log:openDir）；全部通道形状由 @kanban/ipc-schema 契约化，通道名经 IPC_CHANNELS 单源（#72 Step4），preload 不做校验（两端校验，spec E）
+// 用途：contextBridge 薄层 —— 向 renderer 暴露最小 IPC 面（app:getInfo + kanban:ipc/memory:ipc/residue:ipc/diff:ipc/config:ipc/models:ipc/cli:status 单通道 invoke + chat:event/terminal:event/tracker:event/memory:event/session:event/app:event/app:shutdown 订阅 + log:write 单向日志/log:getPath/log:openDir）；全部通道形状由 @kanban/ipc-schema 契约化，通道名经 IPC_CHANNELS 单源（#72 Step4），preload 不做校验（两端校验，spec E）
 import { contextBridge, ipcRenderer } from "electron";
-import { IPC_CHANNELS, type AdapterEvent, type AppEventWire, type AppInfo, type CliStatusRequest, type CliStatusResult, type ConfigRequest, type ConfigResult, type DiffRequest, type DiffResult, type IpcRequest, type IpcResult, type LogCtx, type LogLevel, type MemoryEventWire, type MemoryRequest, type MemoryResult, type ModelsRequest, type ModelsResult, type ResidueRequest, type ResidueResult, type ShutdownNotice, type TerminalEvent, type TrackerChangeWire } from "@kanban/ipc-schema";
+import { IPC_CHANNELS, type AdapterEvent, type AppEventWire, type AppInfo, type CliStatusRequest, type CliStatusResult, type ConfigRequest, type ConfigResult, type DiffRequest, type DiffResult, type IpcRequest, type IpcResult, type LogCtx, type LogLevel, type MemoryEventWire, type MemoryRequest, type MemoryResult, type ModelsRequest, type ModelsResult, type ResidueRequest, type ResidueResult, type SessionEventWire, type ShutdownNotice, type TerminalEvent, type TrackerChangeWire } from "@kanban/ipc-schema";
 
 const api = {
   /** 拉取应用运行信息（名称/版本/平台/SQLite 入口），用于骨架冒烟展示 */
@@ -53,6 +53,12 @@ const api = {
     const listener = (_e: unknown, event: MemoryEventWire): void => handler(event);
     ipcRenderer.on("memory:event", listener);
     return () => ipcRenderer.off("memory:event", listener);
+  },
+  /** #95：订阅会话级事件流（title 摘要标题推送，schema 见 sessionEventSchema），返回注销函数 */
+  onSessionEvent: (handler: (event: SessionEventWire) => void): (() => void) => {
+    const listener = (_e: unknown, event: SessionEventWire): void => handler(event);
+    ipcRenderer.on("session:event", listener);
+    return () => ipcRenderer.off("session:event", listener);
   },
   /** #49：订阅应用级事件流（residue-detected 残留检测一次性通知，schema 见 appEventSchema），返回注销函数 */
   onAppEvent: (handler: (event: AppEventWire) => void): (() => void) => {

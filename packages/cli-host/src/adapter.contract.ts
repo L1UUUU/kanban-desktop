@@ -2,6 +2,7 @@
 import { expect, it } from "vitest";
 import { commandEntrySchema, transcriptEventSchema, type AdapterEvent, type ChatEvent } from "@kanban/ipc-schema";
 import type { CliAdapter } from "./adapter";
+import { FAKE_SUMMARIZED_TITLE } from "./fake-adapter";
 
 /** 契约套件上下文：adapter 被测实例；driveIdle 推进到无待处理活动（Fake=虚拟时钟 runToIdle，真实 CLI=轮询等待） */
 export interface ContractCtx {
@@ -69,8 +70,13 @@ export interface ContractOptions {
   once?: { outputContains?: string[]; expectSecondAsk?: boolean; verify?: () => Promise<void> };
   /** allow-always 分支断言 */
   always?: { outputContains?: string[]; finalContains?: string[]; expectNoSecondAsk?: boolean; verify?: () => Promise<void> };
-  /** listCommands（#89）条数下限：缺省 1（Fake 固定集非空）；真实 CLI 命令集随机器安装目录/版本不定时传 0 放宽为纯形状校验 */
+  /** listCommands（#89）条数下限：缺省 1；Fake 恒空集（ADR 0004 零内置命令，契约套件传 0 放宽为纯形状校验）；真实 CLI 命令集随机器安装目录/版本不定同样传 0 */
   listCommands?: { atLeast?: number };
+  /**
+   * summarizeTitle（#95）断言口径：缺省 "exact"（Fake 精确固定值）；真实 CLI 传 "loose"（非空单行短标题——摘要真实生成）；
+   * opencode 传 "null"（无一次性摘要能力，降级保留 fallback）。三口径共用「会话上下文零污染」不变量断言。
+   */
+  summarizeTitle?: "exact" | "loose" | "null";
 }
 
 export function defineAdapterContractTests(
@@ -367,6 +373,31 @@ export function defineAdapterContractTests(
       expect(c.description).toBeDefined();
     }
   });
+
+  it("summarizeTitle（#95）：首轮后一次性摘要返回单行短标题（fake 固定值/真实放宽/null 降级），且不污染会话上下文（readHistory/readTranscript 零新增）", async () => {
+    const { adapter, driveIdle } = await make();
+    const { sessionId } = await adapter.createSession({ cwd: contractCwd });
+    await adapter.sendTurn({ sessionId, text: turnText });
+    await driveIdle();
+    const historyBefore = await adapter.readHistory(sessionId);
+    const transcriptBefore = await adapter.readTranscript(sessionId);
+    const title = await adapter.summarizeTitle(sessionId);
+    const mode = opts?.summarizeTitle ?? "exact";
+    if (mode === "null") {
+      expect(title).toBeNull(); // opencode：prompt API 需会话上下文，降级保留 fallback 派生标题
+    } else if (mode === "exact") {
+      expect(title).toBe(FAKE_SUMMARIZED_TITLE); // Fake 固定值（整机 e2e 同值断言）
+    } else {
+      expect(typeof title).toBe("string"); // 真实 CLI：摘要真实生成
+      expect((title as string).length).toBeGreaterThan(0);
+      expect((title as string).length).toBeLessThanOrEqual(48); // 单行短标题口径（toTitleLine 限长）
+      expect(title).not.toContain("\n");
+    }
+    // 上下文零污染（ADR 0003）：摘要为独立一次性进程——会话事件流与原生历史都不多出摘要轮次
+    expect(await adapter.readHistory(sessionId)).toHaveLength(historyBefore.length);
+    expect(await adapter.readTranscript(sessionId)).toHaveLength(transcriptBefore.length);
+  });
+
 
   it("非法时序：对已决/过期审批响应 → E_APPROVAL_EXPIRED；未知会话 → E_SESSION_NOT_FOUND", async () => {
     const { adapter, driveIdle } = await make();

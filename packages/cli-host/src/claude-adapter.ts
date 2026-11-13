@@ -1,4 +1,4 @@
-// 用途：ClaudeAdapter —— C1 契约的真实 Claude 实现：stream-json 行协议直连（每会话一进程，poc-7 client 演进）、stdio 审批（can_use_tool 控制请求）、interrupt 归类已取消、--resume 跨重启恢复、--settings 会话级 hook 注入产生 verified SkillObservation（t0-02 裁决：无 SDK 备选路径）、listModels spawn 临时进程 initialize 握手读 models 数组（#78）、setModel 活进程 set_model 控制请求 + 实际模型名回写会话态（#79）
+// 用途：ClaudeAdapter —— C1 契约的真实 Claude 实现：stream-json 行协议直连（每会话一进程，poc-7 client 演进）、stdio 审批（can_use_tool 控制请求）、interrupt 归类已取消、--resume 跨重启恢复、--settings 会话级 hook 注入产生 verified SkillObservation（t0-02 裁决：无 SDK 备选路径）、listModels spawn 临时进程 initialize 握手读 models 数组（#78）、setModel 活进程 set_model 控制请求 + 实际模型名回写会话态（#79）、summarizeTitle 一次性 claude -p 标题摘要（#95）
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -13,6 +13,7 @@ import { prepareSessionHookDir, resolveHookNodeBin, tailJsonl, writeSessionSetti
 import { findTranscriptFile, parseTranscriptEvents, parseTranscriptItems } from "./claude/transcript";
 import { resolveUserClaudeDir } from "./skill-conflicts";
 import { isAuthFailureStatus, isAuthFailureText } from "./session-error";
+import { buildSummaryPrompt, DEFAULT_SUMMARIZE_TIMEOUT_MS, runTitleOneShot, toTitleLine } from "./title-summarize";
 
 /** 可注入的流客户端面（生产 ClaudeStreamClient；测试 Fake 手动驱动协议消息） */
 export interface ClaudeStreamClientLike {
@@ -43,6 +44,8 @@ export interface ClaudeAdapterOptions {
   userClaudeDir?: string;
   /** 测试注入客户端工厂 */
   clientFactory?: (options: ClaudeStreamOptions) => ClaudeStreamClientLike;
+  /** #95：标题摘要一次性进程超时 ms（缺省 60s，独立设定不沿用 run-once 300s） */
+  summarizeTimeoutMs?: number;
   /** 诊断日志 */
   log?: (kind: LogKind, detail: string) => void;
 }
@@ -108,6 +111,9 @@ export class ClaudeAdapter implements CliAdapter {
   private readonly userClaudeDir: string | null;
   private readonly clientFactory: (options: ClaudeStreamOptions) => ClaudeStreamClientLike;
   private readonly log: (kind: LogKind, detail: string) => void;
+  /** #95：config 手动覆盖 exe（summarizeTitle 的 exe 解析复用同链）与摘要一次性超时 */
+  private readonly manualExe: string | null;
+  private readonly summarizeTimeoutMs: number;
   private exeCache: string | null = null;
   /** 模型目录缓存（listModels #78：握手成功结果复用，进程生命周期内不重复握手；失败清空可重试） */
   private modelsPromise: Promise<ModelEntry[]> | null = null;
@@ -117,14 +123,15 @@ export class ClaudeAdapter implements CliAdapter {
     this.hookDir = options.hookDir ?? path.join(tmpdir(), "kanban-claude-hooks");
     this.hookNodeBin = resolveHookNodeBin(options.hookNodeBin);
     this.userClaudeDir = options.userClaudeDir ?? null;
+    this.manualExe = options.exe ?? null;
+    this.summarizeTimeoutMs = options.summarizeTimeoutMs ?? DEFAULT_SUMMARIZE_TIMEOUT_MS;
     const factory = options.clientFactory;
     if (factory) {
       this.clientFactory = factory;
     } else {
       // 生产：exe 显式解析（手动覆盖 → env → npm 全局 → where/which；缓存成功结果）
-      const manualOverride = options.exe ?? null;
       this.clientFactory = (opts) =>
-        new ClaudeStreamClient({ ...opts, exe: this.resolveExe(manualOverride) }) as unknown as ClaudeStreamClientLike;
+        new ClaudeStreamClient({ ...opts, exe: this.resolveExe(this.manualExe) }) as unknown as ClaudeStreamClientLike;
     }
   }
 
@@ -260,6 +267,38 @@ export class ClaudeAdapter implements CliAdapter {
     }
     s.model = actual; // 回写实际名：resume 重 spawn 以 --model 携带（spec #75：切换不因进程重启丢失）
     return { model: actual };
+  }
+
+  /**
+   * 一次性标题摘要（#95 / ADR 0003 决策 3）：spawn 独立 `claude -p` 一次性进程——prompt（截断最近对话文本）经 stdin、
+   * 会话当前模型经 --model、全新 --session-id（不触碰会话 transcript，上下文零污染）；超时独立设定；断开会话亦可摘要
+   * （transcript 落盘为权威源）。无对话素材返回 null；失败/超时抛 AdapterError（调用方静默不重试）。
+   */
+  async summarizeTitle(sessionId: string): Promise<string | null> {
+    const s = this.requireSession(sessionId);
+    const transcript = await this.readTranscript(sessionId);
+    if (transcript.length === 0) return null;
+    const args = ["-p", "--output-format", "text", "--session-id", randomUUID()];
+    if (s.model) args.push("--model", s.model);
+    try {
+      const r = await runTitleOneShot({
+        exe: this.resolveExe(this.manualExe),
+        args,
+        cwd: s.cwd,
+        stdin: buildSummaryPrompt(transcript),
+        timeoutMs: this.summarizeTimeoutMs,
+        log: this.log,
+      });
+      if (r.exitCode !== 0) {
+        throw new AdapterError("E_INTERNAL", `Claude 标题摘要失败（exit ${r.exitCode}）：${r.stderr.trim().slice(0, 200)}`);
+      }
+      return toTitleLine(r.stdout) || null;
+    } catch (e) {
+      // #46 对齐 createSession：exe 解析失败协议级映射；runTitleOneShot 的启动/超时错误与 exit 非零包装均为 AdapterError 原样透传
+      if (e instanceof ExeNotFoundError) throw new AdapterError("E_SPAWN_NOT_FOUND", e.message);
+      if (e instanceof AdapterError) throw e;
+      throw new AdapterError("E_INTERNAL", `Claude 标题摘要失败：${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   async resolveApproval(input: ResolveApprovalInput): Promise<void> {

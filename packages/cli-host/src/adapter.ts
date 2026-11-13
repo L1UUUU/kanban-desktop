@@ -163,6 +163,12 @@ export interface CliAdapter {
    * opencode 仅更新会话态（prompt 请求已带 model）；fake 存储 no-op。返回下一轮实际生效的模型名；失败抛 AdapterError。
    */
   setModel(input: SetModelInput): Promise<{ model: string }>;
+  /**
+   * 一次性标题摘要（#95 / ADR 0003 决策 3）：spawn 独立一次性进程（喂截断的最近对话文本、会话当前模型、
+   * 超时独立设定），不进会话事件流、不污染会话上下文；返回单行标题文本，null = 无素材或该 CLI 无摘要能力
+   * （opencode prompt API 需会话上下文，恒 null 降级保留 fallback）。失败/超时抛 AdapterError（调用方静默不重试）。
+   */
+  summarizeTitle(sessionId: string): Promise<string | null>;
   /** 订阅归一化事件流（ChatEvent ∪ SkillObservation），返回退订函数 */
   subscribe(handler: (event: AdapterEvent) => void): () => void;
 }

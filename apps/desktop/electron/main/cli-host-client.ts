@@ -162,6 +162,11 @@ export class CliHostClient implements CliAdapter {
     return this.send({ kind: "setModel", payload: input });
   }
 
+  /** #95 / ADR 0003：一次性标题摘要（worker 内 router → adapter；返回值经命令往返，不入 ChatEvent 事件流；null = 无摘要能力） */
+  async summarizeTitle(sessionId: string): Promise<string | null> {
+    return this.send({ kind: "summarizeTitle", payload: sessionId });
+  }
+
   async resolveApproval(input: ResolveApprovalInput): Promise<void> {
     return this.send({ kind: "resolveApproval", payload: input });
   }

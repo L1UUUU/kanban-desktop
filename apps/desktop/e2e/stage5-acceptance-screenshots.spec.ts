@@ -8,6 +8,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { shot } from "./helpers/acceptance-artifacts";
+import { FAKE_SUMMARY_TITLE } from "./helpers/fake-summary";
 
 const PROJECT_NAME = "kb-s5-repo";
 const SHOT_DIR = resolve(__dirname, "../../../docs/acceptance/stage5/screenshots");
@@ -59,13 +60,13 @@ async function send(win: Page, text: string): Promise<void> {
 }
 
 /** 经项目行「＋」→ 菜单选 CLI：草稿语义——发出首条消息才创建会话（行出现） */
-async function createSession(win: Page, cliLabel: string): Promise<void> {
+async function createSession(win: Page, cliLabel: string, text = "首条消息（建立会话）"): Promise<void> {
   await win.locator("aside").getByText(PROJECT_NAME, { exact: true }).hover();
   await win.getByRole("button", { name: "＋", exact: true }).click();
   await win.getByRole("button", { name: cliLabel, exact: true }).click();
   await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
-  await send(win, "首条消息（建立会话）");
-  await expect(win.getByText(`新会话 · ${cliLabel}`).first()).toBeVisible({ timeout: 10_000 });
+  await send(win, text);
+  await expect(win.locator("aside").getByText(text).first()).toBeVisible({ timeout: 10_000 }); // #94：标题=首条派生
 }
 
 /** 定位侧栏某标题的会话行容器（含 hover 操作区；div.group 同时匹配项目行，靠标题区分） */
@@ -116,11 +117,11 @@ test("原型对照①②：草稿态 + 提交失败卡 + 行 hover 归档/删除
 
     // 重试成功 → 会话行出现（供 hover 操作与删除确认截图）
     await card.getByRole("button", { name: "重试发送" }).click();
-    await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
+    await expect(win.locator("aside").getByText("要重试的首条")).toBeVisible({ timeout: 10_000 }); // #94：标题=首条派生
     await expect(win.getByText("空闲").first()).toBeVisible({ timeout: 20_000 });
 
     // 行 hover：归档/删除操作区（原型演示② .ops；常驻 pr 预留右缘，徽标不进入）
-    const row = sessionRow(win, "新会话 · Claude");
+    const row = sessionRow(win, FAKE_SUMMARY_TITLE); // #95：空闲后行标题=摘要固定值
     await row.hover();
     await expect(row.getByRole("button", { name: "归档", exact: true })).toBeVisible();
     await shot(win, SHOT_DIR, "03-session-hover-ops.png");
@@ -129,7 +130,7 @@ test("原型对照①②：草稿态 + 提交失败卡 + 行 hover 归档/删除
     await row.getByRole("button", { name: "删除", exact: true }).click();
     const dialog = win.getByTestId("delete-session-dialog");
     await expect(dialog).toBeVisible({ timeout: 10_000 });
-    await expect(dialog).toContainText("确定删除『新会话 · Claude』吗？");
+    await expect(dialog).toContainText(`确定删除『${FAKE_SUMMARY_TITLE}』吗？`); // #95：行标题=摘要固定值
     await expect(dialog).toContainText("CLI 原生历史文件不删除。此操作不可撤销。");
     await shot(win, SHOT_DIR, "04-delete-confirm.png");
     await dialog.getByRole("button", { name: "取消" }).click();
@@ -149,12 +150,12 @@ test("原型对照③⑤ + 布局基线：断开恢复引导条 + 设置面板�
     await first.win.getByRole("button", { name: "＋ 注册", exact: true }).click();
     await expect(first.win.locator("aside").getByText(PROJECT_NAME, { exact: true })).toBeVisible({ timeout: 15_000 });
     await createSession(first.win, "Claude");
-    const rowA = sessionRow(first.win, "新会话 · Claude");
+    const rowA = sessionRow(first.win, "首条消息（建立会话）");
     await rowA.hover();
     await rowA.getByRole("button", { name: "归档", exact: true }).click();
-    await expect(first.win.locator("aside").getByText("新会话 · Claude")).toHaveCount(0, { timeout: 10_000 });
-    await createSession(first.win, "Codex");
-    await createSession(first.win, "OpenCode");
+    await expect(first.win.locator("aside").getByText("首条消息（建立会话）")).toHaveCount(0, { timeout: 10_000 });
+    await createSession(first.win, "Codex", "码字会话首条");
+    await createSession(first.win, "OpenCode", "开码会话首条");
     await first.win.locator("aside").getByText(PROJECT_NAME, { exact: true }).hover();
     await first.win.getByRole("button", { name: "＋", exact: true }).click();
     await first.win.getByRole("button", { name: /PTY 终端/ }).click();
@@ -174,13 +175,13 @@ test("原型对照③⑤ + 布局基线：断开恢复引导条 + 设置面板�
     await first.app.close();
 
     // 直接写库造超期：B(Codex) 最后活跃改为 3 天前（天数 1 即超期；C/PTY 为新近活跃不触发）
-    seedExpired(userData, "新会话 · Codex", "2020-01-01T00:00:00.000Z");
+    seedExpired(userData, "码字会话首条", "2020-01-01T00:00:00.000Z"); // #94：B 行标题=首条派生
 
     // 第二段（同一 userData 重启）：启动扫描归档 B；留存行断开态 + 恢复引导条 + 设置面板三区
     const second = await launchApp(userData);
     const win = second.win;
     await expect(win.getByText("已断开").first()).toBeVisible({ timeout: 15_000 });
-    await expect(win.locator("aside").getByText("新会话 · Codex")).toHaveCount(0, { timeout: 10_000 }); // B 已被自动归档移出
+    await expect(win.locator("aside").getByText("码字会话首条")).toHaveCount(0, { timeout: 10_000 }); // B 已被自动归档移出
 
     // 布局基线（必须一致项）：顶栏 42px + 应用名/项目徽标/设置入口；侧栏三分组 + 底部三入口；会话行 色点+主仓库徽标+状态徽标
     await expect(win.locator("header")).toHaveCSS("height", "42px");
@@ -196,10 +197,10 @@ test("原型对照③⑤ + 布局基线：断开恢复引导条 + 设置面板�
     await shot(win, SHOT_DIR, "08-layout-baseline.png");
 
     // 断开会话恢复引导条（必须一致项：文案与按钮与现网 ResumeBanner 一字不差）
-    await win.locator("aside").getByText("新会话 · OpenCode").click();
+    await win.locator("aside").getByText("开码会话首条").click(); // #94：行标题=首条派生
     const resumeBanner = win.getByTestId("resume-banner");
     await expect(resumeBanner).toBeVisible({ timeout: 10_000 });
-    await expect(resumeBanner).toContainText("📴 会话「新会话 · OpenCode」来自上次运行（CLI 已退出）。缓存消息不替代原生历史。");
+    await expect(resumeBanner).toContainText("📴 会话「开码会话首条」来自上次运行（CLI 已退出）。缓存消息不替代原生历史。");
     await expect(win.getByRole("button", { name: "读取原生历史并恢复" })).toBeVisible();
     await shot(win, SHOT_DIR, "05-disconnected-resume-banner.png");
 
@@ -217,8 +218,8 @@ test("原型对照③⑤ + 布局基线：断开恢复引导条 + 设置面板�
     // 已归档分组（原型演示③ .arch-group）：当前项目组默认展开，组头 名称+N 条，条目 色点/标题/CLI/最后活跃/归档时间/操作
     const group = win.getByTestId("archived-group").filter({ hasText: PROJECT_NAME });
     await expect(group.getByTestId("archived-group-head")).toContainText("2 条");
-    await expect(group.getByTestId("archived-item").filter({ hasText: "新会话 · Claude" })).toContainText("最后活跃");
-    await expect(group.getByTestId("archived-item").filter({ hasText: "新会话 · Codex" })).toContainText("归档于");
+    await expect(group.getByTestId("archived-item").filter({ hasText: "首条消息（建立会话）" })).toContainText("最后活跃"); // #94：A 行标题=首条派生
+    await expect(group.getByTestId("archived-item").filter({ hasText: "码字会话首条" })).toContainText("归档于");
     await shot(win, SHOT_DIR, "07-archived-group.png");
     await second.app.close();
   } finally {

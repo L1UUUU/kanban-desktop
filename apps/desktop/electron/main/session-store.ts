@@ -1,6 +1,9 @@
-// 用途：sessions 表 store（纯数据面，#70 C2 微加深）—— 会话落库/列表/状态与活跃时间更新（C3 表已在 db.ts 建好；重启恢复 = 新实例读同一库文件）；#58 起归档/取消归档/删除与未归档守卫（spec #57 D 节：迟到事件不得复活归档行）；#70 起 ChatEvent 落库收口 applyEvent + insert 缺省 idle（「新建恒 idle」决策收进 store），状态流转编排决策在 session-lifecycle
-import type { ChatEvent, PermMode, SessionStatus } from "@kanban/ipc-schema";
+// 用途：sessions 表 store（纯数据面，#70 C2 微加深）—— 会话落库/列表/状态与活跃时间更新（C3 表已在 db.ts 建好；重启恢复 = 新实例读同一库文件）；#58 起归档/取消归档/删除与未归档守卫（spec #57 D 节：迟到事件不得复活归档行）；#70 起 ChatEvent 落库收口 applyEvent + insert 缺省 idle（「新建恒 idle」决策收进 store），状态流转编排决策在 session-lifecycle；#94 起标题来源四态门控（ADR 0003：applyDerivedTitle 单向升级 / renameTitle 置 manual 终态 / updateTitle 保持 PTY 无条件写豁免）
+import type { ChatEvent, PermMode, SessionStatus, TitleSource } from "@kanban/ipc-schema";
 import type { SqliteDb } from "./db";
+
+/** 会话标题来源四态（#94 / ADR 0003）：default（默认）→ derived（首条消息截断派生，单向）→ summarized（首轮摘要，T2）；manual（用户重命名，终态权威，吸收一切前态）——枚举单源于 ipc-schema（review A1），此处 re-export 保持既有导入面 */
+export type { TitleSource };
 
 /** sessions 行（wire 形状见 sessionRowSchema；此处为 DB 记录面，目录身份由 Main 按需判定不入库） */
 export interface SessionRecord {
@@ -10,6 +13,8 @@ export interface SessionRecord {
   nativeSessionId: string | null;
   projectId: string | null;
   title: string | null;
+  /** #94：标题来源（INSERT 可省略——缺省落 'default'；PTY 行永不进状态机，恒 'default' 无行为影响） */
+  titleSource?: TitleSource;
   cwd: string | null;
   permMode: PermMode | null;
   /** 会话状态（INSERT 可省略——缺省落 idle，新建恒 idle；SELECT 读回恒非 undefined） */
@@ -22,7 +27,7 @@ export interface SessionRecord {
 }
 
 /** INSERT 列（created_at 走 DB 默认值不显式写入） */
-const COLS = "id, kind, cli, native_session_id, project_id, title, cwd, perm_mode, status, last_active_at, archived_at";
+const COLS = "id, kind, cli, native_session_id, project_id, title, title_source, cwd, perm_mode, status, last_active_at, archived_at";
 /** SELECT 列（INSERT 列 + created_at） */
 const SELECT_COLS = `${COLS}, created_at`;
 
@@ -40,7 +45,7 @@ export class SessionStore {
     this.db
       .prepare(
         // created_at：显式值优先（测试/回填），缺省回落 DB 同款默认表达式（保持新库直建与老路径时间格式一致）
-        `INSERT INTO sessions (${SELECT_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))`,
+        `INSERT INTO sessions (${SELECT_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))`,
       )
       .run(
         rec.id,
@@ -49,6 +54,7 @@ export class SessionStore {
         rec.nativeSessionId,
         rec.projectId,
         rec.title,
+        rec.titleSource ?? "default", // #94：缺省 default（v5 列 NOT NULL DEFAULT 同款决策收进 store）
         rec.cwd,
         rec.permMode,
         rec.status ?? "idle", // #70：缺省 idle——「新建恒 idle」决策收进 store（调用方不再传）
@@ -130,9 +136,31 @@ export class SessionStore {
     return "applied";
   }
 
-  /** 标题更新（#60：PTY 草稿先落库占位、spawn 成功后回写「终端 · shell」标题；spawn 失败回删占位行复用上方 #58 delete） */
+  /** 标题更新（#60：PTY 草稿先落库占位、spawn 成功后回写「终端 · shell」标题；spawn 失败回删占位行复用上方 #58 delete；
+   *  #94 / ADR 0003 PTY 豁免：无条件写且不动 title_source——PTY 行永不进状态机） */
   updateTitle(id: string, title: string): void {
     this.db.prepare("UPDATE sessions SET title = ? WHERE id = ?").run(title, id);
+  }
+
+  /** #94 / ADR 0003 派生标题门控写：仅 title_source='default' 时升级为 derived（单向，derived/manual 不被覆盖）；返回是否生效 */
+  applyDerivedTitle(id: string, title: string): boolean {
+    const r = this.db
+      .prepare("UPDATE sessions SET title = ?, title_source = 'derived' WHERE id = ? AND title_source = 'default'")
+      .run(title, id);
+    return Number(r.changes) > 0;
+  }
+
+  /** #94 / ADR 0003 手动重命名：无条件写 title 并置 manual（终态权威，吸收一切前态；此后自动机制不再触碰该行标题） */
+  renameTitle(id: string, title: string): void {
+    this.db.prepare("UPDATE sessions SET title = ?, title_source = 'manual' WHERE id = ?").run(title, id);
+  }
+
+  /** #95 / ADR 0003 摘要标题门控写：仅 title_source='derived' 时升级为 summarized（单向；竞态下的 manual/已删行/已 summarized 均零行命中）；返回是否生效 */
+  applySummarizedTitle(id: string, title: string): boolean {
+    const r = this.db
+      .prepare("UPDATE sessions SET title = ?, title_source = 'summarized' WHERE id = ? AND title_source = 'derived'")
+      .run(title, id);
+    return Number(r.changes) > 0;
   }
 
 }
@@ -146,6 +174,7 @@ function rowToRecord(r: Record<string, unknown>): SessionRecord {
     nativeSessionId: (r.native_session_id as string | null) ?? null,
     projectId: (r.project_id as string | null) ?? null,
     title: (r.title as string | null) ?? null,
+    titleSource: ((r.title_source as TitleSource | null) ?? "default"),
     cwd: (r.cwd as string | null) ?? null,
     permMode: (r.perm_mode as PermMode | null) ?? null,
     status: (r.status as SessionStatus | null) ?? null,

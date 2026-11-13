@@ -1,6 +1,6 @@
 // 用途：@kanban/cli-host 入口 —— C1 Adapter 统一契约 + FakeAdapter + CodexAdapter/ClaudeAdapter/OpenCodeAdapter（真实结构化会话）+ AdapterRouter + CliHost seam
 export * from "./adapter";
-export { FakeAdapter, type FakeAdapterOptions } from "./fake-adapter";
+export { FakeAdapter, FAKE_SUMMARIZED_TITLE, type FakeAdapterOptions } from "./fake-adapter";
 export type { ScriptStep } from "./fake-scripts";
 export { pickScript, DEFAULT_TURN_SCRIPT, APPROVAL_SCRIPT, EXPIRY_SCRIPT, ERROR_SCRIPT } from "./fake-scripts";
 export { detectSkillConflicts, resolveUserClaudeDir } from "./skill-conflicts";

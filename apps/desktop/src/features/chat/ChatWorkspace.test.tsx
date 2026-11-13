@@ -1,6 +1,6 @@
 // 用途：聊天区组件测试（spec Testing seam 4）—— FakeAdapter 事件流直连驱动真实组件：流式/工具卡/审批三键/取消/权限切换/切会话不中断/项目注册与重启恢复（对照原型一致项 2/3/5/6/7）
 /// <reference types="node" /> <!-- 本文件用 node:fs/os/path 建持久化 fixture（重启恢复用例） -->
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -253,6 +253,17 @@ async function registerProject(t: { transport: ChatTransport; flush: () => Promi
   return r.currentProjectId;
 }
 
+/** 侧栏会话行文本查找（#94：首条消息后侧栏标题=派生文本，与中央区气泡同文，须限定侧栏） */
+function sidebarText(text: string): HTMLElement {
+  return within(screen.getByRole("complementary")).getByText(text);
+}
+
+/** 中央区文本命中（排除侧栏行标题的同文命中，#94；返回非空 = 气泡/消息流内存在） */
+function centerTexts(text: string): HTMLElement[] {
+  const aside = screen.getByRole("complementary");
+  return screen.getAllByText(text).filter((el) => !aside.contains(el));
+}
+
 /** #59 点项目行「＋」菜单选 CLI 后在草稿面板发首条消息（草稿 → 会话出现在侧栏；#77 起待模型就绪可发） */
 async function createViaMenu(cliLabel = "Claude", text = "默认演示"): Promise<void> {
   fireEvent.click(screen.getByRole("button", { name: "＋" }));
@@ -262,7 +273,7 @@ async function createViaMenu(cliLabel = "Claude", text = "默认演示"): Promis
     await waitFor(() => expect((screen.getByRole("combobox") as HTMLInputElement).value).not.toBe("模型列表加载中…"));
     send(text);
   });
-  await screen.findByText(`新会话 · ${cliLabel}`);
+  await within(screen.getByRole("complementary")).findByText(text); // #94：侧栏行标题=首条消息派生
 }
 
 describe("聊天区（原型一致项 5/6/7）", () => {
@@ -296,7 +307,7 @@ describe("聊天区（原型一致项 5/6/7）", () => {
       send("把 ipc-schema 的类型拆成独立文件");
     });
     t.advance();
-    expect(screen.getByText("把 ipc-schema 的类型拆成独立文件")).toBeTruthy();
+    expect(centerTexts("把 ipc-schema 的类型拆成独立文件").length).toBeGreaterThan(0); // 气泡（侧栏行标题同文，#94）
     expect(screen.getByText("好的，我先跑一遍现有测试确认基线，然后开始拆分。")).toBeTruthy();
     expect(
       screen.getByText("基线全绿。现在把 chat 与 session 两个命名空间拆成独立文件，并在 index 里保持原导出面不变。"),
@@ -572,7 +583,7 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     expect(screen.queryByText(/OpenCode 权限档位为 server 级/)).toBeNull(); // boot 演示草稿（fake）不显示
     const projectId = await registerProject(t, projDir);
     await act(async () => {
-      await createViaDraft(t.ctl, "fake", { projectId }, "默认演示"); // 同项目 fake 会话：也不显示
+      await createViaDraft(t.ctl, "fake", { projectId }, "fake 会话的首条"); // 同项目 fake 会话：也不显示
     });
     expect(screen.queryByText(/OpenCode 权限档位为 server 级/)).toBeNull();
     await act(async () => {
@@ -580,7 +591,7 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     });
     expect(screen.getByText(/OpenCode 权限档位为 server 级（同项目下会话共享）；切换后新会话生效/)).toBeTruthy();
     // 切回 fake 会话：说明消失
-    fireEvent.click(screen.getByText("新会话 · Fake"));
+    fireEvent.click(sidebarText("fake 会话的首条")); // #94：标题=首条消息派生
     expect(screen.queryByText(/OpenCode 权限档位为 server 级/)).toBeNull();
   });
 
@@ -591,18 +602,18 @@ describe("聊天区（原型一致项 5/6/7）", () => {
       send("默认演示"); // A 开始流式
     });
     const aId = t.ctl().activeId;
-    // A 流式中经草稿新建并切到 B（B 的首条也跑默认剧本，与 A 同文 → 用激活态区分视图）
+    // A 流式中经草稿新建并切到 B（B 用不同首条消息——#94 后标题=首条派生，不同文才可按行区分）
     await act(async () => {
-      await createViaDraft(t.ctl, "fake");
+      await createViaDraft(t.ctl, "fake", undefined, "第二个会话的首条");
     });
     const bId = t.ctl().activeId;
     expect(bId).toBeTruthy();
     expect(bId).not.toBe(aId);
-    expect(screen.getByText("新会话 · Fake")).toBeTruthy();
+    expect(sidebarText("第二个会话的首条")).toBeTruthy();
     t.advance(); // A/B 都在后台完成
     expect(t.ctl().activeId).toBe(bId); // 当前视图仍是 B
     // 切回 A：全文在（流式未被切换打断）
-    fireEvent.click(screen.getByText("演示会话 · Fake"));
+    fireEvent.click(sidebarText("默认演示")); // A 行标题=其首条派生（#94）
     expect(
       screen.getByText("基线全绿。现在把 chat 与 session 两个命名空间拆成独立文件，并在 index 里保持原导出面不变。"),
     ).toBeTruthy();
@@ -621,7 +632,7 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     await act(async () => {
       send("默认演示");
     });
-    expect(screen.getByText("新会话 · Fake")).toBeTruthy();
+    expect(sidebarText("默认演示")).toBeTruthy();
     expect(screen.queryByTestId("draft-hint")).toBeNull();
     expect(t.ctl().draft).toBeNull();
   });
@@ -633,10 +644,10 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     await act(async () => {
       send("默认演示");
     });
-    expect(screen.getByText("演示会话 · Fake")).toBeTruthy();
+    expect(sidebarText("默认演示")).toBeTruthy();
     fireEvent.click(screen.getByTitle("归档（移出默认列表，可在设置找回）"));
     await t.flush();
-    expect(screen.queryByText("演示会话 · Fake")).toBeNull(); // 行移出默认列表（全无则空态）
+    expect(within(screen.getByRole("complementary")).queryByText("默认演示")).toBeNull(); // 行移出默认列表（全无则空态）
   });
 
   it("#62 删除：hover「删除」→ 二次确认 → Main 编排（unlink+终止+删记录）→ 侧栏行移除（唯一会话删除后空态）", async () => {
@@ -646,12 +657,12 @@ describe("聊天区（原型一致项 5/6/7）", () => {
       send("默认演示"); // #59：boot 演示草稿先发首条消息建立会话（行出现后才可 hover 删除）
     });
     await t.flush();
-    expect(screen.getByText("演示会话 · Fake")).toBeTruthy();
+    expect(sidebarText("默认演示")).toBeTruthy(); // #94：标题=首条派生
     fireEvent.click(screen.getAllByTitle("删除（终止进程并移除会话记录，不可撤销）")[0]);
     expect(screen.getByTestId("delete-session-dialog")).toBeTruthy(); // 先弹二次确认
     fireEvent.click(screen.getByTestId("delete-session-confirm"));
     await t.flush();
-    expect(screen.queryByText("演示会话 · Fake")).toBeNull(); // 行移除（记录已删，唯一会话 → 空态）
+    expect(within(screen.getByRole("complementary")).queryByText("默认演示")).toBeNull(); // 行移除（记录已删，唯一会话 → 空态）
     expect(screen.getAllByText("暂无会话").length).toBeGreaterThanOrEqual(1); // 侧栏结构化分组空态
     expect(t.ctl().activeId).toBeNull(); // 激活切空态
   });
@@ -674,7 +685,7 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     });
     await t.flush();
     expect(t.ctl().activeId).not.toBe(deleted);
-    expect(screen.getByText("演示会话 · Fake")).toBeTruthy(); // 激活切到相邻（上一条）会话，行保留
+    expect(sidebarText("默认演示")).toBeTruthy(); // 激活切到相邻（上一条）会话，行保留（标题=首条派生，#94）
   });
 
   it("#62 删除失败（IPC 错误）：行保留并在会话上呈现错误（可重试）", async () => {
@@ -795,7 +806,7 @@ describe("项目注册与会话恢复（#7 全链，除 Electron dialog）", () 
     await act(async () => {
       send("首条消息");
     });
-    expect(await screen.findByText("新会话 · Claude")).toBeTruthy();
+    expect(await within(screen.getByRole("complementary")).findByText("首条消息")).toBeTruthy(); // #94：标题=首条派生
     expect(screen.getByTitle(`工作在主仓库（${projDir}）`)).toBeTruthy();
     // 当前项目过滤：boot 演示会话（无项目）不显示
     expect(screen.queryByText("演示会话 · Fake")).toBeNull();
@@ -807,12 +818,12 @@ describe("项目注册与会话恢复（#7 全链，除 Electron dialog）", () 
     const t2 = mount(transport2);
     await t2.flush();
     expect(await screen.findByText("demo-repo")).toBeTruthy();
-    expect(await screen.findByText("新会话 · Claude")).toBeTruthy();
+    expect(await within(screen.getByRole("complementary")).findByText("首条消息")).toBeTruthy(); // #94：重启行标题=DB 派生值
     expect(screen.getByText("已断开")).toBeTruthy();
     // 断开会话视图提示（#42：顶部恢复引导条，含会话名与「缓存消息不替代原生历史」说明）
-    fireEvent.click(screen.getByText("新会话 · Claude"));
+    fireEvent.click(sidebarText("首条消息"));
     const banner1 = screen.getByTestId("resume-banner");
-    expect(banner1.textContent).toContain("新会话 · Claude");
+    expect(banner1.textContent).toContain("首条消息");
     expect(banner1.textContent).toContain("缓存消息不替代原生历史");
     // boot 演示会话不再创建（已有项目）
     expect(screen.queryByText("演示会话 · Fake")).toBeNull();
@@ -1108,9 +1119,9 @@ describe("断开会话「读取原生历史并恢复」（#9 / #42 顶部恢复�
     await t2.flush();
     expect(await screen.findByText("已断开")).toBeTruthy();
     // 激活该会话后聊天区顶部呈现恢复引导条（#42：待恢复态，恢复登记不自动激活；底部弱入口已移除）
-    fireEvent.click(screen.getByText("演示会话 · Fake"));
+    fireEvent.click(sidebarText("拆类型"));
     const banner = screen.getByTestId("resume-banner");
-    expect(banner.textContent).toContain("演示会话 · Fake"); // 会话名进引导条
+    expect(banner.textContent).toContain("拆类型"); // 会话名进引导条（#94：标题=首条派生）
     expect(banner.textContent).toContain("缓存消息不替代原生历史");
     expect(screen.queryByText("好的，我先跑一遍现有测试确认基线，然后开始拆分。")).toBeNull(); // 缓存不替代原生历史：恢复前消息流为空
 
@@ -1151,7 +1162,7 @@ describe("断开会话「读取原生历史并恢复」（#9 / #42 顶部恢复�
     const t2 = mount(makeTransport(adapter, { dbPath }));
     await t2.flush();
     expect(await screen.findByText("已断开")).toBeTruthy();
-    fireEvent.click(screen.getByText("演示会话 · Fake"));
+    fireEvent.click(sidebarText("拆类型"));
 
     // 恢复：readHistory 成功（快照重建）→ resume 注入失败 → 引导条失败态，会话仍断开
     fireEvent.click(screen.getByRole("button", { name: "读取原生历史并恢复" }));
@@ -1206,12 +1217,12 @@ describe("主仓库并行冲突提示条（spec I-4/#13）", () => {
     await act(async () => {
       send("拆类型"); // 第二个会话的首条（草稿提交，起 turn 后保持 running）
     });
-    expect((await screen.findAllByText("新会话 · Claude")).length).toBe(2);
+    expect((await within(screen.getByRole("complementary")).findAllByText("拆类型")).length).toBe(2); // 两行标题=同首条派生（#94）
     await t.flush();
     // 提示条出现：计数 2 + 会话名（同默认标题出现两次）
     const banner = await screen.findByTestId("conflict-banner");
     expect(banner.textContent).toContain("主仓库并行会话（2 个）");
-    expect(banner.textContent).toContain("新会话 · Claude、新会话 · Claude");
+    expect(banner.textContent).toContain("拆类型、拆类型");
     // 仅提示不阻止：composer 仍可用
     expect(screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…")).toBeTruthy();
 
@@ -1292,7 +1303,7 @@ describe("Claude 同名 skill 提示条（#21 / 原型一致项 7：warn 样式�
     act(() => {
       clock.runToIdle();
     });
-    expect(screen.getByText("继续工作")).toBeTruthy();
+    expect(centerTexts("继续工作").length).toBeGreaterThan(0); // 气泡（侧栏行标题同文，#94）
     expect(screen.getByText("好的，我先跑一遍现有测试确认基线，然后开始拆分。")).toBeTruthy();
     expect(screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…")).toHaveProperty("disabled", false);
   });
@@ -1389,7 +1400,7 @@ describe("草稿提交失败卡（#59：session:create+firstMessage 失败在草
     await t.flush();
     // 重试走真实链路成功：卡消失 + 新会话登记 + 草稿消失
     expect(screen.queryByTestId("create-error-card")).toBeNull();
-    expect(screen.getByText("新会话 · Claude")).toBeTruthy();
+    expect(sidebarText("要重试的首条")).toBeTruthy(); // #94：标题=首条派生
     expect(screen.queryByTestId("draft-hint")).toBeNull();
   });
 
@@ -1591,7 +1602,7 @@ describe("结构化会话草稿创建（#59：点「＋」只开草稿，首条�
     fireEvent.click(screen.getByRole("button", { name: "重试发送" }));
     await t.flush();
     expect(screen.queryByTestId("create-error-card")).toBeNull();
-    expect(screen.getByText("新会话 · Claude")).toBeTruthy();
+    expect(sidebarText("注定失败的首条")).toBeTruthy(); // #94：标题=首条派生
     expect(screen.queryByTestId("draft-hint")).toBeNull();
     const list2 = await transport.invoke({ channel: "session:list" });
     expect(list2.ok && list2.sessions).toHaveLength(1);
@@ -1623,7 +1634,7 @@ describe("结构化会话草稿创建（#59：点「＋」只开草稿，首条�
     });
     fireEvent.change(screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…"), { target: { value: "将被丢弃的输入" } });
     // 点侧栏会话行切换：草稿丢弃（无确认弹层）、输入消失、回到会话视图
-    fireEvent.click(screen.getByText("新会话 · Fake"));
+    fireEvent.click(sidebarText("默认演示")); // #94：标题=首条派生
     expect(t.ctl().draft).toBeNull();
     expect(screen.queryByTestId("draft-hint")).toBeNull();
     expect(t.ctl().activeId).toBe(fakeId);
@@ -1679,12 +1690,12 @@ describe("结构化会话草稿创建（#59：点「＋」只开草稿，首条�
       send("默认演示");
     });
     expect(seen.filter((r) => r.channel === "session:create")).toHaveLength(1);
-    expect(screen.getByText("演示会话 · Fake")).toBeTruthy();
+    expect(sidebarText("默认演示")).toBeTruthy(); // #94：标题=首条派生
     // 重启（同 db）：该会话恢复为断开态行（产生过实际对话的会话重启可见，#57 US12）
     cleanup();
     const t2 = mount(makeTransport(new FakeAdapter({ clock: new VirtualClock() }), { dbPath }));
     await t2.flush();
-    expect(await screen.findByText("演示会话 · Fake")).toBeTruthy();
+    expect(await within(screen.getByRole("complementary")).findByText("默认演示")).toBeTruthy(); // 重启后行标题=DB 派生值（#94）
     expect(screen.getByText("已断开")).toBeTruthy();
     void t2;
   });
@@ -1819,7 +1830,7 @@ describe("模型目录全链（#77：combobox 就绪态/阻塞/手输/恢复派�
     await t.flush();
     expect(screen.queryByTestId("create-error-card")).toBeNull();
     expect(screen.queryByTestId("draft-hint")).toBeNull();
-    expect(screen.getByText("演示会话 · Fake")).toBeTruthy();
+    expect(sidebarText("选了不可用模型的首条")).toBeTruthy(); // #94：标题=首条派生
   });
 
   it("恢复会话模型 chip：显示层派生列表默认名（不写 store），无「默认模型」字样与空白", async () => {
@@ -2091,58 +2102,51 @@ describe("启动自动选中（issue #86：回到当前项目最近会话，只�
 });
 
 describe("composer:listCommands 通道（#89：renderer 经 transport 调通道拿命令目录）", () => {
-  it("fake 环境：transport.invoke 走真实 Main 路由拿到 fake 固定命令集（含仅用户调用标记与参数提示形态）", async () => {
+  it("fake 环境：transport.invoke 走真实 Main 路由拿到空命令集（ADR 0004：fake 会话无命令源）", async () => {
     const adapter = new FakeAdapter({ clock: new VirtualClock() });
     const transport = makeTransport(adapter);
     const res = await transport.invoke({ channel: "composer:listCommands", cli: "fake", cwd: DEMO_CWD });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    expect(res.commands!.length).toBeGreaterThanOrEqual(2);
-    expect(res.commands!.every((c) => c.cli === "fake")).toBe(true);
-    expect(res.commands!.some((c) => c.userOnly)).toBe(true);
-    expect(res.commands!.some((c) => c.argsHint !== null)).toBe(true);
+    expect(res.commands).toEqual([]);
   });
 });
 
 describe("斜杠补全菜单（#90：草稿态/会话态输入框接菜单，命令数据走真实通道）", () => {
-  it("草稿态：输入 / 弹菜单（FakeAdapter 固定命令集经 Main 路由可见，应用组在前）；Enter 接受把命令引用写入草稿输入", async () => {
+  it("草稿态：输入 / 弹菜单为空态引导（ADR 0004 零内置 + fake 无命令源；不填充占位命令），Enter 不改输入", async () => {
     const t = mount();
     await t.flush();
     // 无项目无会话：boot 演示草稿（DraftPane 可见）
     expect(screen.getByTestId("draft-pane")).toBeTruthy();
     const box = screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…");
-    // 输入 /：预热 + Main CommandCatalog + FakeAdapter 固定集 → 菜单弹出
+    // 输入 /：预热 + Main CommandCatalog + FakeAdapter 空集 → 菜单弹空态引导文案
     fireEvent.change(box, { target: { value: "/", selectionStart: 1 } });
     await waitFor(() => expect(screen.getByTestId("slash-menu")).toBeTruthy());
-    const names = screen.getAllByTestId("slash-menu-item").map((el) => el.textContent ?? "");
-    expect(names.some((s) => s.includes("/fake-plan"))).toBe(true); // FakeAdapter 固定集可见
-    expect(names.some((s) => s.includes("/pty"))).toBe(true); // 内置应用命令入应用组
-    // 应用组在前：/pty（app）排在 /fake-*（cli）之前
-    expect(names.findIndex((s) => s.includes("/pty"))).toBeLessThan(names.findIndex((s) => s.includes("/fake-plan")));
-    // Enter 接受（初始高亮第 0 项 /kanban）：命令引用置入输入流（不发送，派发留 #92）
+    const menu = screen.getByTestId("slash-menu");
+    expect(menu.textContent).toContain("无可用命令"); // 空态引导文案（降级判据：未匹配按原样发送）
+    expect(screen.queryAllByTestId("slash-menu-item")).toEqual([]); // 无条目（零内置：无 /pty /kanban 占位）
+    // 空候选 Enter/ArrowDown 走默认行为：输入不被菜单消费
+    fireEvent.keyDown(box, { key: "ArrowDown" });
     fireEvent.keyDown(box, { key: "Enter" });
-    expect((box as HTMLTextAreaElement).value).toBe("/kanban ");
-    expect(screen.queryByTestId("slash-menu")).toBeNull(); // 接受后菜单关闭
-    // 草稿 store 同步受控值
-    const d = t.ctl().draft;
-    expect(d && d.kind === "structured" ? d.data.input : null).toBe("/kanban ");
+    expect((box as HTMLTextAreaElement).value).toBe("/");
   });
 
-  it("会话态：已建会话 composer 同样弹菜单（cli/cwd 键控换源）", async () => {
+  it("会话态：已建会话 composer 同样弹空态菜单（cli/cwd 键控换源，fake 源为空）", async () => {
     const t = mount();
     await t.flush();
     await createViaDraft(t.ctl, "fake", undefined, "首条消息（建立会话）");
     t.advance(); // 首轮演示脚本跑完（running 期输入框禁用）
     await t.flush();
-    // 会话态 composer（与草稿态同款输入框组件）：输入 / 弹菜单
+    // 会话态 composer（与草稿态同款输入框组件）：输入 / 弹空态菜单
     const box = screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…");
     fireEvent.change(box, { target: { value: "/", selectionStart: 1 } });
     await waitFor(() => expect(screen.getByTestId("slash-menu")).toBeTruthy());
-    expect(screen.getAllByTestId("slash-menu-item").some((el) => (el.textContent ?? "").includes("/fake-skill"))).toBe(true);
+    expect(screen.getByTestId("slash-menu").textContent).toContain("无可用命令");
+    expect(screen.queryAllByTestId("slash-menu-item")).toEqual([]);
   });
 });
 
-describe("斜杠派发闭环（#92：发送期派发判定 → 透传/展开/内置本地执行，全链走真实 Main 路由）", () => {
+describe("斜杠派发闭环（#92：发送期派发判定 → 透传/展开，全链走真实 Main 路由；ADR 0004 零内置）", () => {
   let tmpRoot = "";
 
   afterEach(() => {
@@ -2152,21 +2156,6 @@ describe("斜杠派发闭环（#92：发送期派发判定 → 透传/展开/内
       rmSync(tmpRoot, { recursive: true, force: true });
       tmpRoot = "";
     }
-  });
-
-  it("内置 /kanban（草稿态）：本地执行切视图 + 清空输入保留草稿，不经任何发送通道", async () => {
-    const views: string[] = [];
-    const t = mount(undefined, { onSetView: (v) => views.push(v) });
-    await t.flush();
-    await act(async () => {
-      send("/kanban");
-    });
-    await t.flush();
-    expect(views).toEqual(["kanban"]); // App 层 setView 单源出口被调用
-    const d = t.ctl().draft;
-    expect(d?.kind === "structured" ? d.data.input : null).toBe(""); // 输入已消费、草稿保留
-    expect(screen.getByTestId("draft-hint")).toBeTruthy();
-    expect(t.ctl().sessions.length).toBe(0); // 未创建会话（未发送）
   });
 
   it("fake 会话未匹配 /foo：原样发送（用户气泡=原文）+ turn 正常推进", async () => {
@@ -2224,7 +2213,7 @@ describe("斜杠派发闭环（#92：发送期派发判定 → 透传/展开/内
     await t.flush();
     expect(screen.getByText("目标：alpha beta，首参=alpha，标记 KB-CODEX-PROMPT-EXECUTED")).toBeTruthy(); // 气泡=展开文本
     expect(screen.queryByText(/\$ARGUMENTS/)).toBeNull(); // 占位符已替换（无残留）
-    expect(screen.getByText("新会话 · Codex")).toBeTruthy(); // 原子创建链成功
+    expect(sidebarText("目标：alpha beta，首参=alpha，标…")).toBeTruthy(); // 原子创建链成功（标题=展开文本派生截断，#94）
   });
 });
 

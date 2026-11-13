@@ -62,8 +62,7 @@ export function ChatWorkspace({
   );
   const setNotice = projects.setNotice;
   const onNotice = useCallback((message: string) => setNotice(message), [setNotice]);
-  // #92 内置 /kanban 命令视图切换单源（App 层 setView 注入 ChatController，composer 派发直达；prop 形参直接透传）
-  const controller = useChatController(transport, { demoCwd: demoCwdValue, resolveCwd, onNotice, onSetView });
+  const controller = useChatController(transport, { demoCwd: demoCwdValue, resolveCwd, onNotice });
   // 暴露 controller（App chatRef 写入/测试 holder）：effect 而非渲染期调用——废弃渲染不再触发回调（#67）
   useEffect(() => {
     onController?.(controller);
@@ -135,6 +134,7 @@ export function ChatWorkspace({
         onKillTerminal={controller.terminals.kill}
         onArchiveSession={(sessionId) => void controller.archiveSession(sessionId)}
         onDeleteSession={(sessionId) => void controller.deleteSession(sessionId)}
+        onRenameSession={(sessionId, title) => controller.renameSession(sessionId, title)}
         sessionToReq={kanban?.sessionToReq ?? {}}
         onOpenRequirement={(requirementId) => {
           // #20 原型一致项 6：会话行 REQ 徽标点击 → 进入看板并选中该需求（详情面板打开）

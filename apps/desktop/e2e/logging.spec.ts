@@ -106,7 +106,7 @@ async function registerAndCreate(win: Page): Promise<void> {
   // #59 草稿：点 CLI 只开草稿，发出首条消息才创建会话（侧栏行出现）
   await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
   await send(win, "首条消息（建立会话）");
-  await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
+  await expect(win.locator("aside").getByText("首条消息（建立会话）")).toBeVisible({ timeout: 10_000 }); // #94：标题=首条派生
 }
 
 /** 在 composer 输入并发送 */

@@ -5,6 +5,7 @@ import {
   memoryEventSchema,
   memoryRequestSchema,
   modelsRequestSchema,
+  sessionEventSchema,
   terminalEventSchema,
   trackerChangeSchema,
   type AdapterEvent,
@@ -15,6 +16,7 @@ import {
   type MemoryResult,
   type ModelsRequest,
   type ModelsResult,
+  type SessionEventWire,
   type TerminalEvent,
   type TrackerChangeWire,
 } from "@kanban/ipc-schema";
@@ -36,6 +38,8 @@ export interface ChatTransport {
   onMemoryEvent?(handler: (event: MemoryEventWire) => void): () => void;
   /** #77：models:ipc 请求（models:list 按 CLI 拉取模型目录；可选——未接的旧 fake 由模型目录降级为错误态手输兜底） */
   invokeModels?(req: ModelsRequest): Promise<ModelsResult>;
+  /** #95：session:event 事件订阅（摘要标题异步完成推送，schema 见 sessionEventSchema；可选——未接的旧 fake 安全降级） */
+  onSessionEvent?(handler: (event: SessionEventWire) => void): () => void;
 }
 
 /** dev 态出站校验（#55 迁移）：失败经统一日志记 warn 后原样重抛，保持既有 dev-only throw 语义 */
@@ -101,6 +105,16 @@ export function createWindowTransport(): ChatTransport | null {
           const parsed = memoryEventSchema.safeParse(event);
           if (!parsed.success) {
             log.warn("入站 memory 事件不符合 schema", { issues: JSON.stringify(parsed.error.issues) });
+          }
+        }
+        handler(event);
+      }),
+    onSessionEvent: (handler) =>
+      api.onSessionEvent((event: SessionEventWire) => {
+        if (import.meta.env.DEV) {
+          const parsed = sessionEventSchema.safeParse(event);
+          if (!parsed.success) {
+            log.warn("入站 session 事件不符合 schema", { issues: JSON.stringify(parsed.error.issues) });
           }
         }
         handler(event);

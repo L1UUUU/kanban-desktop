@@ -1,9 +1,9 @@
-// 用途：斜杠补全菜单纯展示组件（issue #90 / spec #82 E 块）—— 分组列表（应用命令在前）；焦点始终留在输入框：行以 mousedown+preventDefault 接受，光标不离开草稿（role=option/aria-selected/scrollIntoView nearest 对齐 PI ComposerAutocomplete）
+// 用途：斜杠补全菜单纯展示组件（issue #90 / spec #82 E 块；ADR 0004 零内置）—— 单组列表（CLI 命令源）；焦点始终留在输入框：行以 mousedown+preventDefault 接受，光标不离开草稿（role=option/aria-selected/scrollIntoView nearest 对齐 PI ComposerAutocomplete）
 import { Fragment, useEffect, useRef } from "react";
 import type { MenuCommand } from "./slash-trigger";
 
-/** 分组标题（分组顺序由 filterSlashCommands 保证：app 在前、cli 在后） */
-const GROUP_LABELS: Record<MenuCommand["group"], string> = { app: "应用命令", cli: "CLI 命令" };
+/** 分组标题（ADR 0004 后单组：CLI 命令） */
+const GROUP_LABELS: Record<MenuCommand["group"], string> = { cli: "CLI 命令" };
 
 export interface SlashMenuProps {
   items: MenuCommand[];
@@ -31,7 +31,8 @@ export function SlashMenu({ items, highlight, onHover, onAccept }: SlashMenuProp
       className="absolute bottom-full left-0 z-20 mb-1 max-h-[260px] w-full overflow-y-auto rounded-lg border border-border bg-muted p-1 shadow-[0_8px_24px_rgba(0,0,0,.5)]"
     >
       {items.length === 0 ? (
-        <div className="px-2.5 py-1.5 text-[11.5px] text-muted-foreground">无匹配命令</div>
+        // 空态引导（ADR 0004：无命令源/无命中不填占位命令；降级判据——未匹配的 / 开头输入按原样发送）
+        <div className="px-2.5 py-1.5 text-[11.5px] text-muted-foreground">无可用命令：未匹配的 / 开头输入将按原样发送</div>
       ) : (
         items.map((item, i) => (
           <Fragment key={`${item.group}:${item.name}`}>

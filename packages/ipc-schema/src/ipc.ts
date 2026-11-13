@@ -35,6 +35,10 @@ export const projectRowSchema = z.object({
 });
 export type ProjectRow = z.infer<typeof projectRowSchema>;
 
+// 会话标题来源四态（#94 / ADR 0003 决策 1 状态机）：default（默认）→ derived（首条消息截断派生）→ summarized（首轮摘要）；manual（用户重命名，终态权威）。单源于 wire 契约，main SessionStore 消费方导入
+export const titleSourceSchema = z.enum(["default", "derived", "summarized", "manual"]);
+export type TitleSource = z.infer<typeof titleSourceSchema>;
+
 // sessions 表 wire 行（C3 列 + Main 侧判定的目录身份徽标数据）
 export const sessionRowSchema = z.object({
   id: z.string().min(1),
@@ -43,6 +47,8 @@ export const sessionRowSchema = z.object({
   nativeSessionId: z.string().nullable(),
   projectId: z.string().nullable(),
   title: z.string().nullable(),
+  /** 标题来源（review A1 / ticket #94 验收：session:list 回带 source；PTY 行恒 default 无行为影响） */
+  titleSource: titleSourceSchema.optional(),
   cwd: z.string().nullable(),
   permMode: permModeSchema.nullable(),
   status: sessionStatusSchema.nullable(),
@@ -107,6 +113,8 @@ export const ipcRequestSchema = z.discriminatedUnion("channel", [
   z.object({ channel: z.literal("session:archivedList") }),
   /** #62 删除（spec #57 D 节）：先解除看板关联（落 unlink 事件）→ 终止进程 → 删记录；幂等（记录不存在返回成功）；不删 CLI 原生历史 */
   z.object({ channel: z.literal("session:delete"), sessionId: sessionIdSchema }),
+  /** #94 / ADR 0003 手动重命名：置 title_source=manual（终态权威，此后自动派生/摘要不再覆盖）；PTY 行经 kind 守卫拒绝（review S5/C1：PTY 永不进状态机） */
+  z.object({ channel: z.literal("session:rename"), sessionId: sessionIdSchema, title: z.string().min(1) }),
   z.object({ channel: z.literal("project:list") }),
   /** 注册项目：Main 弹原生目录选择对话框，路径归一化与去重在 Main 侧完成 */
   z.object({ channel: z.literal("project:register") }),

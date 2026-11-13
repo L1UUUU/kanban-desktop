@@ -131,9 +131,9 @@ test("真实最小集全链：Claude hook verified design-feature 自动建卡 �
     // #59 草稿：点 CLI 只开草稿；首条消息（真实 Skill 指令）随「创建+落库+发送」原子发出 → 会话行出现
     // [A] verified design-feature 自动建卡：真实 Skill 真调用 → PreToolUse(Skill) hook 捕获 → transformHookEvents verified → 建卡
     await send(win, "请务必通过 Skill 工具（tool_use: Skill）调用 design-feature 这个 skill，不要直接照做，也不要只输出文本。");
-    const claudeRow = win.locator("aside").locator('[data-testid="session-row"]', { hasText: "新会话 · Claude" });
+    const claudeRow = win.locator("aside").locator('[data-testid="session-row"]', { hasText: "请务必通过 Skill 工具（tool_use:…" });
     await expect(claudeRow).toBeVisible({ timeout: 30_000 });
-    await waitIdle(win, "新会话 · Claude");
+    await waitIdle(win, "请务必通过 Skill 工具（tool_use:…"); // #94：标题=首条派生截断
     await win.getByTestId("kanban-entry").click();
     const designCol = win.getByTestId("kanban-col-Design");
     await expect(designCol.getByText("待命名需求")).toBeVisible({ timeout: 60_000 });
@@ -175,7 +175,7 @@ test("真实最小集全链：Claude hook verified design-feature 自动建卡 �
     await win.getByTestId("kanban-entry").click();
     await claudeRow.click();
     await send(win, "请务必通过 Skill 工具（tool_use: Skill）调用 implement-spec 这个 skill，不要直接照做，也不要只输出文本。");
-    await waitIdle(win, "新会话 · Claude");
+    await waitIdle(win, "请务必通过 Skill 工具（tool_use:…"); // #94：标题=首条派生截断
     await win.getByTestId("kanban-entry").click();
     await expect(implCol.getByText("待命名需求")).toBeVisible({ timeout: 60_000 });
     await expect(implCol.getByTestId("uncertain-badge")).toHaveCount(0); // 转正后无待确认

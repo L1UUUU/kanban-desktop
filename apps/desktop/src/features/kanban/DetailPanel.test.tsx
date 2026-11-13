@@ -249,7 +249,7 @@ describe("详情滑出面板（#19；原型一致项 4/5）", () => {
     await act(async () => {
       await createViaDraft(t.ctl, "claude", { projectId: await currentProjectId() });
     });
-    await screen.findByText("新会话 · Claude");
+    await within(screen.getByRole("complementary")).findByText("默认演示"); // #94：标题=首条派生（与气泡同文，限侧栏）
     t.advance(); // 首条 turn 完成回空闲（供后续用例继续发消息）
   }
 

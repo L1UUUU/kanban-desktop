@@ -66,7 +66,7 @@ async function createSession(win: Page): Promise<void> {
   await win.getByRole("button", { name: "Claude", exact: true }).click();
   await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
   await send(win, "首条消息（建立会话）");
-  await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
+  await expect(win.locator("aside").getByText("首条消息（建立会话）")).toBeVisible({ timeout: 10_000 }); // #94：标题=首条派生
   await expect(win.getByText("空闲").first()).toBeVisible({ timeout: 30_000 }); // 首轮结束：idle 可切
 }
 

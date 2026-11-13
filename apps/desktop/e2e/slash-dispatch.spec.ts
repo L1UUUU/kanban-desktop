@@ -1,8 +1,9 @@
-// 用途：斜杠派发闭环整机 E2E（issue #92 / spec #82 E 块）—— 真 preload/IPC/Main/FakeAdapter 全链：codex 匹配客户端展开（展开文本为用户气泡与 wire 载荷）、claude 匹配透传原文、未匹配原样发送、内置 /kanban 切视图 /pty 开终端草稿（本地执行不发送）、命令文件缺失 fail-closed 错误卡（不静默）
+// 用途：斜杠派发闭环整机 E2E（issue #92 / spec #82 E 块；ADR 0004 零内置）—— 真 preload/IPC/Main/FakeAdapter 全链：codex 匹配客户端展开（展开文本为用户气泡与 wire 载荷）、未匹配原样发送（/foo 与 claude 会话未匹配透传）、命令文件缺失 fail-closed 错误卡（不静默）
 import { test, expect, _electron, type ElectronApplication, type Page } from "@playwright/test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { FAKE_SUMMARY_TITLE } from "./helpers/fake-summary";
 
 const PROJECT_NAME = "kb-slash-dispatch";
 /** codex prompt fixture 正文（占位符 $ARGUMENTS/$1 随发送期展开替换） */
@@ -77,7 +78,7 @@ async function openDraft(win: Page, cliLabel: string): Promise<void> {
   await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
 }
 
-test("codex 匹配展开 → 未匹配原样 → 内置 /kanban /pty 本地执行 → 文件缺失 fail-closed 错误卡；claude 匹配透传原文", async () => {
+test("codex 匹配展开 → 未匹配原样（codex /foo 与 claude 会话）→ 文件缺失 fail-closed 错误卡", async () => {
   const t = await launchApp();
   const { app, win, goneFile } = t;
 
@@ -94,7 +95,7 @@ test("codex 匹配展开 → 未匹配原样 → 内置 /kanban /pty 本地执�
   await box.pressSequentially("alpha beta");
   await send(win, "/kb-e2e-probe alpha beta");
   // 会话创建 + 用户气泡 = 展开文本（frontmatter 已剥离、占位符已替换、无 $ 残留）
-  await expect(win.getByText("新会话 · Codex")).toBeVisible({ timeout: 15_000 });
+  await expect(win.locator("aside").getByText("目标：alpha beta，首参=alpha，标…")).toBeVisible({ timeout: 15_000 }); // #94：标题=展开文本派生截断
   await expect(win.getByText(PROBE_EXPANDED)).toBeVisible();
   await expect(win.getByText("$ARGUMENTS")).toHaveCount(0);
   await expect(win.getByText("description: 展开探针")).toHaveCount(0); // frontmatter 不入消息
@@ -104,21 +105,6 @@ test("codex 匹配展开 → 未匹配原样 → 内置 /kanban /pty 本地执�
   await send(win, "/nope 任意参数");
   await expect(win.getByText("/nope 任意参数")).toBeVisible();
   await expect(win.getByText("基线全绿。现在把 chat 与 session 两个命名空间拆成独立文件")).toBeVisible({ timeout: 20_000 });
-
-  // —— 内置 /kanban：本地执行切看板视图（不发送：无新用户消息）
-  await send(win, "/kanban");
-  await expect(win.getByTestId("kanban-board")).toBeVisible();
-  await expect(win.getByText("/kanban")).toHaveCount(0); // 未作为消息发送
-  await win.getByTestId("kanban-entry").click(); // 切回聊天
-  await expect(win.getByTestId("kanban-board")).toBeHidden();
-
-  // —— 内置 /pty：本地执行开 PTY 终端草稿（当前项目 cwd；不落库不起进程）
-  await send(win, "/pty");
-  await expect(win.getByText(/终端草稿 · 尚未启动进程/)).toBeVisible({ timeout: 10_000 });
-  await expect(win.getByText("/pty")).toHaveCount(0);
-  // 切回 codex 会话（终端草稿被切换动作丢弃）
-  await win.getByText("新会话 · Codex").first().click();
-  await expect(win.getByText(/终端草稿 · 尚未启动进程/)).toHaveCount(0);
 
   // —— 文件缺失 fail-closed：目录已列出 kb-e2e-gone（菜单缓存）但文件已删 → 展开失败走错误卡，输入保留
   await openDraft(win, "Codex");
@@ -134,18 +120,13 @@ test("codex 匹配展开 → 未匹配原样 → 内置 /kanban /pty 本地执�
   await expect(win.getByTestId("create-error-card")).toBeVisible({ timeout: 10_000 }); // 失败卡（不静默）
   await expect(win.getByTestId("create-error-card")).toContainText("不可读");
   await expect(box2).toHaveValue("/kb-e2e-gone 参数"); // 输入保留可重试
-  await expect(win.getByText("新会话 · Codex").first()).toBeVisible(); // 未创建会话（草稿仍在，无原子提交）
+  await expect(win.locator("aside").getByText(FAKE_SUMMARY_TITLE)).toBeVisible(); // 首个会话仍在（#95：首轮后标题=摘要固定值）、第二个未创建（草稿保留，无原子提交）
 
-  // —— claude 匹配透传：fake 固定集 /fake-plan 原文发送（气泡=原文，CLI/适配器侧自行解析）
+  // —— claude 会话未匹配透传：fake 目录空集（ADR 0004）→ /fake-plan 未匹配原样发送（气泡=原文，降级判据）
   await openDraft(win, "Claude");
-  await win.getByPlaceholder("输入消息，/ 开头触发 Skill…").click();
-  await win.getByPlaceholder("输入消息，/ 开头触发 Skill…").pressSequentially("/fake");
-  const menu3 = win.getByTestId("slash-menu");
-  await expect(menu3).toBeVisible({ timeout: 10_000 });
-  await expect(menu3.getByTestId("slash-menu-item").filter({ hasText: "/fake-plan" })).toBeVisible();
   await send(win, "/fake-plan 透传参数");
-  await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 15_000 });
-  await expect(win.getByText("/fake-plan 透传参数")).toBeVisible(); // 透传：气泡=原文（未展开、未改写）
+  await expect(win.locator("aside").getByText("/fake-plan 透传参数")).toBeVisible({ timeout: 15_000 }); // #94：标题=首条原文派生
+  await expect(win.getByText("/fake-plan 透传参数").first()).toBeVisible(); // 未匹配：气泡=原文（未展开、未改写）
 
   await app.close();
   await t.cleanup();

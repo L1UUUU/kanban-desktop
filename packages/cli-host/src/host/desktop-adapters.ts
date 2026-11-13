@@ -35,6 +35,8 @@ export function createDesktopAdapterFactory(options: DesktopAdapterFactoryOption
   const fakeModelsDelayMs = envInt("KANBAN_FAKE_MODELS_DELAY_MS");
   const fakeFailModelsFirst = envInt("KANBAN_FAKE_MODELS_FAIL_FIRST");
   const fakeFailSetModelFirst = envInt("KANBAN_FAKE_SETMODEL_FAIL_FIRST");
+  // #95 e2e 支撑：Fake summarizeTitle 前置延迟（整机 Playwright 观察「摘要进行中手动重命名不被覆盖」竞态）
+  const fakeSummarizeDelayMs = envInt("KANBAN_FAKE_SUMMARIZE_DELAY_MS");
   const makeFake = (): FakeAdapter =>
     new FakeAdapter({
       resumeDelayMs: fakeResumeDelayMs,
@@ -43,6 +45,7 @@ export function createDesktopAdapterFactory(options: DesktopAdapterFactoryOption
       modelsDelayMs: fakeModelsDelayMs,
       failModelsFirst: fakeFailModelsFirst,
       failSetModelFirst: fakeFailSetModelFirst,
+      summarizeDelayMs: fakeSummarizeDelayMs,
     });
   return (cli: string): CliAdapter => {
     if (cli === "codex") {

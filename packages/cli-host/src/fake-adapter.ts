@@ -1,4 +1,4 @@
-// 用途：FakeAdapter —— C1 契约的脚本化 mock 实现：事件溯源日志（readHistory=重放，天然满足不变量 4）、可注入时钟、演示脚本驱动（原型行为规格）+ readTranscript 双视角剧本（#28，独立于 ChatEvent 日志维护）+ listModels 假模型目录（#76：演示 UI 形态与真实 CLI 一致）+ listCommands 固定命令集（#89：整机 e2e 补全菜单前提；#92 起 cli=codex 模拟真实 codex 目录扫描）
+// 用途：FakeAdapter —— C1 契约的脚本化 mock 实现：事件溯源日志（readHistory=重放，天然满足不变量 4）、可注入时钟、演示脚本驱动（原型行为规格）+ readTranscript 双视角剧本（#28，独立于 ChatEvent 日志维护）+ listModels 假模型目录（#76：演示 UI 形态与真实 CLI 一致）+ listCommands（#92 起 cli=codex 模拟真实 codex 目录扫描；其余 CLI 恒空集——ADR 0004：fake 会话无命令源，斜杠菜单空态引导）
 import { homedir } from "node:os";
 import type { AdapterEvent, ChatEvent, ChatEventSeed, CommandEntry, ModelEntry, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
 import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListCommandsInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
@@ -63,6 +63,8 @@ export interface FakeAdapterOptions {
   failModelsFirst?: number;
   /** #81 e2e 支撑：前 N 次 setModel 抛 AdapterError（整机 Playwright 驱动中途切换失败回滚；缺省 0 不注入） */
   failSetModelFirst?: number;
+  /** #95 e2e 支撑：summarizeTitle 前置注入延迟毫秒（整机 Playwright 观察「摘要进行中手动重命名不被覆盖」竞态；缺省 0） */
+  summarizeDelayMs?: number;
   /** 用户主目录覆盖（#92：cli=codex 时目录模拟真实 codex 扫描的 ~/.codex/prompts 基准；缺省 os.homedir()；测试注入 fixture） */
   homeDir?: string;
 }
@@ -76,17 +78,13 @@ const FAKE_CAPABILITIES: AdapterCapabilities = {
   skillSignal: true,
 };
 
+/** Fake 摘要标题固定值（#95 / ADR 0003 决策 3）：整机 e2e 断言侧栏标题翻转；契约套默认精确断言值 */
+export const FAKE_SUMMARIZED_TITLE = "演示会话 · 首轮摘要";
+
 /** Fake 模型目录（spec #75 #18）：两条假模型，第一条默认——演示/测试时 UI 形态与真实 CLI 一致 */
 const FAKE_MODELS: ModelEntry[] = [
   { id: "fake-standard", displayName: "Fake 标准模型", description: "演示用假模型（完整演示脚本节奏）", isDefault: true },
   { id: "fake-lite", displayName: "Fake 轻量模型", description: "演示用假模型（轻量输出）", isDefault: false },
-];
-
-/** Fake 固定命令集（issue #89）：覆盖 userOnly / argsHint 两形态驱动补全菜单演示；source=native（脚本化 mock 无目录可扫） */
-const FAKE_COMMANDS: CommandEntry[] = [
-  { name: "fake-plan", description: "演示命令：请求一份轻量计划", argsHint: null, source: "native", cli: "fake", sourcePath: null, userOnly: false },
-  { name: "fake-skill", description: "演示 Skill：模拟技能观察信号", argsHint: "$ARGUMENTS", source: "native", cli: "fake", sourcePath: null, userOnly: false },
-  { name: "fake-user-only", description: "演示仅用户调用标记（disable-model-invocation）", argsHint: null, source: "native", cli: "fake", sourcePath: null, userOnly: true },
 ];
 
 export class FakeAdapter implements CliAdapter {
@@ -100,6 +98,7 @@ export class FakeAdapter implements CliAdapter {
   private readonly modelsDelayMs: number;
   private readonly failModelsFirst: number;
   private readonly failSetModelFirst: number;
+  private readonly summarizeDelayMs: number;
   private resumeCalls = 0;
   private createCalls = 0;
   private listModelsCalls = 0;
@@ -118,6 +117,7 @@ export class FakeAdapter implements CliAdapter {
     this.modelsDelayMs = options.modelsDelayMs ?? 0;
     this.failModelsFirst = options.failModelsFirst ?? 0;
     this.failSetModelFirst = options.failSetModelFirst ?? 0;
+    this.summarizeDelayMs = options.summarizeDelayMs ?? 0;
     this.homeDir = options.homeDir ?? null;
   }
 
@@ -165,12 +165,12 @@ export class FakeAdapter implements CliAdapter {
     return FAKE_MODELS.map((m) => ({ ...m }));
   }
 
-  /** 命令列举（issue #89）：固定演示集（拷贝防调用方改写常量），无注入开关——菜单链路稳定可断言；
-   *  #92 起 cli=codex 时改走真实 codex prompts 目录扫描（KANBAN_DISABLE_CODEX 回落 Fake 的场景保持目录语义一致，
+  /** 命令列举（ADR 0004：fake 无命令源，非 codex 恒空集——斜杠菜单空态引导，每次新数组）；
+   *  cli=codex 时走真实 codex prompts 目录扫描（KANBAN_DISABLE_CODEX 回落 Fake 的场景保持目录语义一致，
    *  展开派发链路整机 e2e 无需真实 exe 即可端到端驱动） */
   async listCommands(input: ListCommandsInput): Promise<CommandEntry[]> {
     if (input.cli === "codex") return listCodexPromptCommands(input.cwd, this.homeDir ?? homedir());
-    return FAKE_COMMANDS.map((c) => ({ ...c }));
+    return [];
   }
 
   /** 会话中途切换模型（issue #79）：存储 no-op——记录所选值并回显，不报错、不影响演示脚本；#81 注入：前 N 次失败（整机 e2e 驱动回滚） */
@@ -182,6 +182,13 @@ export class FakeAdapter implements CliAdapter {
     }
     s.model = input.model;
     return { model: input.model };
+  }
+
+  /** 一次性标题摘要（#95 / ADR 0003 决策 3）：固定值（整机 e2e 断言侧栏翻转）；#95 注入：前置延迟（驱动「摘要进行中重命名不被覆盖」竞态） */
+  async summarizeTitle(sessionId: string): Promise<string | null> {
+    this.requireSession(sessionId);
+    if (this.summarizeDelayMs > 0) await new Promise((r) => setTimeout(r, this.summarizeDelayMs));
+    return FAKE_SUMMARIZED_TITLE;
   }
 
   async sendTurn(input: SendTurnInput): Promise<void> {

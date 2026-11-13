@@ -268,6 +268,12 @@ export class OpenCodeAdapter implements CliAdapter {
     return { model: input.model };
   }
 
+  /** 一次性标题摘要（#95 / ADR 0003 决策 3）：opencode 降级返回 null——prompt API 需会话上下文，一次性摘要不适用（保留 fallback 派生标题） */
+  async summarizeTitle(sessionId: string): Promise<string | null> {
+    this.requireSession(sessionId);
+    return null;
+  }
+
   async sendTurn(input: SendTurnInput): Promise<void> {
     const s = this.requireLiveSession(input.sessionId);
     // 不变量 6：忙态（turn 进行中/审批待决）排队

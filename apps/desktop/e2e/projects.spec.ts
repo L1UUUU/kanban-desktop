@@ -60,7 +60,7 @@ async function createSession(win: Page, cliLabel: string): Promise<void> {
   await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
   await win.getByPlaceholder("输入消息，/ 开头触发 Skill…").fill("首条消息（建立会话）");
   await win.getByRole("button", { name: "发送 ➤" }).click();
-  await expect(win.getByText(`新会话 · ${cliLabel}`).first()).toBeVisible({ timeout: 10_000 });
+  await expect(win.locator("aside").getByText("首条消息（建立会话）")).toBeVisible({ timeout: 10_000 }); // #94：标题=首条派生
 }
 
 test("注册项目 → 新建会话（主仓库徽标）→ 重启完整恢复（项目/会话/当前项目/断开态）", async () => {
@@ -96,13 +96,13 @@ test("注册项目 → 新建会话（主仓库徽标）→ 重启完整恢复�
     // —— 重启（同一 userData，无固定目录选择）：项目、当前项目与会话列表恢复；会话呈断开态
     const second = await launchApp(userData);
     await expect(second.win.locator("aside").getByText(PROJECT_NAME, { exact: true })).toBeVisible({ timeout: 15_000 });
-    await expect(second.win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
+    await expect(second.win.locator("aside").getByText("首条消息（建立会话）")).toBeVisible({ timeout: 10_000 });
     await expect(second.win.getByText("已断开").first()).toBeVisible();
     // 断开会话视图提示（#42 顶部恢复引导条）+ 当前项目过滤（boot 演示会话不再创建）
-    await second.win.getByText("新会话 · Claude").first().click();
+    await second.win.locator("aside").getByText("首条消息（建立会话）").click();
     const resumeBanner = second.win.getByTestId("resume-banner");
     await expect(resumeBanner).toBeVisible();
-    await expect(resumeBanner).toContainText("新会话 · Claude");
+    await expect(resumeBanner).toContainText("首条消息（建立会话）"); // #94：标题=首条派生
     await expect(resumeBanner).toContainText("缓存消息不替代原生历史");
     await expect(second.win.getByText("演示会话 · Fake")).toHaveCount(0);
     await second.app.close();
@@ -130,10 +130,10 @@ test("多项目并存与切换、目录缺失标记", async () => {
     // 注册即切换：当前项目=e2e-repo-2（其会话列表为空；e2e-repo 的会话被过滤）
     //（限定 aside：主区 ChatPane 空态也有「暂无会话」文案，0f51f80 引入）
     await expect(b.win.locator("aside").getByText("暂无会话")).toBeVisible();
-    await expect(b.win.getByText("新会话 · Codex")).toHaveCount(0);
+    await expect(b.win.locator("aside").getByText("首条消息（建立会话）")).toHaveCount(0);
     // 点回第一个项目：会话恢复可见
     await b.win.locator("aside").getByText(PROJECT_NAME, { exact: true }).click();
-    await expect(b.win.getByText("新会话 · Codex").first()).toBeVisible({ timeout: 10_000 });
+    await expect(b.win.locator("aside").getByText("首条消息（建立会话）")).toBeVisible({ timeout: 10_000 });
     await b.app.close();
 
     // —— 删除第一个项目目录后重启：目录缺失标记可见（启动探测）

@@ -70,7 +70,7 @@ async function registerAndCreate(win: Page): Promise<void> {
   // #59 草稿：点 CLI 只开草稿，发出首条消息才创建会话（侧栏行出现）
   await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
   await send(win, "首条消息（建立会话）");
-  await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
+  await expect(win.locator("aside").getByText("首条消息（建立会话）")).toBeVisible({ timeout: 10_000 }); // #94：标题=首条派生
 }
 
 /** 在 composer 输入并发送 */
@@ -110,8 +110,8 @@ test("会话内五类错误卡呈现与动作流转（四类 + 未知兜底，fa
     await win.locator(".xterm").first().click();
     await win.keyboard.type("x");
     await expect(win.getByText(/^终端 · /).first()).toBeVisible({ timeout: 15_000 });
-    // 切回结构化会话继续驱动后续卡
-    await win.getByText("新会话 · Claude").first().click();
+    // 切回结构化会话继续驱动后续卡（#95：错误脚本以 idle 收尾，行标题已翻转摘要固定值；结构化行在 PTY 行之前，按行序取第 0 行）
+    await win.locator('aside [data-testid="session-row"]').nth(0).click();
 
     // 卡 3（会话内形态）：找不到 CLI 程序（SPAWN_NOT_FOUND）—— 安装/PATH/配置文件指引 + 复制配置路径
     await send(win, "找不到 CLI");
@@ -173,12 +173,12 @@ test("spawn 创建失败侧栏卡：E_SPAWN_NOT_FOUND → 卡 3 形态呈现 →
     await expect(card.getByRole("button", { name: "复制配置路径" })).toBeVisible();
     await expect(win.getByTestId("draft-hint")).toBeVisible(); // 草稿与输入保留（可重试）
     // 不留空会话（侧栏无行）：限定 aside——草稿提示行文案含同名标题，页面级计数会被 draft-hint 命中
-    await expect(win.locator("aside").getByText("新会话 · Claude")).toHaveCount(0);
+    await expect(win.locator("aside").getByText("要重试的首条")).toHaveCount(0); // #94：行标题=首条派生
 
     // 「重试发送」：重新执行创建+发送首条消息 → 成功后卡消失 + 会话登记 + 草稿丢弃
     await card.getByRole("button", { name: "重试发送" }).click();
     await expect(card).toHaveCount(0, { timeout: 15_000 });
-    await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
+    await expect(win.locator("aside").getByText("要重试的首条")).toBeVisible({ timeout: 10_000 }); // 重试成功：行标题=首条派生（#94）
 
     // #56（spec #52 验收 2 C 类）：spawn 失败在日志留 error 带关联标识（「文件含 error 条目」口径，非末条）——
     // Main 侧 command-failed 白名单摘要（kind=createSession + cli=claude；createSession 失败时尚无 sessionId，属实）；

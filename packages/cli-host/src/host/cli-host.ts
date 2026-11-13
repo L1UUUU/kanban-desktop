@@ -58,6 +58,9 @@ export class CliHost {
       case "setModel":
         // issue #79：会话中途切换模型（按 sessionId 路由；忙态/断开由 main 侧校验）
         return this.router.setModel(cmd.payload);
+      case "summarizeTitle":
+        // #95 / ADR 0003：一次性标题摘要（按 sessionId 路由；结果为命令返回值，不入 ChatEvent 事件流）
+        return this.router.summarizeTitle(cmd.payload);
       case "resolveApproval":
         await this.router.resolveApproval(cmd.payload);
         return;

@@ -11,6 +11,7 @@ import {
   IPC_CHANNELS,
   memoryEventSchema,
   residueProcessSchema,
+  sessionEventSchema,
   shutdownNoticeSchema,
   terminalEventSchema,
   trackerChangeSchema,
@@ -240,6 +241,8 @@ app.whenReady().then(async () => {
   // Adapter 事件流：出站校验 + 会话状态落库 + SkillObservation 进 tracker 落库（#9）→ 转发 renderer；窗口不在时静默丢弃转发
   // #17：tracker 变更出站过 schema 校验后经 tracker:event 转发 renderer（看板事件驱动刷新；与 chat:event/terminal:event 同模式）
   const sendTrackerChange = createValidatedSender(trackerChangeSchema, "tracker:event", getMainWindow);
+  // #95（ADR 0003 决策 2 摘要段）：首轮 idle 触发一次性异步摘要，完成经 session:event 轻通道推送刷新侧栏
+  const sendSessionEvent = createValidatedSender(sessionEventSchema, "session:event", getMainWindow);
   adapter.subscribe(
     createAdapterEventHandler({
       sessions,
@@ -250,6 +253,8 @@ app.whenReady().then(async () => {
         }
       },
       sendChange: sendTrackerChange,
+      adapter,
+      sendSessionEvent,
     }),
   );
 

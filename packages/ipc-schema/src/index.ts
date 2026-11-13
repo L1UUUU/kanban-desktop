@@ -14,5 +14,6 @@ export * from "./memory";
 export * from "./models";
 export * from "./residue";
 export * from "./session-activity";
+export * from "./session-event";
 export * from "./terminal";
 export * from "./transcript";

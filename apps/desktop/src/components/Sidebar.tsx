@@ -1,5 +1,5 @@
-// 用途：侧栏 —— 项目区（注册引导/项目行切换/悬浮「＋」CLI 新建菜单）+ 结构化会话与 PTY 终端两组会话行（CLI 色点/目录徽标/状态徽标/需求徽标/PTY 停止按钮，按当前项目过滤）+ 底部运行信息（原型一致项 1/2/3/6；PTY 实体 #12；REQ 徽标 #20；hover 归档 #58；hover 删除+二次确认 #62；分组标题语义澄清 #87）
-import { useState, type ReactNode } from "react";
+// 用途：侧栏 —— 项目区（注册引导/项目行切换/悬浮「＋」CLI 新建菜单）+ 结构化会话与 PTY 终端两组会话行（CLI 色点/目录徽标/状态徽标/需求徽标/PTY 停止按钮，按当前项目过滤）+ 底部运行信息（原型一致项 1/2/3/6；PTY 实体 #12；REQ 徽标 #20；hover 归档 #58；hover 删除+二次确认 #62；分组标题语义澄清 #87；#94 结构化行 hover 铅笔行内重命名）
+import { Fragment, useRef, useState, type ReactNode } from "react";
 import type { AppInfo, CliKind, ProjectRow } from "@kanban/ipc-schema";
 import type { SessionView } from "../features/chat/chat-store";
 import { StatusBadge } from "../features/chat/components/StatusBadge";
@@ -7,6 +7,9 @@ import { CLI_DOT_CLS, NEW_MENU_CLIS } from "../lib/cli-catalog";
 import { CLI_NOT_INSTALLED_HINT, isCliUnavailable, useCliInstallStatus } from "../lib/use-cli-status";
 import { DeleteSessionDialog } from "./DeleteSessionDialog";
 import { DirBadge } from "./DirBadge";
+
+/** #94 会话行内重命名提交签名：返回 null=成功、文案=失败（#84 RequirementCard 同款） */
+export type RenameSessionHandler = (sessionId: string, title: string) => Promise<string | null>;
 
 /** 会话行需求徽标（原型一致项 6，.req-badge）：REQ-id 文本 + 点击跳看板；span 避免 button 嵌套。
  *  可收缩截断（#65）：与状态徽标并存的 130px 行预算下 flex-none 徽标会把标题挤到 0 宽 */
@@ -51,11 +54,63 @@ export interface SidebarProps {
   onArchiveSession(sessionId: string): void;
   /** #62 会话行 hover「删除」（结构化与 PTY 同款）：经二次确认后由 Main 编排 unlink+终止+删记录，行移除 */
   onDeleteSession(sessionId: string): void;
+  /** #94 / ADR 0003 结构化会话行 hover 铅笔行内重命名：session:rename → manual 终态；PTY 行不提供（豁免） */
+  onRenameSession?: RenameSessionHandler;
   /** #20：会话→需求反查映射（kanban:list；会话行需求徽标数据源） */
   sessionToReq?: Record<string, string>;
   /** #20：会话行 REQ 徽标点击 → 进入看板并选中该需求（原型一致项 6） */
   onOpenRequirement?(requirementId: string): void;
   info?: ReactNode;
+}
+
+/**
+ * #94 会话行内重命名输入（#84 RequirementCard 同款交互：Enter/blur 提交、Esc 还原、settledRef 防重复提交）。
+ * 空白/未变直接退出不提交；提交回调由父层驱动 session:rename 并按结果清编辑态/显示错误。
+ */
+function SessionRenameInput({
+  title,
+  onCommit,
+  onCancel,
+}: {
+  title: string;
+  onCommit(next: string): void;
+  onCancel(): void;
+}) {
+  const [draft, setDraft] = useState(title);
+  // 一次编辑会话只提交/还原一次（Enter 直接提交后残余 blur、unmount 前 blur 不再重复发 session:rename）
+  const settledRef = useRef(false);
+  const commit = (): void => {
+    if (settledRef.current) return;
+    settledRef.current = true;
+    const next = draft.trim();
+    if (!next || next === title) {
+      onCancel();
+      return;
+    }
+    onCommit(next);
+  };
+  const cancel = (): void => {
+    if (settledRef.current) return;
+    settledRef.current = true;
+    onCancel();
+  };
+  return (
+    <input
+      data-testid="session-rename-input"
+      aria-label="会话标题"
+      title="重命名会话（Enter 提交，Esc 还原）"
+      autoFocus
+      onFocus={(e) => e.target.select()}
+      className="min-w-0 grow rounded-md border border-border bg-background px-1.5 text-[13px] text-foreground outline-none focus:border-primary"
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") commit();
+        if (e.key === "Escape") cancel();
+      }}
+    />
+  );
 }
 
 export function Sidebar({
@@ -71,6 +126,7 @@ export function Sidebar({
   onKillTerminal,
   onArchiveSession,
   onDeleteSession,
+  onRenameSession,
   sessionToReq = {},
   onOpenRequirement,
   info,
@@ -81,6 +137,9 @@ export function Sidebar({
   const cliInstalled = useCliInstallStatus(menuProjectId !== null);
   // #62 待二次确认删除的会话行（null=确认弹窗关闭）
   const [deleteTarget, setDeleteTarget] = useState<SessionView | null>(null);
+  // #94 行内重命名编辑态（结构化行独有；editingId=null=无）与失败提示（再次进入编辑时清除）
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameError, setRenameError] = useState<{ id: string; message: string } | null>(null);
 
   // 会话按作用域过滤：有当前项目=该项目会话；无=无项目会话（boot 演示链路可见）
   const scopedSessions = sessions.filter((s) =>
@@ -186,48 +245,89 @@ export function Sidebar({
         <p className="px-3.5 py-1 text-xs text-fg-faint">暂无会话</p>
       ) : (
         structured.map((s) => (
-          <div
-            key={s.sessionId}
-            className={`group relative flex w-full items-center gap-1 border-l-2 px-3.5 py-1.5 hover:bg-muted ${
-              s.sessionId === activeId ? "border-l-primary bg-muted" : "border-l-transparent"
-            }`}
-          >
-            {/* 常驻 pr-20 为 hover 操作区预留右缘（徽标永不进入该区，命中判定不被拦截）；标题 grow + 徽标 truncate 保证 130px 预算下标题不被挤到 0 宽（#65 验收回归） */}
-            <button
-              type="button"
-              data-testid="session-row"
-              data-active={s.sessionId === activeId ? "true" : "false"}
-              className="flex min-w-0 flex-1 items-center gap-1 pr-20 text-left"
-              onClick={() => onSelect(s.sessionId)}
+          <Fragment key={s.sessionId}>
+            <div
+              className={`group relative flex w-full items-center gap-1 border-l-2 px-3.5 py-1.5 hover:bg-muted ${
+                s.sessionId === activeId ? "border-l-primary bg-muted" : "border-l-transparent"
+              }`}
             >
-              <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${CLI_DOT_CLS[s.cli] ?? "bg-accent2"}`} />
-              {/* 标题 grow（basis auto）而非 flex-1（basis 0）：徽标超宽时按基准宽度分摊收缩，标题不被挤到 0 宽（#65 验收回归） */}
-              <span className="min-w-0 grow truncate text-[13px]" title={s.title}>
-                {s.title}
-              </span>
-              <DirBadge identity={s.dirIdentity} worktreeName={s.worktreeName} cwd={s.cwd} />
-              <StatusBadge status={s.status} />
-              {s.sessionId in sessionToReq ? <ReqBadge requirementId={sessionToReq[s.sessionId]} onOpen={onOpenRequirement} /> : null}
-            </button>
-            <div className="absolute right-3.5 top-1/2 flex -translate-y-1/2 gap-1 opacity-0 group-hover:opacity-100">
-              <button
-                type="button"
-                title="归档（移出默认列表，可在设置找回）"
-                className="h-5 rounded-md px-1 text-[11px] text-fg-faint hover:text-primary"
-                onClick={() => onArchiveSession(s.sessionId)}
-              >
-                归档
-              </button>
-              <button
-                type="button"
-                title="删除（终止进程并移除会话记录，不可撤销）"
-                className="h-5 rounded-md px-1 text-[11px] text-fg-faint hover:text-destructive"
-                onClick={() => setDeleteTarget(s)}
-              >
-                删除
-              </button>
+              {renamingId === s.sessionId ? (
+                // #94 行内编辑态：input 替换标题行（色点保留，徽标暂避让）
+                <>
+                  <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${CLI_DOT_CLS[s.cli] ?? "bg-accent2"}`} />
+                  <SessionRenameInput
+                    title={s.title}
+                    onCommit={(next) => {
+                      setRenamingId(null);
+                      if (!onRenameSession) return;
+                      void onRenameSession(s.sessionId, next).then((err) => {
+                        if (err) setRenameError({ id: s.sessionId, message: err });
+                      });
+                    }}
+                    onCancel={() => setRenamingId(null)}
+                  />
+                </>
+              ) : (
+                <>
+                  {/* 常驻 pr-20 为 hover 操作区预留右缘（徽标永不进入该区，命中判定不被拦截）；标题 grow + 徽标 truncate 保证 130px 预算下标题不被挤到 0 宽（#65 验收回归） */}
+                  <button
+                    type="button"
+                    data-testid="session-row"
+                    data-active={s.sessionId === activeId ? "true" : "false"}
+                    className="flex min-w-0 flex-1 items-center gap-1 pr-20 text-left"
+                    onClick={() => onSelect(s.sessionId)}
+                  >
+                    <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${CLI_DOT_CLS[s.cli] ?? "bg-accent2"}`} />
+                    {/* 标题 grow（basis auto）而非 flex-1（basis 0）：徽标超宽时按基准宽度分摊收缩，标题不被挤到 0 宽（#65 验收回归） */}
+                    <span className="min-w-0 grow truncate text-[13px]" title={s.title}>
+                      {s.title}
+                    </span>
+                    <DirBadge identity={s.dirIdentity} worktreeName={s.worktreeName} cwd={s.cwd} />
+                    <StatusBadge status={s.status} />
+                    {s.sessionId in sessionToReq ? <ReqBadge requirementId={sessionToReq[s.sessionId]} onOpen={onOpenRequirement} /> : null}
+                  </button>
+                  <div className="absolute right-3.5 top-1/2 flex -translate-y-1/2 gap-1 opacity-0 group-hover:opacity-100">
+                    {onRenameSession ? (
+                      // #94 手动重命名铅笔（结构化行独有；PTY 行豁免）
+                      <button
+                        type="button"
+                        title="重命名会话"
+                        className="h-5 w-5 rounded-md text-[11px] text-fg-faint hover:text-primary"
+                        onClick={() => {
+                          setRenameError(null); // 再次进入编辑：清除上次失败提示
+                          setRenamingId(s.sessionId);
+                        }}
+                      >
+                        ✎
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      title="归档（移出默认列表，可在设置找回）"
+                      className="h-5 rounded-md px-1 text-[11px] text-fg-faint hover:text-primary"
+                      onClick={() => onArchiveSession(s.sessionId)}
+                    >
+                      归档
+                    </button>
+                    <button
+                      type="button"
+                      title="删除（终止进程并移除会话记录，不可撤销）"
+                      className="h-5 rounded-md px-1 text-[11px] text-fg-faint hover:text-destructive"
+                      onClick={() => setDeleteTarget(s)}
+                    >
+                      删除
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
-          </div>
+            {renameError?.id === s.sessionId ? (
+              // #94 重命名失败行内提示（标题回滚由 store 未变天然保证）
+              <p data-testid="session-rename-error" className="px-3.5 pb-1 text-[11px] text-destructive">
+                {renameError.message}
+              </p>
+            ) : null}
+          </Fragment>
         ))
       )}
 

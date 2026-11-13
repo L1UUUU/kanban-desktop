@@ -83,6 +83,11 @@ export class AdapterRouter implements CliAdapter {
     return this.route(input.sessionId).setModel(input);
   }
 
+  /** 一次性标题摘要（#95 / ADR 0003）：按 sessionId 路由到所属 Adapter */
+  async summarizeTitle(sessionId: string): Promise<string | null> {
+    return this.route(sessionId).summarizeTitle(sessionId);
+  }
+
   async resolveApproval(input: ResolveApprovalInput): Promise<void> {
     return this.route(input.sessionId).resolveApproval(input);
   }

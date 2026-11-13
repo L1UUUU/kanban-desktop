@@ -1,10 +1,11 @@
-// 用途：session 子通道路由表 —— session:list/archivedList/archive/unarchive/delete/create/send/interrupt/setModel/resolveApproval/readHistory/resume 十二个 handler（#72 C1 Step2 自 ipc.ts route switch 原样迁入；归档/取消归档/删除编排主体在 session-lifecycle，#70 C2 唯一写者）
+// 用途：session 子通道路由表 —— session:list/archivedList/archive/unarchive/delete/create/send/interrupt/setModel/resolveApproval/readHistory/resume/rename 十三个 handler（#72 C1 Step2 自 ipc.ts route switch 原样迁入；归档/取消归档/删除编排主体在 session-lifecycle，#70 C2 唯一写者；#94 起标题派生挂 create/send 两 IPC + rename 手动主权，ADR 0003）
 import { homedir } from "node:os";
 import type { IpcRequest, IpcResult, SessionRow } from "@kanban/ipc-schema";
 import { AdapterError, detectSkillConflicts, resolveUserClaudeDir } from "@kanban/cli-host";
 import { detectDirIdentity } from "../git-identity";
 import type { IpcDeps } from "../ipc";
 import { guiEvent, linkAfterCreate, processAndEmit, TRACKER_CLI_BY_APP } from "./helpers";
+import { deriveTitle } from "../title-derive";
 import type { SubChannelHandlers } from "./table";
 
 /** session:* 请求子集 */
@@ -28,6 +29,7 @@ function toSessionRow(rec: ReturnType<IpcDeps["sessions"]["list"]>[number]): Ses
     nativeSessionId: rec.nativeSessionId,
     projectId: rec.projectId,
     title: rec.title,
+    ...(rec.titleSource ? { titleSource: rec.titleSource } : {}), // review A1：标题来源回带（#94 验收）
     cwd: rec.cwd,
     permMode: rec.permMode,
     status: rec.status ?? null,
@@ -98,7 +100,18 @@ export const sessionHandlers: SubChannelHandlers<SessionRequest, IpcResult, IpcD
       permMode: req.permMode,
       cli: req.cli,
     });
-    const title = req.title ?? `新会话 · ${CLI_LABELS[req.cli] ?? req.cli}`;
+    // #94 / ADR 0003 决策 2：firstMessage 携带时标题随行原子派生（insert 前算好，发送失败回滚整行天然一致；
+    // 请求显式 title 仅为 renderer 草稿占位名「新会话 · {CLI}」，非用户意图命名，派生优先提供可辨识性；
+    // 派生为空（纯空白消息）回退默认标题，不落空标题）
+    let title = req.title ?? `新会话 · ${CLI_LABELS[req.cli] ?? req.cli}`;
+    let titleSource: "default" | "derived" = "default";
+    if (req.firstMessage !== undefined) {
+      const derived = deriveTitle(req.firstMessage);
+      if (derived) {
+        title = derived;
+        titleSource = "derived";
+      }
+    }
     const identity = detectDirIdentity(req.cwd);
     // 会话落库（重启恢复依据；真实 Adapter 返回 native id 一并回填，Fake 无 native id 为 null；status 缺省 idle——新建恒 idle 决策在 store，#70）
     deps.sessions.insert({
@@ -108,6 +121,7 @@ export const sessionHandlers: SubChannelHandlers<SessionRequest, IpcResult, IpcD
       nativeSessionId: nativeSessionId ?? null,
       projectId: req.projectId ?? null,
       title,
+      titleSource,
       cwd: req.cwd,
       permMode: req.permMode ?? "auto",
       lastActiveAt: null,
@@ -153,7 +167,22 @@ export const sessionHandlers: SubChannelHandlers<SessionRequest, IpcResult, IpcD
   },
   "session:send": async (req, deps) => {
     await deps.adapter.sendTurn({ sessionId: req.sessionId, text: req.text });
-    return { ok: true };
+    // #94 / ADR 0003 决策 2：sendTurn 成功后按请求文本派生（失败在上方 throw，不派生——不留「来自未发出消息」的标题）；
+    // 门控仅 default 升级 derived（单向）；响应带回新标题，renderer 即时刷新无需推送
+    const derived = deriveTitle(req.text);
+    const applied = derived ? deps.sessions.applyDerivedTitle(req.sessionId, derived) : false;
+    return { ok: true, ...(applied ? { title: derived } : {}) };
+  },
+  "session:rename": async (req, deps) => {
+    // #94 / ADR 0003 手动重命名：置 manual（终态权威，吸收一切前态）；renderer 请求-响应后本地刷新（单窗口，无推送）
+    const rec = deps.sessions.get(req.sessionId);
+    if (!rec) return sessionNotFound(req.sessionId);
+    // review S5/C1：PTY 行拒绝（ADR 0003「PTY 永不进状态机」——终端标题由 shell 回写，rename 不改写其标题/来源）
+    if (rec.kind !== "structured") {
+      return { ok: false, error: { code: "E_INTERNAL", message: "PTY 会话不支持重命名（标题由终端回写维护）" } };
+    }
+    deps.sessions.renameTitle(req.sessionId, req.title);
+    return { ok: true, title: req.title };
   },
   "session:interrupt": async (req, deps) => {
     await deps.adapter.interruptTurn(req.sessionId);

@@ -61,6 +61,8 @@ export interface ChatControllerActions {
   archiveSession(sessionId: string): Promise<void>;
   /** #62 删除会话（侧栏 hover「删除」经二次确认）：Main 编排 unlink+终止+删记录；成功后本地移除行（含激活切换），失败在该会话上报错（行保留可重试） */
   deleteSession(sessionId: string): Promise<void>;
+  /** #94 / ADR 0003 手动重命名（侧栏行内铅笔 → session:rename → manual 终态）：成功本地刷新标题返回 null；失败返回错误文案（行内提示） */
+  renameSession(sessionId: string, title: string): Promise<string | null>;
   /** #21：关闭同名 skill 冲突提示条（仅隐藏不影响会话） */
   dismissSkillConflict(sessionId: string): void;
   /** #46：错误卡「知道了」清除会话 lastError（仅隐藏） */
@@ -100,8 +102,6 @@ export interface ChatControllerDeps {
   resolveCwd(projectId: string | null, cli: CliKind | "pty"): string | null;
   /** 项目不存在等新建拒绝提示（单源：3 份手抄归 1） */
   onNotice(message: string): void;
-  /** 内置 /kanban 命令的视图切换单源出口（issue #92：App 层 setView 经 ChatWorkspace 注入，composer 不直面 App） */
-  onSetView?(v: "chat" | "kanban"): void;
 }
 
 /**
@@ -310,6 +310,36 @@ export async function setModelChain(store: ChatStore, transport: ChatTransport, 
 }
 
 /**
+ * #94 / ADR 0003 手动重命名编排（模块级可直测）：session:rename → 成功本地刷新标题并返回 null（无错误）；
+ * 失败/异常返回错误文案（行内提示用），标题不动（DB 单一事实源，无乐观更新）。
+ */
+export async function renameSessionChain(store: ChatStore, transport: ChatTransport, sessionId: string, title: string): Promise<string | null> {
+  try {
+    const r = await transport.invoke({ channel: "session:rename", sessionId, title });
+    if (r.ok) {
+      store.updateSession(sessionId, { title });
+      return null;
+    }
+    return r.error.message;
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+}
+
+/**
+ * #95 / ADR 0003 摘要标题推送订阅（模块级可直测）：session:event 轻通道 → title 事件本地刷新侧栏标题
+ * （main 已按 title_source 门控——推送到达即代表 DB 已升级 summarized，renderer 无需再判权）。
+ * transport 未实现 onSessionEvent（旧 fake）时安全 no-op。
+ */
+export function subscribeSessionEvents(store: ChatStore, transport: ChatTransport): () => void {
+  return (
+    transport.onSessionEvent?.((event) => {
+      if (event.type === "title") store.updateSession(event.sessionId, { title: event.title });
+    }) ?? (() => undefined)
+  );
+}
+
+/**
  * 会话控制器 hook（issue #71：store 与 PTY 草稿机制均为 seam 之后的实现细节）。
  * deps.demoCwd 为 Fake 演示草稿 cwd（App 层经 AppInfo 注入：Main 读 KANBAN_FAKE_DEMO_CWD、缺省用户主目录）；
  * 未注入（null/undefined）前不自举 boot 演示草稿，真实会话 cwd 一律来自已注册项目（deps.resolveCwd）。
@@ -414,6 +444,12 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
     });
   }, [transport, manager, store]);
 
+  // session:event 订阅（#95 / ADR 0003）：摘要标题异步完成推送 → 侧栏标题本地刷新（manual 已在 main 门控不被覆盖）
+  useEffect(() => {
+    if (!transport) return;
+    return subscribeSessionEvents(store, transport);
+  }, [transport, store]);
+
   const killTerminal = useCallback(
     (terminalId: string) => {
       void transport?.invoke({ channel: "terminal:kill", terminalId });
@@ -443,15 +479,13 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
         if (!r.ok) store.setError(sessionId, r.error.code, r.error.message);
       });
     };
-    // #92 斜杠派发环境（透传/展开/内置/fail-closed 编排收口在 slash-dispatch-exec；此处只注入依赖）
+    // #92 斜杠派发环境（透传/展开/fail-closed 编排收口在 slash-dispatch-exec；此处只注入依赖；ADR 0004 零内置后无本地执行出口）
     const slashEnv = (): SlashDispatchEnv | null =>
       transport
         ? {
             store,
             transport,
             commands,
-            openSessionDraft: (input) => openSessionDraftAction({ store, drafts, manager, resolveCwd, onNotice }, input),
-            onSetView: deps.onSetView,
           }
         : null;
     return {
@@ -524,8 +558,10 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
           log.error("会话删除失败", { sessionId, code: r.error.code, message: r.error.message });
         }
       },
+      renameSession: (sessionId, title): Promise<string | null> =>
+        transport ? renameSessionChain(store, transport, sessionId, title) : Promise.resolve("transport 不可用"),
     };
-  }, [transport, store, resolveCwd, onNotice, drafts, manager, commands, deps.onSetView]);
+  }, [transport, store, resolveCwd, onNotice, drafts, manager, commands]);
 
   const activeSession = snap.activeId ? (store.getSession(snap.activeId) ?? null) : null;
   // 草稿判别联合聚合：结构化与 PTY 两分支并一支（中央区路由单源）

@@ -6,6 +6,7 @@ import { test, expect, _electron, type ElectronApplication, type Page } from "@p
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { FAKE_SUMMARY_TITLE } from "./helpers/fake-summary";
 
 const PROJECT_NAME = "kb-lc-repo";
 
@@ -55,14 +56,14 @@ async function send(win: Page, text: string): Promise<void> {
   await win.getByRole("button", { name: "发送 ➤" }).click();
 }
 
-/** 经项目行「＋」→ 菜单选 CLI：#59 草稿语义——点 CLI 只开草稿，发出首条消息才创建会话（侧栏行出现） */
-async function createSession(win: Page, cliLabel: string, nth = 0): Promise<void> {
+/** 经项目行「＋」→ 菜单选 CLI：#59 草稿语义——点 CLI 只开草稿，发出首条消息才创建会话（侧栏行出现；#94：行标题=首条消息派生，text 参数区分多会话） */
+async function createSession(win: Page, cliLabel: string, nth = 0, text = "首条消息（建立会话）"): Promise<void> {
   await win.locator("aside").getByText(PROJECT_NAME, { exact: true }).hover();
   await win.getByRole("button", { name: "＋", exact: true }).click();
   await win.getByRole("button", { name: cliLabel, exact: true }).click();
   await expect(win.getByTestId("draft-hint")).toBeVisible({ timeout: 10_000 });
-  await send(win, "首条消息（建立会话）");
-  await expect(win.getByText(`新会话 · ${cliLabel}`).nth(nth)).toBeVisible({ timeout: 10_000 });
+  await send(win, text);
+  await expect(win.locator("aside").getByText(text).nth(nth)).toBeVisible({ timeout: 10_000 });
 }
 
 /** 项目行悬浮「＋」打开新建菜单（hover 复用） */
@@ -119,8 +120,8 @@ test("草稿优先：点「＋」只开草稿（结构化与 PTY）→ 单草稿
 
     // 首条消息 = 创建+落库+发送原子链：侧栏出现会话行并激活
     await send(win, "首条消息（建立会话）");
-    await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
-    await expect(win.locator('aside [data-testid="session-row"][data-active="true"]')).toContainText("新会话 · Claude");
+    await expect(win.locator("aside").getByText("首条消息（建立会话）")).toBeVisible({ timeout: 10_000 }); // #94：标题=首条派生
+    await expect(win.locator('aside [data-testid="session-row"][data-active="true"]')).toContainText("首条消息（建立会话）");
 
     // PTY 草稿首输入才创建：键入首个字符 → 终端行落库出现在 PTY 分组
     await openCreateMenu(win);
@@ -148,10 +149,10 @@ test("归档 → 设置面板按项目分组 → 取消归档回列表（已断�
     await expect(win.getByText("空闲").first()).toBeVisible({ timeout: 30_000 });
 
     // hover 归档：行移出默认列表（数据保留），结构化分组回空态
-    const row = sessionRow(win, "新会话 · Claude");
+    const row = sessionRow(win, FAKE_SUMMARY_TITLE); // #95：首轮后行标题=摘要固定值
     await row.hover();
     await row.getByRole("button", { name: "归档", exact: true }).click();
-    await expect(win.locator("aside").getByText("新会话 · Claude")).toHaveCount(0, { timeout: 10_000 });
+    await expect(win.locator("aside").getByText(FAKE_SUMMARY_TITLE)).toHaveCount(0, { timeout: 10_000 });
     await expect(win.locator("aside").getByText("暂无会话")).toBeVisible();
 
     // 设置面板：已归档会话按项目分组可见（当前项目分组默认展开），条目含标题/CLI/最后活跃/归档时间
@@ -162,7 +163,7 @@ test("归档 → 设置面板按项目分组 → 取消归档回列表（已断�
     await expect(group.getByTestId("archived-group-head")).toBeVisible();
     await expect(group.getByTestId("archived-group-head")).toContainText("1 条");
     const item = group.getByTestId("archived-item");
-    await expect(item).toContainText("新会话 · Claude");
+    await expect(item).toContainText(FAKE_SUMMARY_TITLE); // #95：标题=摘要固定值
     await expect(item).toContainText("Claude · 最后活跃");
     await expect(item).toContainText("归档于");
 
@@ -170,11 +171,11 @@ test("归档 → 设置面板按项目分组 → 取消归档回列表（已断�
     await item.getByTestId("archived-unarchive").click();
     await expect(win.getByTestId("archived-empty")).toBeVisible({ timeout: 10_000 });
     await modal.getByRole("button", { name: "完成" }).click();
-    await expect(win.locator("aside").getByText("新会话 · Claude")).toBeVisible({ timeout: 10_000 });
+    await expect(win.locator("aside").getByText(FAKE_SUMMARY_TITLE)).toBeVisible({ timeout: 10_000 });
     await expect(win.getByText("已断开").first()).toBeVisible();
 
     // 结构化行选中即出恢复引导条 → 读取原生历史并恢复 → 空闲可续聊
-    await win.locator("aside").getByText("新会话 · Claude").click();
+    await win.locator("aside").getByText(FAKE_SUMMARY_TITLE).click();
     const resumeBanner = win.getByTestId("resume-banner");
     await expect(resumeBanner).toBeVisible({ timeout: 10_000 });
     await expect(resumeBanner).toContainText("缓存消息不替代原生历史");
@@ -197,40 +198,40 @@ test("删除二次确认与激活切换：取消不发请求 → 删激活切相
     const { app, win } = await launchApp(userData, repoDir);
     await win.getByRole("button", { name: "＋ 注册", exact: true }).click();
     await expect(win.locator("aside").getByText(PROJECT_NAME, { exact: true })).toBeVisible({ timeout: 15_000 });
-    // 三会话按创建序 A(Codex) B(Claude) C(OpenCode)；创建后激活 = C
-    await createSession(win, "Codex");
-    await createSession(win, "Claude");
-    await createSession(win, "OpenCode");
+    // 三会话按创建序 A(Codex) B(Claude) C(OpenCode)；创建后激活 = C（#94：各会话用不同首条消息区分派生标题）
+    await createSession(win, "Codex", 0, "甲会话首条");
+    await createSession(win, "Claude", 0, "乙会话首条");
+    await createSession(win, "OpenCode", 0, "丙会话首条");
     const activeRow = win.locator('aside [data-testid="session-row"][data-active="true"]');
-    await expect(activeRow).toContainText("新会话 · OpenCode");
+    await expect(activeRow).toContainText("丙会话首条");
 
     // hover 删除 → 二次确认（影响说明 + 不可撤销）；「取消」不发请求、行保留
-    const rowA = sessionRow(win, "新会话 · Codex");
+    const rowA = sessionRow(win, "甲会话首条");
     await rowA.hover();
     await rowA.getByRole("button", { name: "删除", exact: true }).click();
     const dialog = win.getByTestId("delete-session-dialog");
     await expect(dialog).toBeVisible({ timeout: 10_000 });
-    await expect(dialog).toContainText("确定删除『新会话 · Codex』吗？");
+    await expect(dialog).toContainText("确定删除『甲会话首条』吗？");
     await expect(dialog).toContainText("此操作不可撤销");
     await dialog.getByRole("button", { name: "取消" }).click();
     await expect(win.getByTestId("delete-session-overlay")).toHaveCount(0);
-    await expect(win.locator("aside").getByText("新会话 · Codex")).toBeVisible();
+    await expect(win.locator("aside").getByText("甲会话首条")).toBeVisible();
 
     // 删除激活的 C（排序末位）→ 无下一条切上一条 B
-    const rowC = sessionRow(win, "新会话 · OpenCode");
+    const rowC = sessionRow(win, "丙会话首条");
     await rowC.hover();
     await rowC.getByRole("button", { name: "删除", exact: true }).click();
     await win.getByTestId("delete-session-confirm").click();
-    await expect(win.locator("aside").getByText("新会话 · OpenCode")).toHaveCount(0, { timeout: 10_000 });
-    await expect(activeRow).toContainText("新会话 · Claude");
+    await expect(win.locator("aside").getByText("丙会话首条")).toHaveCount(0, { timeout: 10_000 });
+    await expect(activeRow).toContainText("乙会话首条");
 
     // 删除 B（现为末位）→ 切上一条 A
-    const rowB = sessionRow(win, "新会话 · Claude");
+    const rowB = sessionRow(win, "乙会话首条");
     await rowB.hover();
     await rowB.getByRole("button", { name: "删除", exact: true }).click();
     await win.getByTestId("delete-session-confirm").click();
-    await expect(win.locator("aside").getByText("新会话 · Claude")).toHaveCount(0, { timeout: 10_000 });
-    await expect(activeRow).toContainText("新会话 · Codex");
+    await expect(win.locator("aside").getByText("乙会话首条")).toHaveCount(0, { timeout: 10_000 });
+    await expect(activeRow).toContainText("甲会话首条");
 
     // 全删 → 空态：侧栏与中央区均无会话
     await rowA.hover();
@@ -254,8 +255,8 @@ test("重启后历史与配置正确：会话恢复断开态 + autoArchive 开�
     const first = await launchApp(userData, repoDir);
     await first.win.getByRole("button", { name: "＋ 注册", exact: true }).click();
     await expect(first.win.locator("aside").getByText(PROJECT_NAME, { exact: true })).toBeVisible({ timeout: 15_000 });
-    await createSession(first.win, "Claude");
-    await createSession(first.win, "Codex");
+    await createSession(first.win, "Claude", 0, "重启可见的会话");
+    await createSession(first.win, "Codex", 0, "码字会话首条");
     await expect(first.win.getByText("空闲").first()).toBeVisible({ timeout: 30_000 });
 
     await first.win.getByRole("button", { name: "设置", exact: true }).click();
@@ -275,8 +276,8 @@ test("重启后历史与配置正确：会话恢复断开态 + autoArchive 开�
     const second = await launchApp(userData);
     await expect(second.win.getByText("已断开").first()).toBeVisible({ timeout: 15_000 });
     await expect(second.win.locator("aside").locator('[data-testid="session-row"]')).toHaveCount(2, { timeout: 10_000 });
-    await expect(second.win.getByText("新会话 · Claude").first()).toBeVisible();
-    await expect(second.win.getByText("新会话 · Codex").first()).toBeVisible();
+    // #95：两会话首轮均完成，重启行标题=DB 摘要固定值（同文两行，按数量断言两行俱在）
+    await expect(second.win.locator("aside").getByText(FAKE_SUMMARY_TITLE)).toHaveCount(2);
 
     // 配置正确：开关仍开、天数 45 仍生效；启动扫描已跑（异步，反馈最终为上次扫描结果）
     await second.win.getByRole("button", { name: "设置", exact: true }).click();
@@ -321,7 +322,7 @@ test("失败注入：Fake 创建失败（E_SPAWN_NOT_FOUND）→ 草稿与输入
     // 重试发送：重新执行「创建+发送首条消息」→ 成功后卡消失 + 会话登记 + 草稿丢弃
     await card.getByRole("button", { name: "重试发送" }).click();
     await expect(card).toHaveCount(0, { timeout: 15_000 });
-    await expect(win.getByText("新会话 · Claude").first()).toBeVisible({ timeout: 10_000 });
+    await expect(win.locator("aside").getByText("要重试的首条")).toBeVisible({ timeout: 10_000 }); // #94：标题=首条派生
     await second.app.close();
   } finally {
     await rmBestEffort(userData);

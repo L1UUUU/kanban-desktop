@@ -1,5 +1,6 @@
-// 用途：Adapter 事件流接线（#9；#16 起在 SkillObservation 分支注入会话项目，#17 起把 tracker 变更经 sendChange 推送 renderer，#53 起诊断走统一日志，#70 起 ChatEvent 落库/迟到守卫经 store.applyEvent 一次收口）—— 出站 zod 校验 + 会话落库 + SkillObservation 进 TrackerEngine（stage_events 幂等落库 + 状态机驱动）+ 转发 renderer；从 index.ts 提取为可单测的纯接线
-import { adapterEventSchema, type AdapterEvent } from "@kanban/ipc-schema";
+// 用途：Adapter 事件流接线（#9；#16 起在 SkillObservation 分支注入会话项目，#17 起把 tracker 变更经 sendChange 推送 renderer，#53 起诊断走统一日志，#70 起 ChatEvent 落库/迟到守卫经 store.applyEvent 一次收口，#95 起首轮 idle 触发一次性异步标题摘要并经 session:event 轻通道推送）—— 出站 zod 校验 + 会话落库 + SkillObservation 进 TrackerEngine（stage_events 幂等落库 + 状态机驱动）+ 转发 renderer；从 index.ts 提取为可单测的纯接线
+import type { CliAdapter } from "@kanban/cli-host";
+import { adapterEventSchema, type AdapterEvent, type ChatEvent, type SessionEventWire } from "@kanban/ipc-schema";
 import type { TrackerChange, TrackerEngine } from "@kanban/tracker";
 import type { LogFn } from "./logger";
 import type { SessionStore } from "./session-store";
@@ -11,12 +12,18 @@ export interface AdapterEventDeps {
   send(event: AdapterEvent): void;
   /** #17：tracker 变更推送（webContents.send("tracker:event")；可选，缺省不推送供旧接线/测试） */
   sendChange?(change: TrackerChange): void;
+  /** #95 / ADR 0003 摘要触发面（窄注入：CliAdapter 满足本面；可选，缺省不触发供旧接线/测试） */
+  adapter?: Pick<CliAdapter, "summarizeTitle">;
+  /** #95：session:event 轻通道推送（摘要标题完成通知，schema 见 sessionEventSchema；可选，缺省写库不推送） */
+  sendSessionEvent?(event: SessionEventWire): void;
   /** #53（spec #52 I 节）：诊断日志 —— 出站契约丢弃与 tracker 处理失败记 error；缺省 no-op 供旧测试（console 迁移至统一日志） */
   log?: LogFn;
 }
 
 /** 构造 adapter.subscribe 的处理器：ChatEvent 落会话库、SkillObservation 进 tracker、全部事件转发 renderer；任何失败只记日志不抛出（不打断 adapter 事件泵，spec H 不崩溃） */
 export function createAdapterEventHandler(deps: AdapterEventDeps): (event: AdapterEvent) => void {
+  // #95 / ADR 0003：本进程已尝试摘要的会话（免新列；含失败/null——同进程不重试，重启后靠 title_source 门控防重复）
+  const attemptedSummary = new Set<string>();
   return (event) => {
     try {
       adapterEventSchema.parse(event); // 出站也过 schema 校验（spec E，廉价全量）；不合契约的事件丢弃并记日志
@@ -28,6 +35,7 @@ export function createAdapterEventHandler(deps: AdapterEventDeps): (event: Adapt
     // dropped（已归档/已删除）不写库、不转发 renderer（杜绝幽灵行）；session_error 等其余 ChatEvent（#41）守卫放行但零写入
     if ("type" in event) {
       if (deps.sessions.applyEvent(event, new Date().toISOString()) === "dropped") return;
+      maybeSummarize(event);
     } else {
       // SkillObservation：同守卫挡 tracker 与转发（projectId 注入与 tracker 接线是事件泵职责，不进 store）
       if (deps.sessions.shouldDropEvents(event.sessionId)) return;
@@ -44,4 +52,29 @@ export function createAdapterEventHandler(deps: AdapterEventDeps): (event: Adapt
     }
     deps.send(event);
   };
+
+  /**
+   * #95 / ADR 0003 决策 2 摘要触发：idle 事件 + kind='structured' + title_source='derived' + 本进程未尝试 →
+   * 异步一次性摘要（不阻塞事件泵）；返回非 null 经 store.applySummarizedTitle 门控写入（manual/已删行/竞态零命中），
+   * 生效才经 session:event 推送；失败/超时/null 静默不重试（attemptedSummary 在调用前登记，含失败）。
+   */
+  function maybeSummarize(event: ChatEvent): void {
+    const summarizer = deps.adapter;
+    if (!summarizer || event.type !== "session_status" || event.status !== "idle") return;
+    if (attemptedSummary.has(event.sessionId)) return;
+    const row = deps.sessions.get(event.sessionId);
+    if (!row || row.kind !== "structured" || row.titleSource !== "derived") return;
+    attemptedSummary.add(event.sessionId);
+    summarizer
+      .summarizeTitle(event.sessionId)
+      .then((raw) => {
+        const title = raw?.trim();
+        if (!title) return; // null/空串：CLI 无摘要能力（opencode）或产出为空，降级保留 fallback
+        if (!deps.sessions.applySummarizedTitle(event.sessionId, title)) return; // 门控拒绝：竞态下已 manual/已删行
+        deps.sendSessionEvent?.({ type: "title", sessionId: event.sessionId, title });
+      })
+      .catch((err) => {
+        deps.log?.("error", "adapter", `会话标题摘要失败（静默不重试）：${err instanceof Error ? err.message : String(err)}`);
+      });
+  }
 }

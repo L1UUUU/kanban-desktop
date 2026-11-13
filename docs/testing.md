@@ -40,7 +40,7 @@
 | `packages/cli-host/tests/e2e/` | `*.e2e.test.ts` | vitest（单 project） | node | claude / codex / opencode / lifecycle 四件套 + run-once-claude / run-once-job |
 | `apps/desktop/tests/`（根） | `*.test.ts` | vitest node project | node | memory-ipc.test.ts（IPC 集成，默认跑）+ memory-fixture.ts（共享装配，非测试文件） |
 | `apps/desktop/tests/e2e/` | `*.e2e.test.ts` | vitest node project | node | conpty.e2e.test.ts + memory.e2e.test.ts + slash-command-trigger.e2e.test.ts（三 CLI 命令触发，issue #91） |
-| `apps/desktop/e2e/` | `*.spec.ts` | Playwright | Electron 构建产物（out/） | 27 个整机 spec（74 用例；#65 会话生命周期验收起含 stage5 截图与全流程两组） |
+| `apps/desktop/e2e/` | `*.spec.ts` | Playwright | Electron 构建产物（out/） | 28 个整机 spec（78 用例；#65 会话生命周期验收起含 stage5 截图与全流程两组） |
 
 环境映射靠目录不靠文件内声明：
 
@@ -72,6 +72,7 @@ Playwright（`apps/desktop/playwright.config.ts`）：testDir `./e2e`，workers 
 | `KANBAN_FAKE_MODELS_DELAY_MS` | `apps/desktop/e2e/model-combobox.spec.ts`（#81 combobox 加载阻塞态） | Fake listModels 前置延迟毫秒数（整机 Playwright 观察「模型列表加载中」发送禁用窗口）；消费位置同上 | launch env（非 skip 门禁） |
 | `KANBAN_FAKE_MODELS_FAIL_FIRST` | `apps/desktop/e2e/model-combobox.spec.ts`（#81 combobox 拉取失败态） | Fake 前 N 次 listModels 抛 E_SPAWN_NOT_FOUND（驱动失败原因行 + 手输 id 兜底发送）；消费位置同上 | launch env（非 skip 门禁） |
 | `KANBAN_FAKE_SETMODEL_FAIL_FIRST` | `apps/desktop/e2e/model-switch.spec.ts`（#81 中途切换失败回滚） | Fake 前 N 次 setModel 抛 AdapterError（消息含模型名；驱动 chip 回滚 + 会话错误卡）；消费位置同上 | launch env（非 skip 门禁） |
+| `KANBAN_FAKE_SUMMARIZE_DELAY_MS` | `apps/desktop/e2e/session-title.spec.ts`（#95 摘要竞态用例） | Fake summarizeTitle 前置延迟毫秒数（整机 Playwright 驱动「摘要进行中手动重命名不被覆盖」竞态）；消费位置同上 | launch env（非 skip 门禁） |
 | `KANBAN_TEST_RESIDUE_JSON` | `apps/desktop/e2e/residue.spec.ts`（残留通知条演示流程） | 指向残留清单 JSON（逐条过 `residueProcessSchema` 校验）：Main 检测直接返回种子、`residue:kill` 不真实终止统一回报 killed；另 `KANBAN_USER_DATA` 隔离环境下无种子时跳过机器级残留枚举（整机 e2e 密封性，见 `docs/acceptance/stage4/residue-known-limits.md`） | launch env（非 skip 门禁） |
 | `KANBAN_TEST_CLI_STATUS_JSON` | `apps/desktop/e2e/cli-status.spec.ts`（#80 菜单禁用态流程）；Main 侧 `electron/main/cli-status-service.ts` | 指向 `{codex,claude,opencode}` 布尔种子 JSON：`cli:status` 探测直接按种子应答且每次重读（改写文件即探测翻转，驱动「装完重开菜单恢复」整机用例）；无种子走真实 exe 解析链（`KANBAN_DISABLE_*` 回落 Fake 时菜单不灰置） | launch env（非 skip 门禁） |
 | `KANBAN_E2E_DEBUG` | cli-host 四件套内的调试日志 | 非空时向 stderr 输出调试日志 | 调试开关（非门禁） |
@@ -93,7 +94,7 @@ Playwright（`apps/desktop/playwright.config.ts`）：testDir `./e2e`，workers 
 | 级别 | 命令 | 实际展开 | 跑什么 |
 |---|---|---|---|
 | 根 | `pnpm test` | `pnpm -r test` | 5 包 vitest 全量：A 类执行，B 类显示 skipped |
-| 根 | `pnpm test:e2e` | `pnpm --filter @kanban/desktop test:e2e` | **C 类**：Playwright 27 spec / 74 用例（先 electron-vite build 再 playwright test；`KANBAN_REAL_E2E=1` 才含 real 两个 spec） |
+| 根 | `pnpm test:e2e` | `pnpm --filter @kanban/desktop test:e2e` | **C 类**：Playwright 28 spec / 78 用例（先 electron-vite build 再 playwright test；`KANBAN_REAL_E2E=1` 才含 real 两个 spec） |
 | 根 | `pnpm test:e2e:no-build` | `pnpm --filter @kanban/desktop test:e2e:no-build` | **C 类增量**：跳过 build 跑上次构建产物，支持 spec 文件名/`-g` 用例名过滤（日常迭代跑子集，收尾验收再全量） |
 | 根 | `pnpm typecheck` | `pnpm -r typecheck` | 各包 `tsc --noEmit`（含 tests/ 目录） |
 | 根 | `pnpm lint` | `oxlint apps packages` | oxlint（范围含新 tests/ 目录） |

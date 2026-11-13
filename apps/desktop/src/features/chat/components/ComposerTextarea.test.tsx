@@ -1,4 +1,4 @@
-// 用途：斜杠补全菜单密封测试（issue #90 / spec #82 E 块）—— 键盘协议（↑↓ 循环/Enter/Tab 接受/Esc 同 token 不重开）、mousedown 焦点保持、IME 合成冻结、预热与 TTL 不重复拉取、分组顺序
+// 用途：斜杠补全菜单密封测试（issue #90 / spec #82 E 块；ADR 0004 零内置）—— 键盘协议（↑↓ 循环/Enter/Tab 接受/Esc 同 token 不重开）、mousedown 焦点保持、IME 合成冻结、预热与 TTL 不重复拉取、单组排序与空态文案
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CliKind, IpcResult } from "@kanban/ipc-schema";
@@ -11,7 +11,7 @@ afterEach(cleanup);
 
 const CWD = "C:/demo";
 
-/** fake 固定命令集应答（与 FakeAdapter.FAKE_COMMANDS 同形：驱动菜单展示断言） */
+/** 命令目录应答 fixture（菜单机制测试数据；ADR 0004 后 fake 通道恒空集，条目仅驱动键盘/过滤/分组断言） */
 const FAKE_OK: IpcResult = {
   ok: true,
   commands: [
@@ -79,45 +79,41 @@ function highlighted(): HTMLElement | undefined {
 }
 
 describe("斜杠补全菜单（键盘协议）", () => {
-  it("输入 / 弹菜单：应用命令组在前、CLI 命令组在后（fake 固定集可见），名称+描述展示", async () => {
+  it("输入 / 弹菜单：仅 CLI 命令单组（ADR 0004 零内置），名称+描述展示", async () => {
     await mountReady();
     type("/", 1);
     expect(menu()).not.toBeNull();
-    // 分组顺序：应用（kanban/pty 按名序）→ CLI（fake-* 按名序）
+    // 单组按名称序（无应用命令组）
     expect(items().map((el) => el.textContent)).toEqual([
-      expect.stringContaining("/kanban"),
-      expect.stringContaining("/pty"),
       expect.stringContaining("/fake-plan"),
       expect.stringContaining("/fake-skill"),
       expect.stringContaining("/fake-user-only"),
     ]);
-    // 分组标题（两组各一）
-    expect(screen.getAllByTestId("slash-menu-group").map((el) => el.textContent)).toEqual(["应用命令", "CLI 命令"]);
+    // 分组标题（单组：CLI 命令）
+    expect(screen.getAllByTestId("slash-menu-group").map((el) => el.textContent)).toEqual(["CLI 命令"]);
     // 名称 + 描述 + 参数提示展示
-    expect(items()[2].textContent).toContain("演示命令：请求一份轻量计划");
-    expect(items()[3].textContent).toContain("$ARGUMENTS");
+    expect(items()[0].textContent).toContain("演示命令：请求一份轻量计划");
+    expect(items()[1].textContent).toContain("$ARGUMENTS");
   });
 
-  it("过滤：query 缩小候选（前缀/模糊命中），无命中显示无匹配提示", async () => {
+  it("过滤：query 缩小候选（前缀/模糊命中），无命中显示空态引导文案", async () => {
     await mountReady();
-    type("/pty", 4);
-    expect(items().map((el) => el.textContent)).toEqual([expect.stringContaining("/pty")]);
+    type("/fake-sk", 8);
+    expect(items().map((el) => el.textContent)).toEqual([expect.stringContaining("/fake-skill")]);
     type("/zzz", 5);
     expect(items()).toEqual([]);
-    expect(menu()?.textContent).toContain("无匹配命令");
+    expect(menu()?.textContent).toContain("无可用命令");
   });
 
   it("↑↓ 循环高亮：ArrowDown 逐项下移、越尾回绕 0；ArrowUp 越头回绕到尾", async () => {
     await mountReady();
     type("/", 1);
-    expect(highlighted()?.textContent).toContain("/kanban"); // 初始高亮第 0 项
+    expect(highlighted()?.textContent).toContain("/fake-plan"); // 初始高亮第 0 项
     fireEvent.keyDown(ta(), { key: "ArrowDown" });
-    expect(highlighted()?.textContent).toContain("/pty");
+    expect(highlighted()?.textContent).toContain("/fake-skill");
     fireEvent.keyDown(ta(), { key: "ArrowDown" });
-    fireEvent.keyDown(ta(), { key: "ArrowDown" });
-    fireEvent.keyDown(ta(), { key: "ArrowDown" });
-    fireEvent.keyDown(ta(), { key: "ArrowDown" }); // 第 5 次：越尾回绕
-    expect(highlighted()?.textContent).toContain("/kanban");
+    fireEvent.keyDown(ta(), { key: "ArrowDown" }); // 第 3 次：越尾回绕
+    expect(highlighted()?.textContent).toContain("/fake-plan");
     fireEvent.keyDown(ta(), { key: "ArrowUp" }); // 越头回绕到尾
     expect(highlighted()?.textContent).toContain("/fake-user-only");
   });
@@ -125,10 +121,10 @@ describe("斜杠补全菜单（键盘协议）", () => {
   it("Enter 接受：命令引用置入输入流（/name 尾随空格），光标落在实参位，菜单关闭", async () => {
     await mountReady();
     type("/", 1);
-    fireEvent.keyDown(ta(), { key: "ArrowDown" }); // 高亮 /pty
+    fireEvent.keyDown(ta(), { key: "ArrowDown" }); // 高亮 /fake-skill
     fireEvent.keyDown(ta(), { key: "Enter" });
-    expect(ta().value).toBe("/pty ");
-    expect(ta().selectionStart).toBe(5); // 光标在尾随空格后（实参位）
+    expect(ta().value).toBe("/fake-skill ");
+    expect(ta().selectionStart).toBe(12); // 光标在尾随空格后（实参位）
     expect(menu()).toBeNull(); // 替换后新光标处不再触发，菜单关闭
   });
 
@@ -138,7 +134,7 @@ describe("斜杠补全菜单（键盘协议）", () => {
     fireEvent.keyDown(ta(), { key: "Tab", shiftKey: true });
     expect(ta().value).toBe("/"); // 未接受
     fireEvent.keyDown(ta(), { key: "Tab" });
-    expect(ta().value).toBe("/kanban ");
+    expect(ta().value).toBe("/fake-plan ");
   });
 
   it("Esc 关闭且同一 token 不再弹出；token 改变后重新弹出", async () => {
@@ -159,7 +155,7 @@ describe("斜杠补全菜单（键盘协议）", () => {
     type("/", 1);
     ta().focus();
     // dispatchEvent 对 preventDefault 过的事件返回 false——即「不转移焦点」机制生效的直接证据
-    expect(fireEvent.mouseDown(items()[2])).toBe(false); // /fake-plan
+    expect(fireEvent.mouseDown(items()[0])).toBe(false); // /fake-plan
     expect(ta().value).toBe("/fake-plan ");
     expect(document.activeElement).toBe(ta()); // 焦点未离开输入框
   });
@@ -167,17 +163,16 @@ describe("斜杠补全菜单（键盘协议）", () => {
   it("鼠标悬停同步高亮（mousemove）", async () => {
     await mountReady();
     type("/", 1);
-    fireEvent.mouseMove(items()[3]);
+    fireEvent.mouseMove(items()[1]);
     expect(highlighted()?.textContent).toContain("/fake-skill");
   });
 
-  it("选中回调 onAcceptCommand 携带所选命令（#92 执行接线的数据面）", async () => {
+  it("选中回调 onAcceptCommand 携带所选命令（cli 组命令）", async () => {
     const onAccept = vi.fn();
     await mountReady({ onAcceptCommand: onAccept });
     type("/", 1);
-    fireEvent.keyDown(ta(), { key: "ArrowDown" });
     fireEvent.keyDown(ta(), { key: "Enter" });
-    expect(onAccept).toHaveBeenCalledWith(expect.objectContaining({ name: "pty", group: "app" }));
+    expect(onAccept).toHaveBeenCalledWith(expect.objectContaining({ name: "fake-plan", group: "cli" }));
   });
 });
 
@@ -185,20 +180,20 @@ describe("斜杠补全菜单（IME 合成冻结）", () => {
   it("合成期菜单冻结不闪动：过滤不重算；compositionend 后用最新值重估", async () => {
     await mountReady();
     type("/", 1);
-    expect(items().length).toBe(5);
+    expect(items().length).toBe(3);
     fireEvent.compositionStart(ta());
     imeInput("/中"); // 合成中草稿变化：冻结快照仍显示全量（不闪不关）
     expect(menu()).not.toBeNull();
-    expect(items().length).toBe(5);
+    expect(items().length).toBe(3);
     // 合成期 Enter（keyCode 229）不驱动菜单
     fireEvent.keyDown(ta(), { key: "Enter", keyCode: 229 });
     expect(ta().value).toBe("/中");
     expect(menu()).not.toBeNull();
     fireEvent.compositionEnd(ta());
-    // 重估：query=「中」无命中 → 无匹配提示（仍开）
+    // 重估：query=「中」无命中 → 空态引导文案（仍开）
     expect(menu()).not.toBeNull();
     expect(items()).toEqual([]);
-    expect(menu()?.textContent).toContain("无匹配命令");
+    expect(menu()?.textContent).toContain("无可用命令");
   });
 
   it("isComposing 的 keydown 不驱动菜单（Enter 不接受）", async () => {

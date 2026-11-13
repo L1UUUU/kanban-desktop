@@ -294,6 +294,7 @@ const KIND_LOG_MAP: Record<LogKind, { level: LogLevel; scope: string }> = {
   "command-failed": { level: "error", scope: "cli-host" },
   "worker-exit": { level: "error", scope: "cli-host" },
   "worker-exit-pending": { level: "warn", scope: "cli-host" },
+  "title-empty": { level: "warn", scope: "cli-host" },
   readTranscript: { level: "debug", scope: "cli-host" },
   "text-mismatch": { level: "debug", scope: "cli-host" },
   "stuck-finish": { level: "debug", scope: "cli-host" },

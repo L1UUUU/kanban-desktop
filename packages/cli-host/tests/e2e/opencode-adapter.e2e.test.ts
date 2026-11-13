@@ -186,6 +186,7 @@ describe.skipIf(!E2E)("OpenCodeAdapter 真实集成（env-gated）", () => {
     listModels: (i) => adapter.listModels(i),
     listCommands: (i) => adapter.listCommands(i),
     setModel: (i) => adapter.setModel(i),
+    summarizeTitle: (id) => adapter.summarizeTitle(id),
     interruptTurn: (id) => adapter.interruptTurn(id),
     resolveApproval: (i) => adapter.resolveApproval(i),
     readHistory: (id) => adapter.readHistory(id),
@@ -211,6 +212,7 @@ describe.skipIf(!E2E)("OpenCodeAdapter 真实集成（env-gated）", () => {
       // #89：真实 server 的自定义命令集随机器/版本不定（用户级 command 目录非本套 fixture）→ 放宽为纯形状校验
       listCommands: { atLeast: 0 },
       firstAssistantText: null,
+      summarizeTitle: "null", // #95：opencode 一次性摘要降级 null（prompt API 需会话上下文）
       suggestionsRequired: true,
       deny: { contains: [], notContains: [], verify: async () => { expect(existsSync(f1)).toBe(false); } },
       once: { outputContains: [], verify: async () => { expect(existsSync(f1)).toBe(true); } },

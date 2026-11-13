@@ -3,8 +3,8 @@ import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import type { AdapterEvent, SkillObservation } from "@kanban/ipc-schema";
-import { trackerChangeSchema } from "@kanban/ipc-schema";
+import type { AdapterEvent, ChatEvent, SessionEventWire, SkillObservation } from "@kanban/ipc-schema";
+import { sessionEventSchema, trackerChangeSchema } from "@kanban/ipc-schema";
 import { TrackerEngine, type TrackerChange } from "@kanban/tracker";
 import { openDatabase, type SqliteDb } from "./db";
 import { createAdapterEventHandler } from "./adapter-events";
@@ -62,6 +62,163 @@ function insertSession(db: SqliteDb, id: string, projectId: string | null): void
     "INSERT INTO sessions (id, kind, cli, native_session_id, project_id, title, cwd, perm_mode, status, last_active_at) VALUES (?,'structured','claude-code',NULL,?,NULL,'C:\\p','auto','idle',NULL)",
   ).run(id, projectId);
 }
+
+// ========== #95 / ADR 0003 决策 2 摘要段：首轮 idle 后一次性异步摘要触发 ==========
+describe("T2 摘要触发矩阵（#95）", () => {
+  /** 摘要链路专用 wiring：可控 summarize 替身 + session:event 推送收集 + 触发调用记录 */
+  function makeTitleWiring(summarize?: (sessionId: string) => Promise<string | null>) {
+    const db = openDatabase(":memory:");
+    openDbs.push(db);
+    const sessions = new SessionStore(db);
+    const engine = new TrackerEngine(db);
+    engine.restore();
+    const forwarded: AdapterEvent[] = [];
+    const pushed: SessionEventWire[] = [];
+    const calls: string[] = [];
+    const handler = createAdapterEventHandler({
+      sessions,
+      engine,
+      send: (e) => forwarded.push(e),
+      adapter: {
+        summarizeTitle:
+          summarize ??
+          ((id) => {
+            calls.push(id);
+            return Promise.resolve("模型摘要标题");
+          }),
+      },
+      sendSessionEvent: (ev) => pushed.push(ev),
+    });
+    return { db, sessions, engine, handler, forwarded, pushed, calls };
+  }
+
+  /** 直插结构化会话行（titleSource 可选，缺省 default） */
+  function insertStructured(sessions: SessionStore, id: string, titleSource?: "default" | "derived" | "summarized" | "manual"): void {
+    sessions.insert({
+      id,
+      kind: "structured",
+      cli: "claude",
+      nativeSessionId: null,
+      projectId: null,
+      title: titleSource === "default" || titleSource === undefined ? null : `${id} 标题`,
+      titleSource,
+      cwd: "C:\\p",
+      permMode: "auto",
+      lastActiveAt: null,
+      archivedAt: null,
+    });
+  }
+
+  const idle = (sessionId: string, seq = 1): ChatEvent => ({ sessionId, seq, at: "2026-11-13T10:00:00.000Z", type: "session_status", status: "idle" });
+  /** 冲刷微任务链（then 内同步写库后收口） */
+  const flush = async (): Promise<void> => {
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+  };
+
+  it("derived + 首个 idle → 异步摘要、写 summarized、session:event 推送 title", async () => {
+    const w = makeTitleWiring();
+    insertStructured(w.sessions, "s-t2", "derived");
+    w.handler(idle("s-t2"));
+    await flush();
+    expect(w.calls).toEqual(["s-t2"]);
+    expect(w.sessions.get("s-t2")).toMatchObject({ title: "模型摘要标题", titleSource: "summarized" });
+    expect(w.pushed).toEqual([{ type: "title", sessionId: "s-t2", title: "模型摘要标题" }]);
+    expect(w.pushed[0]).toEqual(sessionEventSchema.parse(w.pushed[0])); // 推送载荷过轻通道契约
+  });
+
+  it("title_source 门控：manual / summarized / default 不触发；PTY 行不触发", async () => {
+    const w = makeTitleWiring();
+    insertStructured(w.sessions, "s-manual", "manual");
+    insertStructured(w.sessions, "s-summarized", "summarized");
+    insertStructured(w.sessions, "s-default");
+    w.sessions.insert({ id: "tty-1", kind: "pty", cli: "pty", nativeSessionId: null, projectId: null, title: "终端", cwd: "C:\\p", permMode: null, lastActiveAt: null, archivedAt: null });
+    for (const id of ["s-manual", "s-summarized", "s-default", "tty-1"]) w.handler(idle(id));
+    await flush();
+    expect(w.calls).toEqual([]);
+    expect(w.pushed).toEqual([]);
+  });
+
+  it("非 idle 状态与非 session_status 事件不触发", async () => {
+    const w = makeTitleWiring();
+    insertStructured(w.sessions, "s-x", "derived");
+    w.handler({ sessionId: "s-x", seq: 1, at: "2026-11-13T10:00:00.000Z", type: "session_status", status: "running" });
+    w.handler({ sessionId: "s-x", seq: 2, at: "2026-11-13T10:00:01.000Z", type: "turn_completed" });
+    await flush();
+    expect(w.calls).toEqual([]);
+  });
+
+  it("失败静默不重试：reject 后同会话后续 idle 不再调用（进程内 Set 含失败）", async () => {
+    const w = makeTitleWiring((id) => {
+      w.calls.push(id);
+      return Promise.reject(new Error("CLI 不在"));
+    });
+    insertStructured(w.sessions, "s-fail", "derived");
+    w.handler(idle("s-fail"));
+    await flush();
+    w.handler(idle("s-fail", 2));
+    await flush();
+    expect(w.calls).toEqual(["s-fail"]); // 只尝试一次
+    expect(w.sessions.get("s-fail")).toMatchObject({ titleSource: "derived" }); // 零写入
+    expect(w.pushed).toEqual([]);
+  });
+
+  it("null 降级：不写不推送，且视为已尝试（后续 idle 不再调用）", async () => {
+    const w = makeTitleWiring((id) => {
+      w.calls.push(id);
+      return Promise.resolve(null);
+    });
+    insertStructured(w.sessions, "s-null", "derived");
+    w.handler(idle("s-null"));
+    await flush();
+    w.handler(idle("s-null", 2));
+    await flush();
+    expect(w.calls).toEqual(["s-null"]);
+    expect(w.sessions.get("s-null")).toMatchObject({ titleSource: "derived" });
+    expect(w.pushed).toEqual([]);
+  });
+
+  it("竞态：摘要进行中手动重命名 → 门控零写入、无推送（manual 终态权威）", async () => {
+    let release!: (v: string | null) => void;
+    const w = makeTitleWiring(
+      (id) =>
+        new Promise((resolve) => {
+          w.calls.push(id);
+          release = resolve;
+        }),
+    );
+    insertStructured(w.sessions, "s-race", "derived");
+    w.handler(idle("s-race"));
+    w.sessions.renameTitle("s-race", "用户抢先手动名"); // 摘要 pending 期间重命名
+    release("迟到的摘要标题");
+    await flush();
+    expect(w.sessions.get("s-race")).toMatchObject({ title: "用户抢先手动名", titleSource: "manual" });
+    expect(w.pushed).toEqual([]);
+  });
+
+  it("已删行（墓碑）：idle 事件被 dropped 守卫拦截，不触发摘要", async () => {
+    const w = makeTitleWiring();
+    insertStructured(w.sessions, "s-del", "derived");
+    w.sessions.delete("s-del");
+    w.handler(idle("s-del"));
+    await flush();
+    expect(w.calls).toEqual([]);
+    expect(w.pushed).toEqual([]);
+  });
+
+  it("未注入 adapter（旧接线）：行为不变，idle 不触发任何摘要路径", async () => {
+    const db = openDatabase(":memory:");
+    openDbs.push(db);
+    const sessions = new SessionStore(db);
+    const engine = new TrackerEngine(db);
+    engine.restore();
+    const handler = createAdapterEventHandler({ sessions, engine, send: () => undefined });
+    insertStructured(sessions, "s-legacy", "derived");
+    expect(() => handler(idle("s-legacy"))).not.toThrow();
+    await flush();
+    expect(sessions.get("s-legacy")).toMatchObject({ titleSource: "derived" });
+  });
+});
 
 // ========== #58 已归档会话的迟到事件守卫（spec #57 D 节：不写库、不转发渲染端——杜绝幽灵行） ==========
 describe("已归档会话迟到事件守卫（#58）", () => {
