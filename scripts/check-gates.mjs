@@ -84,6 +84,32 @@ for (const md of mdFiles) {
 if (brokenLinks.length) bad("文档互链", `以下相对链接目标不存在（改名的文档请同步改链接）：\n  ${brokenLinks.join("\n  ")}`);
 else ok(`文档互链：${mdFiles.length} 个 md 的相对链接全部有效`);
 
+// 5) C 类规模声明不漂移：docs/testing.md 声明的 spec/用例数与 apps/desktop/e2e 实况一致
+//    计数口径=「带引号标题的 test 声明」（含 .skip/.only/.fixme 声明）；测试体内运行时 test.skip(条件) 不算用例
+const e2eDir = join(root, "apps/desktop/e2e");
+const e2eSpecs = readdirSync(e2eDir).filter((f) => f.endsWith(".spec.ts"));
+const testDeclRe = /^[ \t]*test(?:\.(?:skip|only|fixme))?\(\s*(["'])/gm;
+const e2eTestCount = e2eSpecs.reduce(
+  (n, f) => n + [...readFileSync(join(e2eDir, f), "utf8").matchAll(testDeclRe)].length,
+  0,
+);
+const testingDoc = readFileSync(join(root, "docs/testing.md"), "utf8");
+const declaredClaims = [
+  { re: /(\d+) 个整机 spec（(\d+) 用例/, label: "执行类总览表「N 个整机 spec（M 用例」" },
+  { re: /Playwright (\d+) spec \/ (\d+) 用例/, label: "命令矩阵「Playwright N spec / M 用例」" },
+];
+for (const { re, label } of declaredClaims) {
+  const m = re.exec(testingDoc);
+  if (!m) {
+    bad("C 类规模", `docs/testing.md 未找到${label}声明（措辞变更请同步 check-gates 第 5 节正则）`);
+    continue;
+  }
+  const [, specN, testN] = m;
+  if (+specN !== e2eSpecs.length || +testN !== e2eTestCount)
+    bad("C 类规模", `docs/testing.md ${label}声明 ${specN} spec / ${testN} 用例，实况 ${e2eSpecs.length} spec / ${e2eTestCount} 用例；请更新文档数字`);
+  else ok(`C 类规模：${label}与实况一致（${e2eSpecs.length} spec / ${e2eTestCount} 用例）`);
+}
+
 if (failures.length) {
   console.error(`[check-gates] FAIL ${failures.length} 项：`);
   for (const f of failures) console.error(`  - ${f.label}: ${f.detail}`);

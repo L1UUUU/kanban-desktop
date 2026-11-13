@@ -254,6 +254,8 @@ test("I-2 错误卡五类呈现与动作（四类 + 未知兜底，原型 d2 信
 });
 
 test("I-2 补充：spawn 创建失败侧栏卡（F1 形态，无会话视图可挂时挂创建入口）→ 重试创建收敛", async () => {
+  // 两次 Electron 冷启 + 多步交互，基础 12-14s；连跑负载下冷启被拉长（2026-11-13 批次实测超 60s），单独放宽预算
+  test.setTimeout(120_000);
   const { userData, repoDir, roots } = makeChatFixture("kb-s4-spawncard");
   try {
     // 第一次运行仅注册项目（占住「首个项目」判定，避免第二次运行的 boot 演示会话消耗失败注入）

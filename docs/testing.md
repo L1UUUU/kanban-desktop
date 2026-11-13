@@ -40,7 +40,7 @@
 | `packages/cli-host/tests/e2e/` | `*.e2e.test.ts` | vitest（单 project） | node | claude / codex / opencode / lifecycle 四件套 + run-once-claude / run-once-job |
 | `apps/desktop/tests/`（根） | `*.test.ts` | vitest node project | node | memory-ipc.test.ts（IPC 集成，默认跑）+ memory-fixture.ts（共享装配，非测试文件） |
 | `apps/desktop/tests/e2e/` | `*.e2e.test.ts` | vitest node project | node | conpty.e2e.test.ts + memory.e2e.test.ts + slash-command-trigger.e2e.test.ts（三 CLI 命令触发，issue #91） |
-| `apps/desktop/e2e/` | `*.spec.ts` | Playwright | Electron 构建产物（out/） | 20 个整机 spec（#65 会话生命周期验收起含 stage5 截图与全流程两组） |
+| `apps/desktop/e2e/` | `*.spec.ts` | Playwright | Electron 构建产物（out/） | 27 个整机 spec（74 用例；#65 会话生命周期验收起含 stage5 截图与全流程两组） |
 
 环境映射靠目录不靠文件内声明：
 
@@ -77,6 +77,7 @@ Playwright（`apps/desktop/playwright.config.ts`）：testDir `./e2e`，workers 
 | `KANBAN_E2E_DEBUG` | cli-host 四件套内的调试日志 | 非空时向 stderr 输出调试日志 | 调试开关（非门禁） |
 | `KANBAN_CODEX_MODEL` | cli-host codex 模型解析链（`packages/cli-host/src/codex/model-probe.ts`） | 逗号分隔模型白名单，按序真实试探，首个可用即用；全败报错**不回退**（跳过磁盘缓存/rollout/model/list；命中不落盘缓存） | 成本开关（非门禁） |
 | `KANBAN_UPDATE_SCREENSHOTS` | `apps/desktop/e2e/helpers/acceptance-artifacts.ts`（10 个验收 spec 的截图与 real-evidence 制品） | `=== "1"` 才把截图/JSON/TXT 写回 `docs/acceptance/`；默认写 `test-results/acceptance/`（.gitignore 已忽略），避免每次跑 e2e 污染共享工作树；提交归档时另需 `KANBAN_ALLOW_ARCHIVE_PNG=1` 过 `check:gates` | 制品写入开关（非门禁） |
+| `KANBAN_E2E_NO_FOCUS` | `apps/desktop/playwright.config.ts`（默认设 1）→ `electron/main/index.ts` ready-to-show 消费 | `"1"` 时被测主窗口 `showInactive()` 显示但不激活（跑 e2e 不抢前台输入焦点；窗口仍可见，截图与 DOM 合成事件不受影响）；设 `0` 恢复正常 `show()` | launch env（非门禁，E2E 免打扰开关） |
 | `KANBAN_ALLOW_ARCHIVE_PNG` | `scripts/check-gates.mjs` | `=== "1"` 才允许本次提交带入 `docs/acceptance/*.png` 变更 | 提交门禁逃生口 |
 
 注意 `KANBAN_E2E` 是严格等于 `"1"`：`KANBAN_E2E=0` 或任意其它非空值**不会**触发 B 类（杜绝非空值误触真实 PTY/CLI 测试）。
@@ -92,13 +93,15 @@ Playwright（`apps/desktop/playwright.config.ts`）：testDir `./e2e`，workers 
 | 级别 | 命令 | 实际展开 | 跑什么 |
 |---|---|---|---|
 | 根 | `pnpm test` | `pnpm -r test` | 5 包 vitest 全量：A 类执行，B 类显示 skipped |
-| 根 | `pnpm test:e2e` | `pnpm --filter @kanban/desktop test:e2e` | **C 类**：Playwright 20 spec（先 electron-vite build 再 playwright test） |
+| 根 | `pnpm test:e2e` | `pnpm --filter @kanban/desktop test:e2e` | **C 类**：Playwright 27 spec / 74 用例（先 electron-vite build 再 playwright test；`KANBAN_REAL_E2E=1` 才含 real 两个 spec） |
+| 根 | `pnpm test:e2e:no-build` | `pnpm --filter @kanban/desktop test:e2e:no-build` | **C 类增量**：跳过 build 跑上次构建产物，支持 spec 文件名/`-g` 用例名过滤（日常迭代跑子集，收尾验收再全量） |
 | 根 | `pnpm typecheck` | `pnpm -r typecheck` | 各包 `tsc --noEmit`（含 tests/ 目录） |
 | 根 | `pnpm lint` | `oxlint apps packages` | oxlint（范围含新 tests/ 目录） |
 | 包（cli-host） | `pnpm --filter @kanban/cli-host test` | 包内 `vitest run` | cli-host A 类 + B 类 skipped |
 | 包（cli-host） | `KANBAN_E2E=1 pnpm --filter @kanban/cli-host exec vitest run tests/e2e` | vitest run tests/e2e | **B 类**：三 CLI 真实集成 + run-once（claude headless 冒烟 / Job Object 覆盖；花 token，可选细粒度 `KANBAN_PROTOCOL_PROBE=1`） |
 | desktop | `pnpm --filter @kanban/desktop test` | 包内 `vitest run` | renderer（jsdom）+ node 双 project；B 类 skipped |
 | desktop | `pnpm --filter @kanban/desktop test:e2e` | `electron-vite build && playwright test` | **C 类**：整机 Playwright |
+| desktop | `pnpm --filter @kanban/desktop test:e2e:no-build` | `playwright test` | **C 类增量**：跳过 build，直接跑 `out/` 上次构建产物（改 renderer/main 代码后须先 `pnpm build` 或走 `test:e2e`）；参数透传给 playwright，支持 `pnpm test:e2e:no-build kanban -g "用例名"` 过滤跑法 |
 | desktop | `KANBAN_E2E=1 pnpm --filter @kanban/desktop exec vitest run tests/e2e` | vitest run tests/e2e | **B 类**：conpty 真实 ConPTY 冒烟（零 token）+ memory 真实 claude headless 提取（花 token；claude exe 不可解析时跳过）+ slash-command-trigger 三 CLI 命令触发（claude 透传 skill / codex 展开送达 wire / opencode 原生 /command；花少量 token，codex 须 luna 白名单） |
 
 双 e2e 目录对照（`apps/desktop` 下两个 e2e 目录，不要混淆）：
@@ -148,7 +151,7 @@ include 均已通配（`packages/cli-host/vitest.config.ts`、`apps/desktop/vite
 
 ## 验收门禁命令（pre-commit / CI 强制）
 
-`.githooks/pre-commit` 与 `.github/workflows/checks.yml` 依次执行：`pnpm check:gates` → `pnpm lint:strict` → `pnpm typecheck` → `pnpm test`。`lint:strict` 是 `oxlint --deny-warnings`（warning 级违规如孤儿 import 也会让门禁失败）；`pnpm lint` 保留宽松语义仅供本地快速查看。`check:gates` 校验 B 类后缀门控、`workspacePackages` 与 workspace 包一致、归档 PNG 不被意外提交、根与 docs 下 md 的相对链接目标存在（文档互链不腐化）。CI 与本地跑同一套命令，不另立一套。另有 `.githooks/pre-push`：merge commit 不触发 pre-commit（合并树不属于任何单边分支），推 main 前由它对合并树补跑同一套四门禁；推其它分支零开销直放。
+`.githooks/pre-commit` 与 `.github/workflows/checks.yml` 依次执行：`pnpm check:gates` → `pnpm lint:strict` → `pnpm typecheck` → `pnpm test`。`lint:strict` 是 `oxlint --deny-warnings`（warning 级违规如孤儿 import 也会让门禁失败）；`pnpm lint` 保留宽松语义仅供本地快速查看。`check:gates` 校验 B 类后缀门控、`workspacePackages` 与 workspace 包一致、归档 PNG 不被意外提交、根与 docs 下 md 的相对链接目标存在（文档互链不腐化）、C 类 spec/用例数与文档声明一致（规模数字不漂移；新增/删除 e2e 用例须同步更新本文两处数字）。CI 与本地跑同一套命令，不另立一套。另有 `.githooks/pre-push`：merge commit 不触发 pre-commit（合并树不属于任何单边分支），推 main 前由它对合并树补跑同一套四门禁；推其它分支零开销直放。
 
 ## flaky 台账
 
@@ -161,6 +164,7 @@ include 均已通配（`packages/cli-host/vitest.config.ts`、`apps/desktop/vite
 | `app.close()` 超时但断言全部通过 | teardown 挂死（Electron utilityProcess 平台限制） | 应用侧 dispose 3s 超时 + kill 兜底；产品代码未动 |
 | C 类 Playwright whole-test 60s 超时（stage4 I-3 恢复流转、lifecycle 冲突条/PTY 孤儿，逐轮换用例） | 多兄弟 worktree 并行跑测试的机器负载拉长 Electron 冷启/turn 用时（issue 87 全量跑实测：60s 预算超时，单跑 35.6s 通过；断言面与当次 diff 无交集） | 负载型假红，非产品缺陷；单跑/低负载验证收敛，不改代码 |
 | acceptance-screenshots「徽标与断开恢复」整机用例 60s 测试超时（无页面快照 = 挂在 Electron 级 await） | 多 worktree 并行负载（同机兄弟 agent e2e 并发 + 孤儿 electron 进程）；与首行同类负载假红 | 未改产品代码；隔离复跑全绿（2026-11-12，#85 回归时复现一次）；复现条件=并行负载窗口，静置复跑不出现 |
+| stage4「I-2 补充：spawn 失败重试收敛」批次连跑 60s 超时 | 两次 Electron 冷启 + 多步交互，基础 12-14s，负载残留拉长冷启推过全局预算（NO_FOCUS=0 对照与改动无关） | 用例单独 `test.setTimeout(120_000)`（2026-11-13）；单跑绿 + 批次复跑收敛 |
 
 新发现时追加一行并注明复现条件；连续全绿才标记「已收敛」，仍要保留根因记录。
 

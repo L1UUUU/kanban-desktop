@@ -9,6 +9,7 @@
     "build": "electron-vite build",
     "test": "vitest run",
     "test:e2e": "electron-vite build && playwright test",
+    "test:e2e:no-build": "playwright test",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.json",
     "smoke:sqlite": "electron scripts/smoke-node-sqlite.cjs",
     "pack:dir": "electron-vite build && electron-builder --dir",

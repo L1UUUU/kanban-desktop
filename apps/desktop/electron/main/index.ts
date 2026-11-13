@@ -125,7 +125,11 @@ function createWindow(): void {
     },
   });
 
-  mainWindow.on("ready-to-show", () => mainWindow?.show());
+  // E2E 免打扰：KANBAN_E2E_NO_FOCUS=1 时显示但不激活（不抢前台输入焦点；窗口仍可见，截图/合成事件不受影响）
+  mainWindow.on("ready-to-show", () => {
+    if (process.env.KANBAN_E2E_NO_FOCUS === "1") mainWindow?.showInactive();
+    else mainWindow?.show();
+  });
 
   if (process.env.ELECTRON_RENDERER_URL) {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
