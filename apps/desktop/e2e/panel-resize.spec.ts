@@ -68,12 +68,12 @@ test("侧栏宽度：拖拽调整 → Esc 回滚 → 键盘步进/Home-End → �
     await dragBy(win, handle, 100, 0);
     await expectSize(aside, "w", 340);
 
-    // 键盘：ArrowRight +16 → 356；End → 480（宽视口下固定上限生效）；Home → 180
+    // 键盘：ArrowRight +16 → 356；End → 到上界即止（上界随视口联动，从把手 aria-valuemax 即时读取——CI 显示缩放下视口窄于固定上限，写死 480 必挂）；Home → 180
     await handle.click(); // 聚焦（pointerDown 即 focus，click 无位移不提交）
     await win.keyboard.press("ArrowRight");
     await expectSize(aside, "w", 356);
     await win.keyboard.press("End");
-    await expectSize(aside, "w", 480);
+    await expectSize(aside, "w", Number(await handle.getAttribute("aria-valuemax")));
     await win.keyboard.press("Home");
     await expectSize(aside, "w", 180);
 
