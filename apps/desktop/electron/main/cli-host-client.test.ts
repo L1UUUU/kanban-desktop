@@ -107,9 +107,9 @@ describe("CliHostClient {log} 分派（#54 spec #52 B 节）", () => {
 });
 
 describe("CliHostClient 命令失败与白名单摘要（#54 spec #52 G 节 M5）", () => {
-  it("命令失败记一条 command-failed：detail 含错误码与白名单摘要（createSession 的 init.cli 计入 cli）", async () => {
+  it("命令失败记一条 command-failed：detail 含错误码与白名单摘要（createSession 的顶层 cli 计入 cli，arch D2）", async () => {
     const b = bench();
-    const p = b.client.createSession({ cwd: "C:\\w", cli: "claude" });
+    const p = b.client.forCli("claude").createSession({ cwd: "C:\\w" });
     const posted = b.proc.posted[0] as { id: number };
     b.proc.emitWorkerMessage({ id: posted.id, ok: false, error: { code: "E_SPAWN_NOT_FOUND", message: "no exe" } });
     await expect(p).rejects.toMatchObject({ code: "E_SPAWN_NOT_FOUND" });
@@ -138,7 +138,7 @@ describe("CliHostClient 命令失败与白名单摘要（#54 spec #52 G 节 M5�
     b.client.listChildPids().catch(() => {});
     b.client.cancelRunOnce("rc").catch(() => {});
     b.client.runOnce({ runId: "rr", cli: "claude", args: ["a"], cwd: "C:\\w", stdin: "S" }).catch(() => {});
-    b.client.adoptSession({ sessionId: "sa", nativeSessionId: "n1", cwd: "C:\\w", cli: "codex" }).catch(() => {});
+    b.client.forCli("codex").adoptSession!({ sessionId: "sa", nativeSessionId: "n1", cwd: "C:\\w" }).catch(() => {});
     b.proc.emitExit(1);
     const detail = b.logKinds.find(([k]) => k === "worker-exit")?.[1] ?? "";
     expect(detail).toContain("kind=listChildPids");

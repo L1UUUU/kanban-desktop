@@ -1,12 +1,12 @@
-// 用途：Adapter 契约测试套（spec Testing seam 1）—— 同一组行为断言对 FakeAdapter 与后续三真实 Adapter 复用；调用方提供 adapter 与「推进到空闲」驱动器
+// 用途：Adapter 契约测试套（spec Testing seam 1）—— 同一组行为断言对 FakeAdapter 与后续三真实 Adapter 复用；调用方提供 adapter 与「推进到空闲」驱动器；arch D2 起被测面 = 会话级 CliAdapter + 目录级 CliDirectory（单实现两者同体，forCli() 即自身目录面）
 import { expect, it } from "vitest";
 import { commandEntrySchema, transcriptEventSchema, type AdapterEvent, type ChatEvent } from "@kanban/ipc-schema";
-import type { CliAdapter } from "./adapter";
+import type { CliAdapter, CliDirectory } from "./adapter";
 import { FAKE_SUMMARIZED_TITLE } from "./fake-adapter";
 
-/** 契约套件上下文：adapter 被测实例；driveIdle 推进到无待处理活动（Fake=虚拟时钟 runToIdle，真实 CLI=轮询等待） */
+/** 契约套件上下文：adapter 被测实例（会话级 + 目录级双面）；driveIdle 推进到无待处理活动（Fake=虚拟时钟 runToIdle，真实 CLI=轮询等待） */
 export interface ContractCtx {
-  adapter: CliAdapter;
+  adapter: CliAdapter & CliDirectory;
   driveIdle: () => Promise<void>;
 }
 

@@ -1,7 +1,7 @@
-// 用途：FakeAdapter —— C1 契约的脚本化 mock 实现：事件溯源日志（readHistory=重放，天然满足不变量 4）、可注入时钟、演示脚本驱动（原型行为规格）+ readTranscript 双视角剧本（#28，独立于 ChatEvent 日志维护）+ listModels 假模型目录（#76：演示 UI 形态与真实 CLI 一致）+ listCommands（#92 起 cli=codex 模拟真实 codex 目录扫描；其余 CLI 恒空集——ADR 0004：fake 会话无命令源，斜杠菜单空态引导）；arch C1 起回合状态机（排队/终态/幂等中断/emit）为 turn-kernel 消费方，脚本机器作为「发文本回调」的实现
+// 用途：FakeAdapter —— C1 契约的脚本化 mock 实现：事件溯源日志（readHistory=重放，天然满足不变量 4）、可注入时钟、演示脚本驱动（原型行为规格）+ readTranscript 双视角剧本（#28，独立于 ChatEvent 日志维护）+ listModels 假模型目录（#76：演示 UI 形态与真实 CLI 一致）+ listCommands（arch D2 起 fake 身份恒空集——ADR 0004：fake 会话无命令源，斜杠菜单空态引导；forCli("codex") 句柄模拟真实 codex 目录扫描，#92）；arch C1 起回合状态机（排队/终态/幂等中断/emit）为 turn-kernel 消费方，脚本机器作为「发文本回调」的实现
 import { homedir } from "node:os";
 import type { AdapterEvent, ChatEvent, ChatEventSeed, CommandEntry, ModelEntry, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
-import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListCommandsInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
+import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CliDirectory, type CreateSessionInput, type CreateSessionResult, type DisposeInput, type ListCommandsInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
 import { SystemClock, type FakeClock } from "./clock";
 import { listCodexPromptCommands } from "./codex/prompt-commands";
 import { pickScript, type ScriptStep } from "./fake-scripts";
@@ -85,7 +85,7 @@ const FAKE_MODELS: ModelEntry[] = [
   { id: "fake-lite", displayName: "Fake 轻量模型", description: "演示用假模型（轻量输出）", isDefault: false },
 ];
 
-export class FakeAdapter implements CliAdapter {
+export class FakeAdapter implements CliAdapter, CliDirectory {
   readonly capabilities = FAKE_CAPABILITIES;
   private readonly clock: FakeClock;
   private readonly ownsClock: boolean;
@@ -126,7 +126,7 @@ export class FakeAdapter implements CliAdapter {
     this.homeDir = options.homeDir ?? null;
   }
 
-  async createSession(init: CreateSessionInput): Promise<{ sessionId: string; model?: string | null }> {
+  async createSession(init: CreateSessionInput): Promise<CreateSessionResult> {
     // #46 e2e 注入：前 N 次创建抛 spawn 失败（协议级 E_SPAWN_NOT_FOUND，与真实 exe 解析失败同码）
     this.createCalls += 1;
     if (this.createCalls <= this.failCreateFirst) {
@@ -172,11 +172,23 @@ export class FakeAdapter implements CliAdapter {
     return FAKE_MODELS.map((m) => ({ ...m }));
   }
 
-  /** 命令列举（ADR 0004：fake 无命令源，非 codex 恒空集——斜杠菜单空态引导，每次新数组）；
-   *  cli=codex 时走真实 codex prompts 目录扫描（KANBAN_DISABLE_CODEX 回落 Fake 的场景保持目录语义一致，
-   *  展开派发链路整机 e2e 无需真实 exe 即可端到端驱动） */
-  async listCommands(input: ListCommandsInput): Promise<CommandEntry[]> {
-    if (input.cli === "codex") return listCodexPromptCommands(input.cwd, this.homeDir ?? homedir());
+  /** 目录级命令句柄（arch D2）：绑定 CLI 身份——fake 等身份即自身（listCommands 恒空集，ADR 0004）；
+   *  codex 身份走真实 codex prompts 目录扫描（KANBAN_DISABLE_CODEX 回落 Fake 的场景保持目录语义一致，
+   *  展开派发链路整机 e2e 无需真实 exe 即可端到端驱动，#92） */
+  forCli(cli?: string): CliDirectory {
+    if ((cli ?? "fake") === "codex") {
+      return {
+        createSession: (init) => this.createSession(init),
+        listModels: (input) => this.listModels(input),
+        listCommands: async (input) => listCodexPromptCommands(input.cwd, this.homeDir ?? homedir()),
+        adoptSession: (input) => this.adoptSession(input),
+      };
+    }
+    return this;
+  }
+
+  /** 命令列举（ADR 0004：fake 无命令源，恒空集——斜杠菜单空态引导，每次新数组）；codex 身份的目录模拟见 forCli */
+  async listCommands(_input: ListCommandsInput): Promise<CommandEntry[]> {
     return [];
   }
 

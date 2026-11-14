@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { AdapterError, FakeAdapter, VirtualClock, type CliAdapter } from "@kanban/cli-host";
+import { AdapterError, FakeAdapter, VirtualClock, type CliAdapter, type ListCommandsInput, type ListModelsInput } from "@kanban/cli-host";
 import { trackerChangeSchema } from "@kanban/ipc-schema";
 import { TrackerEngine, type TrackerChange } from "@kanban/tracker";
 import { openDatabase } from "./db";
@@ -1113,12 +1113,19 @@ describe("session:create 首条消息原子化（#59：草稿提交 = 创建原�
     const disposed: Array<string | undefined> = [];
     const sentTurns: Array<{ sessionId: string; text: string }> = [];
     const adapter = {
-      // arch C13：包装层未透传可选面方法——能力如实声明缺席（本夹具只驱动 create/send/dispose）
+      // arch C13：包装层未透传可选面方法——能力如实声明缺席（本夹具只驱动 create/send/dispose）；arch D2：createSession 覆盖移入 forCli 句柄
       capabilities: { ...base.capabilities, adoptSession: false, runOnce: false, listChildPids: false },
-      createSession: async () => {
-        seq += 1;
-        if (opts?.failCreate) throw new AdapterError("E_SPAWN_NOT_FOUND", "未找到 CLI 可执行文件（注入）");
-        return { sessionId: `s-draft-${seq}` };
+      forCli: (cli?: string) => {
+        const dir = base.forCli(cli);
+        return {
+          createSession: async () => {
+            seq += 1;
+            if (opts?.failCreate) throw new AdapterError("E_SPAWN_NOT_FOUND", "未找到 CLI 可执行文件（注入）");
+            return { sessionId: `s-draft-${seq}` };
+          },
+          listModels: (i: ListModelsInput) => dir.listModels(i),
+          listCommands: (i: ListCommandsInput) => dir.listCommands(i),
+        };
       },
       sendTurn: async (input: { sessionId: string; text: string }) => {
         sendCalls += 1;
@@ -1341,9 +1348,13 @@ describe("会话标题派生与手动重命名（#94 / ADR 0003：四态状态�
     const clock = new VirtualClock();
     const base = new FakeAdapter({ clock });
     const adapter = {
-      // arch C13：包装层未透传可选面方法——能力如实声明缺席（本夹具只驱动 create/send/dispose）
+      // arch C13：包装层未透传可选面方法——能力如实声明缺席（本夹具只驱动 create/send/dispose）；arch D2：createSession 覆盖移入 forCli 句柄
       capabilities: { ...base.capabilities, adoptSession: false, runOnce: false, listChildPids: false },
-      createSession: async () => ({ sessionId: "s-send-fail" }),
+      forCli: () => ({
+        createSession: async () => ({ sessionId: "s-send-fail" }),
+        listModels: async () => [],
+        listCommands: async () => [],
+      }),
       sendTurn: async () => {
         throw new Error("boom");
       },
@@ -1463,18 +1474,30 @@ describe("diff:ipc 通道（#43 spec #40 D 节：独立单通道 + 入站 zod + 
 
 // ========== #58 会话归档通道（spec #57 D 节：归档/取消归档编排闭环） ============
 
-/** 归档编排观察 adapter：interruptTurn/dispose/adoptSession 调用全记录，行为透传底层（可选注入失败模拟「进程已死/登记失败」） */
+/** 归档编排观察 adapter：interruptTurn/dispose/adoptSession 调用全记录，行为透传底层（可选注入失败模拟「进程已死/登记失败」）；arch D2 起目录面经 forCli 句柄包装（adopt 记录在句柄内） */
 function spyAdapter(
   base: CliAdapter,
   fails: { interrupt?: boolean; dispose?: boolean; adopt?: boolean } = {},
 ): { adapter: CliAdapter; calls: string[] } {
   const calls: string[] = [];
-  const baseAdopt = base.adoptSession?.bind(base); // 闭包内调用需先收窄并绑定 this（可选成员的窄化不跨闭包保持）
   const adapter: CliAdapter = {
     capabilities: base.capabilities,
-    createSession: (i) => base.createSession(i),
-    listModels: (i) => base.listModels(i),
-    listCommands: (i) => base.listCommands(i),
+    forCli: (cli) => {
+      const dir = base.forCli(cli);
+      const baseAdopt = dir.adoptSession?.bind(dir); // 闭包内调用需先收窄并绑定 this（可选成员的窄化不跨闭包保持）
+      return {
+        createSession: (i) => dir.createSession(i),
+        listModels: (i) => dir.listModels(i),
+        listCommands: (i) => dir.listCommands(i),
+        adoptSession: baseAdopt
+          ? async (i) => {
+              calls.push(`adopt:${i.sessionId}`);
+              if (fails.adopt) throw new AdapterError("E_INTERNAL", `登记失败（注入）：${i.sessionId}`);
+              return baseAdopt(i);
+            }
+          : undefined,
+      };
+    },
     setModel: (i) => base.setModel(i),
     summarizeTitle: (id) => base.summarizeTitle(id),
     sendTurn: (i) => base.sendTurn(i),
@@ -1492,13 +1515,6 @@ function spyAdapter(
       if (fails.dispose) throw new AdapterError("E_SESSION_NOT_FOUND", `会话不存在（模拟进程已死）：${i?.sessionId ?? ""}`);
       return base.dispose(i);
     },
-    adoptSession: baseAdopt
-      ? async (i) => {
-          calls.push(`adopt:${i.sessionId}`);
-          if (fails.adopt) throw new AdapterError("E_INTERNAL", `登记失败（注入）：${i.sessionId}`);
-          return baseAdopt(i);
-        }
-      : undefined,
     subscribe: (h) => base.subscribe(h),
   };
   return { adapter, calls };

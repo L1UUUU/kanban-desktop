@@ -294,6 +294,6 @@ export async function handleModelsIpc(deps: ModelsIpcDeps, raw: unknown): Promis
 async function routeModels(req: ModelsRequest, deps: ModelsIpcDeps): Promise<ModelsResult> {
   switch (req.channel) {
     case "models:list":
-      return { ok: true, models: await deps.adapter.listModels({ cli: req.cli, cwd: req.cwd }) };
+      return { ok: true, models: await deps.adapter.forCli(req.cli).listModels({ cwd: req.cwd }) };
   }
 }

@@ -109,21 +109,21 @@ describe("wire 契约 roundtrip（issue #73）", () => {
     expect(allKinds).toContain("cancelRunOnce");
   });
 
-  it("createSession：报文 {kind,payload}；返回值直传（nativeSessionId 归一化 null；model 实际采用值回传）；事件经 {event} 同步回流", async () => {
+  it("createSession：目录级报文 {kind,cli,payload}（arch D2 顶层 cli）；返回值直传（nativeSessionId 归一化 null；model 实际采用值回传）；事件经 {event} 同步回流", async () => {
     const { proc, client } = makeWire();
     const events: AdapterEvent[] = [];
     client.subscribe((e) => events.push(e));
-    const s = await client.createSession({ cwd: "C:\\wire", cli: "fake", model: "fake-standard" });
+    const s = await client.forCli("fake").createSession({ cwd: "C:\\wire", model: "fake-standard" });
     expect(s.sessionId).toMatch(/^s-/);
     expect(s.nativeSessionId).toBeNull();
     expect(s.model).toBe("fake-standard"); // issue #76：实际采用 model 经 wire 回传
-    expect(proc.posted[0]).toEqual({ id: 1, cmd: { kind: "createSession", payload: { cwd: "C:\\wire", cli: "fake", model: "fake-standard" } } });
+    expect(proc.posted[0]).toEqual({ id: 1, cmd: { kind: "createSession", cli: "fake", payload: { cwd: "C:\\wire", model: "fake-standard" } } });
     expect(events.some((e) => "type" in e && e.type === "session_status" && (e as { sessionId: string }).sessionId === s.sessionId)).toBe(true);
   });
 
   it("sendTurn：payload 即 SendTurnInput", async () => {
     const { proc, client } = makeWire();
-    const s = await client.createSession({ cwd: "C:\\wire", cli: "fake" });
+    const s = await client.forCli("fake").createSession({ cwd: "C:\\wire" });
     const base = proc.posted.length;
     await client.sendTurn({ sessionId: s.sessionId, text: "排队消息" });
     expect(cmdOf(proc.posted[base])).toEqual({ kind: "sendTurn", payload: { sessionId: s.sessionId, text: "排队消息" } });
@@ -143,7 +143,7 @@ describe("wire 契约 roundtrip（issue #73）", () => {
 
   it("readHistory：返回值直传 ChatEvent[]（未发 turn 仅初始状态事件）", async () => {
     const { proc, client } = makeWire();
-    const s = await client.createSession({ cwd: "C:\\wire", cli: "fake" });
+    const s = await client.forCli("fake").createSession({ cwd: "C:\\wire" });
     const events = await client.readHistory(s.sessionId);
     expect(Array.isArray(events)).toBe(true);
     expect(events.every((e) => e.type === "session_status")).toBe(true);
@@ -152,32 +152,32 @@ describe("wire 契约 roundtrip（issue #73）", () => {
 
   it("readTranscript：返回值直传 TranscriptEvent[]（新会话空剧本）", async () => {
     const { proc, client } = makeWire();
-    const s = await client.createSession({ cwd: "C:\\wire", cli: "fake" });
+    const s = await client.forCli("fake").createSession({ cwd: "C:\\wire" });
     await expect(client.readTranscript(s.sessionId)).resolves.toEqual([]);
     expect(cmdOf(proc.posted.at(-1))).toEqual({ kind: "readTranscript", payload: s.sessionId });
   });
 
   it("resume：void 命令返回 undefined", async () => {
     const { proc, client } = makeWire();
-    const s = await client.createSession({ cwd: "C:\\wire", cli: "fake" });
+    const s = await client.forCli("fake").createSession({ cwd: "C:\\wire" });
     await expect(client.resume(s.sessionId)).resolves.toBeUndefined();
     expect(cmdOf(proc.posted.at(-1))).toEqual({ kind: "resume", payload: s.sessionId });
   });
 
   it("dispose（会话粒度）：payload 即 DisposeInput；会话终止后命令按 E_SESSION_NOT_FOUND 回传", async () => {
     const { proc, client } = makeWire();
-    const s = await client.createSession({ cwd: "C:\\wire", cli: "fake" });
+    const s = await client.forCli("fake").createSession({ cwd: "C:\\wire" });
     await expect(client.dispose({ sessionId: s.sessionId })).resolves.toBeUndefined();
     expect(cmdOf(proc.posted.at(-1))).toEqual({ kind: "dispose", payload: { sessionId: s.sessionId } });
     await expect(client.readHistory(s.sessionId)).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
   });
 
-  it("adoptSession：payload 即 AdoptSessionInput（cli 缺省显式补 fake）；收养会话命令可达", async () => {
+  it("adoptSession：目录级报文 {kind,cli,payload}（arch D2）；cli 缺省顶层 undefined 透传、worker 内 Router.forCli 兜底 fake（兜底单点）；收养会话命令可达", async () => {
     const { proc, client } = makeWire();
-    await client.adoptSession({ sessionId: "s-adopt", nativeSessionId: "n-1", cwd: "C:\\wire", cli: "codex" });
-    expect(cmdOf(proc.posted[0])).toEqual({ kind: "adoptSession", payload: { sessionId: "s-adopt", nativeSessionId: "n-1", cwd: "C:\\wire", cli: "codex" } });
-    await expect(client.adoptSession({ sessionId: "s-adopt-2", nativeSessionId: "n", cwd: "C:\\wire" })).resolves.toBeUndefined(); // cli 缺省
-    expect((cmdOf(proc.posted.at(-1)) as { payload: { cli?: string } }).payload.cli).toBe("fake");
+    await client.forCli("codex").adoptSession!({ sessionId: "s-adopt", nativeSessionId: "n-1", cwd: "C:\\wire" });
+    expect(cmdOf(proc.posted[0])).toEqual({ kind: "adoptSession", cli: "codex", payload: { sessionId: "s-adopt", nativeSessionId: "n-1", cwd: "C:\\wire" } });
+    await expect(client.forCli().adoptSession!({ sessionId: "s-adopt-2", nativeSessionId: "n", cwd: "C:\\wire" })).resolves.toBeUndefined(); // cli 缺省 → fake（worker 兜底，FakeAdapter 无冲突报错即分发成功）
+    expect((cmdOf(proc.posted.at(-1)) as { cli?: string }).cli).toBeUndefined(); // client 不二次兜底：缺省原样透传
     await expect(client.readHistory("s-adopt")).resolves.toBeInstanceOf(Array); // 路由登记
   });
 
@@ -204,21 +204,21 @@ describe("wire 契约 roundtrip（issue #73）", () => {
     await expect(client.cancelRunOnce("nope")).resolves.toBeUndefined();
   });
 
-  it("listModels：payload 即 ListModelsInput（cli 缺省显式补 fake）；返回值直传 ModelEntry[]（Fake 两条、首条默认，issue #76）", async () => {
+  it("listModels：目录级报文 {kind,cli,payload}（arch D2）；cli 缺省 worker 内 Router.forCli 兜底 fake（返回 Fake 两条、首条默认，issue #76）", async () => {
     const { proc, client } = makeWire();
-    const models = await client.listModels({ cwd: "C:\\wire" });
+    const models = await client.forCli().listModels({ cwd: "C:\\wire" });
     expect(models).toHaveLength(2);
     expect(models[0].isDefault).toBe(true);
     expect(models[1].isDefault).toBe(false);
-    expect(cmdOf(proc.posted[0])).toEqual({ kind: "listModels", payload: { cwd: "C:\\wire", cli: "fake" } });
-    const withCli = await client.listModels({ cwd: "C:\\wire", cli: "fake" });
-    expect(cmdOf(proc.posted.at(-1))).toEqual({ kind: "listModels", payload: { cwd: "C:\\wire", cli: "fake" } });
+    expect(cmdOf(proc.posted[0])).toEqual({ kind: "listModels", payload: { cwd: "C:\\wire" } }); // cli 缺省原样透传（无 cli 键值）
+    const withCli = await client.forCli("fake").listModels({ cwd: "C:\\wire" });
+    expect(cmdOf(proc.posted.at(-1))).toEqual({ kind: "listModels", cli: "fake", payload: { cwd: "C:\\wire" } });
     expect(withCli).toHaveLength(2);
   });
 
   it("setModel：payload 即 SetModelInput；返回值直传生效模型（issue #79）；未知会话错误码经 wire 原样回传", async () => {
     const { proc, client } = makeWire();
-    const s = await client.createSession({ cwd: "C:\\wire", cli: "fake", model: "fake-standard" });
+    const s = await client.forCli("fake").createSession({ cwd: "C:\\wire", model: "fake-standard" });
     await expect(client.setModel({ sessionId: s.sessionId, model: "fake-lite" })).resolves.toEqual({ model: "fake-lite" });
     expect(cmdOf(proc.posted.at(-1))).toEqual({ kind: "setModel", payload: { sessionId: s.sessionId, model: "fake-lite" } });
     await expect(client.setModel({ sessionId: "s-nope", model: "x" })).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });
@@ -226,7 +226,7 @@ describe("wire 契约 roundtrip（issue #73）", () => {
 
   it("summarizeTitle：payload 为 sessionId 字符串；返回值直传固定标题（#95 Fake）；未知会话错误码经 wire 原样回传", async () => {
     const { proc, client } = makeWire();
-    const s = await client.createSession({ cwd: "C:\\wire", cli: "fake" });
+    const s = await client.forCli("fake").createSession({ cwd: "C:\\wire" });
     await expect(client.summarizeTitle(s.sessionId)).resolves.toBe(FAKE_SUMMARIZED_TITLE);
     expect(cmdOf(proc.posted.at(-1))).toEqual({ kind: "summarizeTitle", payload: s.sessionId });
     await expect(client.summarizeTitle("s-nope")).rejects.toMatchObject({ code: "E_SESSION_NOT_FOUND" });

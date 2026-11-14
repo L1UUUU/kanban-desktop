@@ -63,7 +63,7 @@ describe("FakeAdapter 专属场景", () => {
     expect(first).not.toBe(second); // 每次新数组（不共享可变引用）
   });
 
-  it("listCommands(cli=codex) 模拟真实 codex 目录扫描（#92：KANBAN_DISABLE_CODEX 回落 Fake 时整机 e2e 可驱动展开链路）", async () => {
+  it("listCommands(forCli=codex) 模拟真实 codex 目录扫描（#92：KANBAN_DISABLE_CODEX 回落 Fake 时整机 e2e 可驱动展开链路；arch D2 起 codex 身份经 forCli 句柄绑定）", async () => {
     fakeTmpRoot = mkdtempSync(join(tmpdir(), "kb-fake-cmd-"));
     const home = join(fakeTmpRoot, "home");
     const project = join(fakeTmpRoot, "proj");
@@ -75,7 +75,7 @@ describe("FakeAdapter 专属场景", () => {
     writeFileSync(join(projPrompts, "commit.md"), "---\ndescription: 提交\nargument-hint: [说明]\n---\n生成提交：$ARGUMENTS", "utf8");
 
     const adapter = new FakeAdapter({ clock: new VirtualClock(), homeDir: home });
-    const commands = await adapter.listCommands({ cli: "codex", cwd: project });
+    const commands = await adapter.forCli("codex").listCommands({ cwd: project });
     const commit = commands.find((c) => c.name === "commit");
     expect(commit).toMatchObject({
       cli: "codex",
@@ -87,7 +87,7 @@ describe("FakeAdapter 专属场景", () => {
     // 无 prompts 目录的（cwd, home）→ 空集不报错；非 codex CLI 恒为空集（ADR 0004）
     const emptyHome = join(fakeTmpRoot, "empty-home");
     mkdirSync(emptyHome, { recursive: true });
-    expect(await new FakeAdapter({ clock: new VirtualClock(), homeDir: emptyHome }).listCommands({ cli: "codex", cwd: join(fakeTmpRoot, "empty") })).toEqual([]);
+    expect(await new FakeAdapter({ clock: new VirtualClock(), homeDir: emptyHome }).forCli("codex").listCommands({ cwd: join(fakeTmpRoot, "empty") })).toEqual([]);
     expect(await adapter.listCommands({ cwd: project })).toEqual([]);
   });
 

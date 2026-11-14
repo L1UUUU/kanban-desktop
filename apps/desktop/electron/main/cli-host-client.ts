@@ -1,21 +1,18 @@
-// 用途：Main 侧 CliHost 托管客户端 —— utilityProcess fork worker（ADR-0001 形态）+ Windows Job Object 绑定（t0-01 验证策略）+ CliAdapter 远程代理（Renderer/路由无感托管形态）+ run-once 一次性执行桥（#29 C5 演进）；命令面经 wire.ts 派生的 {kind,payload} 报文往返，返回值直传（issue #73）
+// 用途：Main 侧 CliHost 托管客户端 —— utilityProcess fork worker（ADR-0001 形态）+ Windows Job Object 绑定（t0-01 验证策略）+ CliAdapter 远程代理（Renderer/路由无感托管形态）+ run-once 一次性执行桥（#29 C5 演进）；命令面经 wire.ts 派生的 {kind,payload} 报文往返（目录级四命令顶层携带 cli，arch D2），返回值直传（issue #73）
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { AdapterEvent, ChatEvent, CommandEntry, LogKind, ModelEntry, TranscriptEvent } from "@kanban/ipc-schema";
+import type { AdapterEvent, ChatEvent, LogKind, TranscriptEvent } from "@kanban/ipc-schema";
 import { utilityProcess } from "electron";
 import {
   AdapterError,
   JOB_GUARD_PS,
-  type AdoptSessionInput,
   type AdapterCapabilities,
   type CliAdapter,
-  type CreateSessionInput,
+  type CliDirectory,
   type DisposeInput,
   type HostCommand,
-  type ListCommandsInput,
-  type ListModelsInput,
   type ResolveApprovalInput,
   type ReturnOf,
   type RunOnceInput,
@@ -79,7 +76,7 @@ function forkUtilityProcess(options: CliHostClientOptions): UtilityProcessLike {
   return utilityProcess.fork(options.workerPath, [], { serviceName: "cli-host", env: buildWorkerEnv(options) });
 }
 
-/** pending 命令白名单摘要（#54 spec #52 G 节 M5 + issue #73 {kind,payload} 报文）：只取 kind/sessionId/cli/runId（createSession 的 cli 取自 payload.cli）；禁止整包 JSON.stringify（runOnce 的 stdin 含 chunk 正文，Q8） */
+/** pending 命令白名单摘要（#54 spec #52 G 节 M5 + issue #73 {kind,payload} 报文）：只取 kind/sessionId/cli/runId（目录级命令的 cli 取自顶层参数，runOnce 的取自 payload）；禁止整包 JSON.stringify（runOnce 的 stdin 含 chunk 正文，Q8） */
 function summarizeCommand(cmd: HostCommand): string {
   const parts = [`kind=${String(cmd.kind)}`];
   // 字符串 payload：cancelRunOnce 为 runId，interruptTurn/readHistory 等为 sessionId
@@ -87,10 +84,13 @@ function summarizeCommand(cmd: HostCommand): string {
     parts.push(`${cmd.kind === "cancelRunOnce" ? "runId" : "sessionId"}=${cmd.payload}`);
     return parts.join(" ");
   }
+  // 目录级命令（arch D2）：cli 顶层参数；会话级命令（runOnce）：cli 在 payload 内
+  const cli = "cli" in cmd ? cmd.cli : undefined;
   const p = cmd.payload as Record<string, unknown> | undefined;
   if (p !== undefined) {
     if (p.sessionId !== undefined) parts.push(`sessionId=${String(p.sessionId)}`);
-    if (p.cli !== undefined) parts.push(`cli=${String(p.cli)}`);
+    if (cli !== undefined) parts.push(`cli=${String(cli)}`);
+    else if (p.cli !== undefined) parts.push(`cli=${String(p.cli)}`);
     if (p.runId !== undefined) parts.push(`runId=${String(p.runId)}`);
   }
   return parts.join(" ");
@@ -143,18 +143,17 @@ export class CliHostClient implements CliAdapter {
     }
   }
 
-  async createSession(init: CreateSessionInput): Promise<{ sessionId: string; nativeSessionId?: string | null; model?: string | null }> {
-    return this.send({ kind: "createSession", payload: init });
-  }
-
-  /** 模型目录查询（issue #76）：cli 缺省 fake 显式补齐（与 Router 兜底一致，保持 wire 摘要 cli= 命中） */
-  async listModels(input: ListModelsInput): Promise<ModelEntry[]> {
-    return this.send({ kind: "listModels", payload: { ...input, cli: input.cli ?? "fake" } });
-  }
-
-  /** 斜杠命令列举（issue #89）：cli 缺省 fake 显式补齐（与 Router 兜底一致，保持 wire 摘要 cli= 命中） */
-  async listCommands(input: ListCommandsInput): Promise<CommandEntry[]> {
-    return this.send({ kind: "listCommands", payload: { ...input, cli: input.cli ?? "fake" } });
+  /**
+   * 目录级命令句柄（arch D2）：cli 经 wire 顶层参数原样透传（含 undefined），
+   * 「cli 缺省 → fake」兜底单点在 worker 内 AdapterRouter.forCli——client 不再二次兜底。
+   */
+  forCli(cli?: string): CliDirectory {
+    return {
+      createSession: (init) => this.send({ kind: "createSession", cli, payload: init }),
+      listModels: (input) => this.send({ kind: "listModels", cli, payload: input }),
+      listCommands: (input) => this.send({ kind: "listCommands", cli, payload: input }),
+      adoptSession: (input) => this.send({ kind: "adoptSession", cli, payload: input }),
+    };
   }
 
   async sendTurn(input: SendTurnInput): Promise<void> {
@@ -195,11 +194,6 @@ export class CliHostClient implements CliAdapter {
 
   async resume(sessionId: string): Promise<void> {
     return this.send({ kind: "resume", payload: sessionId });
-  }
-
-  async adoptSession(input: AdoptSessionInput): Promise<void> {
-    // cli 缺省 fake 显式补齐（与 Router 兜底一致，保持 wire 摘要 cli= 命中）
-    return this.send({ kind: "adoptSession", payload: { ...input, cli: input.cli ?? "fake" } });
   }
 
   async dispose(input?: DisposeInput): Promise<void> {

@@ -152,7 +152,7 @@ describe("runAutoArchiveScan 执行器", () => {
     expect(pty.killed).toEqual([]);
     expect(logs.entries).toEqual([]);
     // adapter 未被触碰：对其发 turn 仍正常（未被 dispose 清空）
-    const created = await adapter.createSession({ cli: "fake", cwd: "C:\\p" });
+    const created = await adapter.forCli("fake").createSession({ cwd: "C:\\p" });
     expect(created.sessionId).toBeTruthy();
   });
 

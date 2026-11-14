@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { LogKind, AdapterEvent, ApprovalDecision, ApprovalSuggestion, ChatEvent, ChatEventSeed, CommandEntry, ModelEntry, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
-import { AdapterError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListCommandsInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
+import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CliDirectory, type CreateSessionInput, type CreateSessionResult, type DisposeInput, type ListCommandsInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
 import { mapSpawnFailure } from "./exe-chain";
 import type { OpenCodeSseEvent, OpenCodeServerClientLike } from "./opencode/client";
 import { OpenCodeServerHost, type OpenCodeServerHostLike, type OpenCodeServerHostOptions } from "./opencode/server-host";
@@ -97,7 +97,7 @@ interface SessionState extends TurnState<PendingApproval> {
   dead: boolean;
 }
 
-export class OpenCodeAdapter implements CliAdapter {
+export class OpenCodeAdapter implements CliAdapter, CliDirectory {
   readonly capabilities = OPENCODE_CAPABILITIES;
   private readonly sessions = new Map<string, SessionState>();
   private readonly byNative = new Map<string, SessionState>();
@@ -139,7 +139,12 @@ export class OpenCodeAdapter implements CliAdapter {
     }
   }
 
-  async createSession(init: CreateSessionInput): Promise<{ sessionId: string; nativeSessionId?: string | null; model?: string | null }> {
+  /** 目录级命令句柄（arch D2）：单实现只服务自身 CLI 身份，直接返回自身目录面 */
+  forCli(): CliDirectory {
+    return this;
+  }
+
+  async createSession(init: CreateSessionInput): Promise<CreateSessionResult> {
     const sessionId = `s-${randomUUID().slice(0, 8)}`;
     // 权限档位缺省=⚡自动（spec B 默认档）：undefined 不落在原生默认（无注入=全放行），保证审批语义一致
     const mode = init.permMode ?? "auto";
@@ -243,7 +248,7 @@ export class OpenCodeAdapter implements CliAdapter {
   }
 
   /** 应用重启后的会话收养（#13 恢复编排接入点）：登记 native id（无连接；readHistory/resume 按需拉起 server） */
-  async adoptSession(input: { sessionId: string; nativeSessionId: string; cwd: string; permMode?: PermMode; model?: string }): Promise<void> {
+  async adoptSession(input: AdoptSessionInput): Promise<void> {
     if (this.sessions.has(input.sessionId)) throw new AdapterError("E_INTERNAL", `会话已存在：${input.sessionId}`);
     const s = this.newState(input.sessionId, input.nativeSessionId, { ...input, permMode: input.permMode ?? "auto" });
     s.dead = true;

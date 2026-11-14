@@ -1,7 +1,7 @@
-// 用途：AdapterRouter —— 多 CLI 分发门面：createSession/listModels 按 init.cli 分发到对应 Adapter 并登记路由，其余 C1 方法按 sessionId 路由（ipc 单 adapter 注入位不变）
+// 用途：AdapterRouter —— 多 CLI 分发门面：目录级四命令（createSession/listModels/listCommands/adoptSession）经 forCli(cli) 句柄按 CLI 分发并登记路由，其余 C1 会话级方法按 sessionId 路由（ipc 单 adapter 注入位不变）；「cli 缺省 → fake」兜底单点在此（arch D2）
 import { randomUUID } from "node:crypto";
-import type { AdapterEvent, ChatEvent, CommandEntry, ModelEntry, TranscriptEvent } from "@kanban/ipc-schema";
-import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListCommandsInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
+import type { AdapterEvent, ChatEvent, TranscriptEvent } from "@kanban/ipc-schema";
+import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CliDirectory, type DisposeInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
 
 /** Router 构造工厂：cli → adapter（不支持该 CLI 时抛 AdapterError） */
 export type AdapterFactory = (cli: string) => CliAdapter;
@@ -42,36 +42,33 @@ export class AdapterRouter implements CliAdapter {
     this.capabilities = mergeCapabilities(probes);
   }
 
-  async createSession(init: CreateSessionInput): Promise<{ sessionId: string; nativeSessionId?: string | null; model?: string | null }> {
-    const cli = init.cli ?? "fake";
-    const adapter = this.adapterForCli(cli);
-    const r = await adapter.createSession(init);
-    this.routing.set(r.sessionId, adapter);
-    return r;
-  }
-
-  /** 模型目录查询（issue #76 / spec #75）：按 cli 分发的目录级命令（无 sessionId，照 createSession 分发模式） */
-  async listModels(input: ListModelsInput): Promise<ModelEntry[]> {
-    const cli = input.cli ?? "fake";
-    return this.adapterForCli(cli).listModels({ ...input, cli });
-  }
-
-  /** 命令列举（issue #89 / spec #82 E 块）：按 cli 分发的目录级命令（同 listModels 模式；命令源知识在各 adapter/扫描模块内） */
-  async listCommands(input: ListCommandsInput): Promise<CommandEntry[]> {
-    const cli = input.cli ?? "fake";
-    return this.adapterForCli(cli).listCommands({ ...input, cli });
-  }
-
-  /** 会话收养（#13 恢复编排）：按 cli 分发到目标 Adapter 并登记路由（readHistory/resume/interruptTurn 由此可达） */
-  async adoptSession(input: AdoptSessionInput): Promise<void> {
-    const cli = input.cli ?? "fake";
-    const adapter = this.adapterForCli(cli);
-    // arch C13：缺席判定单源 = 能力面 adoptSession（方法存在性仅作 TS 收窄保险，缺任一即同错误形状拒绝）
-    if (!adapter.capabilities.adoptSession || !adapter.adoptSession) {
-      throw new AdapterError("E_INTERNAL", `该 CLI 不支持会话收养：${cli}`);
-    }
-    await adapter.adoptSession({ ...input, cli });
-    this.routing.set(input.sessionId, adapter);
+  /**
+   * 目录级命令分发句柄（arch D2）：「cli 缺省 → fake」兜底单点——Client/调用方经参数透传 cli，缺省归一在此；
+   * 句柄内 createSession/adoptSession 登记应用侧 sessionId → adapter 路由（会话级方法由此可达）。
+   */
+  forCli(cli?: string): CliDirectory {
+    const key = cli ?? "fake";
+    const adapter = this.adapterForCli(key);
+    const dir = adapter.forCli(key);
+    return {
+      createSession: async (init) => {
+        const r = await dir.createSession(init);
+        this.routing.set(r.sessionId, adapter);
+        return r;
+      },
+      listModels: (input) => dir.listModels(input),
+      listCommands: (input) => dir.listCommands(input),
+      adoptSession:
+        dir.adoptSession &&
+        (async (input: AdoptSessionInput) => {
+          // arch C13：缺席判定单源 = 能力面 adoptSession（方法存在性仅作 TS 收窄保险，缺任一即同错误形状拒绝）
+          if (!adapter.capabilities.adoptSession || !dir.adoptSession) {
+            throw new AdapterError("E_INTERNAL", `该 CLI 不支持会话收养：${key}`);
+          }
+          await dir.adoptSession(input);
+          this.routing.set(input.sessionId, adapter);
+        }),
+    };
   }
 
   async sendTurn(input: SendTurnInput): Promise<void> {

@@ -5,7 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import type { LogKind, AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, CommandEntry, ModelEntry, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
 import { transformHookEvents } from "@kanban/tracker";
-import { AdapterError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListCommandsInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
+import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CliDirectory, type CreateSessionInput, type CreateSessionResult, type DisposeInput, type ListCommandsInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
 import { ExeResolveCache, mapSpawnFailure } from "./exe-chain";
 import { CLAUDE_EXE_CHAIN } from "./claude/exe";
 import { listClaudeSkillCommands } from "./claude/skill-commands";
@@ -99,7 +99,7 @@ interface SessionState extends TurnState<PendingApproval> {
   dead: boolean;
 }
 
-export class ClaudeAdapter implements CliAdapter {
+export class ClaudeAdapter implements CliAdapter, CliDirectory {
   readonly capabilities = CLAUDE_CAPABILITIES;
   private readonly sessions = new Map<string, SessionState>();
   private readonly byNative = new Map<string, SessionState>();
@@ -147,7 +147,12 @@ export class ClaudeAdapter implements CliAdapter {
     return this.exeCache.resolve(CLAUDE_EXE_CHAIN, { manualOverride });
   }
 
-  async createSession(init: CreateSessionInput): Promise<{ sessionId: string; nativeSessionId?: string | null; model?: string | null }> {
+  /** 目录级命令句柄（arch D2）：单实现只服务自身 CLI 身份，直接返回自身目录面 */
+  forCli(): CliDirectory {
+    return this;
+  }
+
+  async createSession(init: CreateSessionInput): Promise<CreateSessionResult> {
     const sessionId = `s-${randomUUID().slice(0, 8)}`;
     // native session id 由我方预生成并经 --session-id 强制指定（CLI 2.x 的 system/init 懒发射——首条 user 消息后才到，实测 2.1.317；不能等 init 拿 id）
     const nativeSessionId = randomUUID();
@@ -214,7 +219,7 @@ export class ClaudeAdapter implements CliAdapter {
   }
 
   /** 应用重启后的会话收养（#13 恢复编排的接入点）：按 DB 持久化的 native session id 重建状态（无进程；readHistory 直读 transcript，resume 后可续问） */
-  async adoptSession(input: { sessionId: string; nativeSessionId: string; cwd: string; permMode?: PermMode; model?: string }): Promise<void> {
+  async adoptSession(input: AdoptSessionInput): Promise<void> {
     if (this.sessions.has(input.sessionId)) throw new AdapterError("E_INTERNAL", `会话已存在：${input.sessionId}`);
     const files = prepareSessionHookDir(this.hookDir, input.sessionId);
     const s = this.newState(input.sessionId, input.nativeSessionId, input, files, null);

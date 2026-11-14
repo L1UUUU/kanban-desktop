@@ -4,7 +4,7 @@ import { readFileSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import type { LogKind, AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, CommandEntry, ModelEntry, PermMode, SessionStatus, TranscriptEvent } from "@kanban/ipc-schema";
-import { AdapterError, ExeNotFoundError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListCommandsInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
+import { AdapterError, ExeNotFoundError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CliDirectory, type CreateSessionInput, type CreateSessionResult, type DisposeInput, type ListCommandsInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
 import { mapSpawnFailure } from "./exe-chain";
 import { resolveCodexExe } from "./codex/exe";
 import { listCodexPromptCommands } from "./codex/prompt-commands";
@@ -112,7 +112,7 @@ interface SessionState extends TurnState<PendingApproval> {
   userTexts: string[];
 }
 
-export class CodexAdapter implements CliAdapter {
+export class CodexAdapter implements CliAdapter, CliDirectory {
   readonly capabilities = CODEX_CAPABILITIES;
   private client: CodexRpcClientLike | null = null;
   private readonly sessions = new Map<string, SessionState>();
@@ -153,7 +153,12 @@ export class CodexAdapter implements CliAdapter {
     }
   }
 
-  async createSession(init: CreateSessionInput): Promise<{ sessionId: string; nativeSessionId?: string | null; model?: string | null }> {
+  /** 目录级命令句柄（arch D2）：单实现只服务自身 CLI 身份，直接返回自身目录面 */
+  forCli(): CliDirectory {
+    return this;
+  }
+
+  async createSession(init: CreateSessionInput): Promise<CreateSessionResult> {
     this.ensureStarted();
     const perm = PERM_MAP[init.permMode ?? "auto"];
     let model: string;
@@ -206,7 +211,7 @@ export class CodexAdapter implements CliAdapter {
 
   /** 模型目录（issue #76 / spec #75）：常驻 app-server 发 model/list（hidden 项不进目录；nextCursor 分页续拉），映射 displayName/description/isDefault */
   async listModels(_input: ListModelsInput): Promise<ModelEntry[]> {
-    void _input; // 单实现忽略 cli/cwd（Router 分发用）
+    void _input; // 常驻 app-server 不看 cwd（arch D2 起 input 无 cli 字段）
     this.ensureStarted();
     const entries: ModelEntry[] = [];
     let cursor: string | undefined;

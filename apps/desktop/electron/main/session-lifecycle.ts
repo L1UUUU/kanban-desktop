@@ -6,10 +6,10 @@ import type { PtyHost, SpawnRequest, SpawnResult } from "./pty-host";
 import type { SessionStore } from "./session-store";
 import { deriveTitle } from "./title-derive";
 
-/** 进程能力 seam：结构化会话创建/首条发送/中断/受控终止/收养登记与 PTY 启动/写入/终止（两个 adapter——生产分派与测试 fake，真 seam） */
+/** 进程能力 seam：结构化会话创建/首条发送/中断/受控终止/收养登记与 PTY 启动/写入/终止（两个 adapter——生产分派与测试 fake，真 seam）；arch D2 起 create/adopt 的 cli 为 main 域字段（经 adapter.forCli(cli) 句柄进入目录级命令，adapter 单实现 input 不含 cli） */
 export interface SessionProcesses {
-  /** 创建结构化原生会话（arch C12，生产 = adapter.createSession；失败如 CLI 不存在 reject 原样上抛，由 ipc 层既有 catch 映射错误形状） */
-  createSession(input: CreateSessionInput): Promise<{ sessionId: string; nativeSessionId?: string | null; model?: string | null }>;
+  /** 创建结构化原生会话（arch C12，生产 = adapter.forCli(cli).createSession；失败如 CLI 不存在 reject 原样上抛，由 ipc 层既有 catch 映射错误形状） */
+  createSession(input: CreateSessionInput & { cli: string }): Promise<{ sessionId: string; nativeSessionId?: string | null; model?: string | null }>;
   /** 发送 user 消息（arch C12，首条消息原子化用；生产 = adapter.sendTurn，只表达已提交、内容一律经事件流） */
   sendTurn(input: SendTurnInput): Promise<void>;
   /** 中断当前 turn（幂等，无活动 turn 自然 no-op） */
@@ -17,7 +17,7 @@ export interface SessionProcesses {
   /** 受控终止单会话（结构化 = adapter.dispose 单会话形态；PTY = 宿主终端终止） */
   terminate(rec: { id: string; kind: "structured" | "pty" }): Promise<void>;
   /** 重新登记可恢复句柄；CLI 不支持收养时 reject（错误消息直达调用方，由 ipc 层既有 catch 映射错误形状） */
-  adopt(input: AdoptSessionInput): Promise<void>;
+  adopt(input: AdoptSessionInput & { cli: string }): Promise<void>;
   /** 启动 PTY 终端（arch C12，生产 = 宿主 spawn：同 id 在跑先停旧的；失败经返回值上报不抛） */
   spawnTerminal(terminalId: string, req: SpawnRequest): SpawnResult;
   /** 写入 PTY 终端（arch C12，草稿首输入重放用；生产 = 宿主 write，未运行返回 ok:false） */
@@ -28,21 +28,27 @@ export interface SessionProcesses {
   killAll(): void;
 }
 
-/** 生产 SessionProcesses 装配（index.ts 装配现场与测试夹具共用同一分派）：structured → adapter.createSession/sendTurn/interruptTurn/dispose/adoptSession；pty → 宿主 spawn/write/kill（lifecycle 仅对 structured 调 adopt，pty 无进程恢复能力）；arch C11 起全量形态 disposeAll/killAll 承载退出序列（lifecycle 编排不消费） */
+/** 生产 SessionProcesses 装配（index.ts 装配现场与测试夹具共用同一分派）：structured → adapter.forCli(cli) 目录句柄 createSession/adoptSession + sendTurn/interruptTurn/dispose；pty → 宿主 spawn/write/kill（lifecycle 仅对 structured 调 adopt，pty 无进程恢复能力）；arch C11 起全量形态 disposeAll/killAll 承载退出序列（lifecycle 编排不消费） */
 export function createAdapterSessionProcesses(
   adapter: CliAdapter,
   pty: Pick<PtyHost, "spawn" | "write" | "kill" | "killAll">,
 ): SessionProcesses {
   return {
-    createSession: (input) => adapter.createSession(input),
+    createSession: (input) => {
+      const { cli, ...init } = input;
+      return adapter.forCli(cli).createSession(init);
+    },
     sendTurn: (input) => adapter.sendTurn(input),
     interrupt: (sessionId) => adapter.interruptTurn(sessionId),
     terminate: (rec) => (rec.kind === "pty" ? Promise.resolve(pty.kill(rec.id)) : adapter.dispose({ sessionId: rec.id })),
-    adopt: (input) =>
+    adopt: (input) => {
+      const { cli, ...rest } = input;
+      const dir = adapter.forCli(cli);
       // arch C13：缺席判定单源 = 能力面 adoptSession（方法存在性仅作 TS 收窄保险）；降级行为不变——同错误消息 reject，由 ipc 层既有 catch 映射错误形状
-      adapter.capabilities.adoptSession && adapter.adoptSession
-        ? adapter.adoptSession(input)
-        : Promise.reject(new Error(`当前 CLI 不支持会话收养，无法取消归档：${input.cli ?? ""}`)),
+      return adapter.capabilities.adoptSession && dir.adoptSession
+        ? dir.adoptSession(rest)
+        : Promise.reject(new Error(`当前 CLI 不支持会话收养，无法取消归档：${cli}`));
+    },
     spawnTerminal: (terminalId, req) => pty.spawn(terminalId, req),
     writeTerminal: (terminalId, data) => pty.write(terminalId, data),
     disposeAll: () => adapter.dispose(),
@@ -288,7 +294,7 @@ export function createSessionLifecycle(deps: SessionLifecycleDeps): SessionLifec
       // 已归档会话留待取消归档时按需 adopt（session:unarchive），避免登记冲突
       const rows = deps.sessions.listAll().filter((r) => r.kind === "structured" && r.archivedAt == null);
       for (const r of rows) {
-        const input: AdoptSessionInput = {
+        const input: AdoptSessionInput & { cli: string } = {
           sessionId: r.id,
           nativeSessionId: r.nativeSessionId ?? "",
           cwd: r.cwd ?? "",

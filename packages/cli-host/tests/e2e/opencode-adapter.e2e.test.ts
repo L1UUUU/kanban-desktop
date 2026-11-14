@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { OpenCodeAdapter } from "../../src/opencode-adapter";
 import { OpenCodeServerHost } from "../../src/opencode/server-host";
 import { createCollector, defineAdapterContractTests, type EventCollector } from "../../src/adapter.contract";
-import type { CliAdapter } from "../../src/adapter";
+import type { CliAdapter, CliDirectory } from "../../src/adapter";
 import type { AdapterEvent, ChatEvent, SkillObservation } from "@kanban/ipc-schema";
 import { transcriptEventSchema } from "@kanban/ipc-schema";
 
@@ -169,11 +169,13 @@ describe.skipIf(!E2E)("OpenCodeAdapter 真实集成（env-gated）", () => {
    *    同 server 后续用例的 echo 审批被自动跳过（非法时序必挂）；
    * 2) 档位从 spawn 起效——审批用例（ask）不再与不变量用例（缺省 auto）共享 server 串档。 */
   let contractCwdSeq = 0;
-  const contractAdapter: CliAdapter = {
+  const contractAdapter: CliAdapter & CliDirectory = {
     get capabilities() {
       return adapter.capabilities;
     },
     subscribe: (h) => adapter.subscribe(h),
+    // arch D2：目录面经 forCli 句柄进入（单实现身份固定，透传即自身目录面；createSession 的 cwd 改写留在下方目录面方法）
+    forCli: () => adapter.forCli(),
     createSession: (init) => {
       // 审批用例（approvalPermMode=ask）→ 独立 cwd 独立 server；其余共享 workdir server
       if (init.permMode !== "ask") return adapter.createSession({ ...init, cwd: workdir });

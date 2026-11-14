@@ -8,18 +8,23 @@ import { createAdapterSessionProcesses, createSessionLifecycle } from "./session
 import { createShutdownOrchestrator } from "./shutdown";
 import type { PtyHost } from "./pty-host";
 
-/** 记录型 fake adapter：interruptTurn/dispose(含单会话)记录调用；可选钩子模拟事件落库/失败 */
+/** 记录型 fake adapter：interruptTurn/dispose(含单会话)记录调用；可选钩子模拟事件落库/失败；arch D2 起目录面挂 forCli 句柄（adopt 记录补回 forCli 绑定的 cli，保持「cli 透传」断言面） */
 function makeFakeAdapter(hooks: { onInterrupt?: (id: string) => void; failInterrupt?: boolean } = {}) {
   const calls: string[] = [];
-  const adopted: AdoptSessionInput[] = [];
+  const adopted: Array<AdoptSessionInput & { cli?: string }> = [];
   const adapter: CliAdapter = {
     // arch C13：能力声明与可选方法在场同步（本桩实现 adoptSession，无 listChildPids/runOnce）
     capabilities: { approval: true, interrupt: true, resume: true, readHistory: true, skillSignal: false, adoptSession: true, runOnce: false, listChildPids: false },
-    createSession: async () => {
-      throw new Error("测试不使用");
-    },
-    listModels: async () => [],
-    listCommands: async () => [],
+    forCli: (cli) => ({
+      createSession: async () => {
+        throw new Error("测试不使用");
+      },
+      listModels: async () => [],
+      listCommands: async () => [],
+      adoptSession: async (input) => {
+        adopted.push({ ...input, cli });
+      },
+    }),
     setModel: async () => ({ model: "" }),
     summarizeTitle: async () => null,
     sendTurn: async () => {},
@@ -32,9 +37,6 @@ function makeFakeAdapter(hooks: { onInterrupt?: (id: string) => void; failInterr
     readHistory: async () => [] as ChatEvent[],
     readTranscript: async () => [],
     resume: async () => {},
-    adoptSession: async (input) => {
-      adopted.push(input);
-    },
     dispose: async (input?: DisposeInput) => {
       calls.push(input?.sessionId ? `dispose-one:${input.sessionId}` : "dispose-all");
     },
@@ -222,13 +224,15 @@ describe("重开恢复编排（#13；#70 起经 session-lifecycle.adoptRestored�
       { id: "s-b", cli: "claude", nativeSessionId: "n-b", status: "idle" },
     ]);
     const noAdopt: CliAdapter = {
-      // arch C13：可选面全缺席——能力声明全 false（adopt 缺席走 reject 降级路径）
+      // arch C13：可选面全缺席——能力声明全 false（adopt 缺席走 reject 降级路径）；arch D2 起目录面挂 forCli 句柄（adoptSession 缺席）
       capabilities: { approval: true, interrupt: true, resume: true, readHistory: true, skillSignal: false, adoptSession: false, runOnce: false, listChildPids: false },
-      createSession: async () => {
-        throw new Error("unused");
-      },
-      listModels: async () => [],
-      listCommands: async () => [],
+      forCli: () => ({
+        createSession: async () => {
+          throw new Error("unused");
+        },
+        listModels: async () => [],
+        listCommands: async () => [],
+      }),
       setModel: async () => ({ model: "" }),
     summarizeTitle: async () => null,
       sendTurn: async () => {},

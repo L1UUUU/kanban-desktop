@@ -1,4 +1,4 @@
-// 用途：CliHost seam（spec C5 冻结：command/subscribe/shutdown，纯 Node 无 Electron 依赖）—— utilityProcess worker 的核心；多 Adapter 经 AdapterRouter 分发；run-once 一次性执行（#29 C5 演进）；消息面 HostCommand/返回值类型由 wire.ts 从 CliAdapter 派生（issue #73：缺 case 编译红、payload 逐 case 精确窄化、返回值直传）
+// 用途：CliHost seam（spec C5 冻结：command/subscribe/shutdown，纯 Node 无 Electron 依赖）—— utilityProcess worker 的核心；多 Adapter 经 AdapterRouter 分发（arch D2 起目录级四命令经 router.forCli(cli) 句柄）；run-once 一次性执行（#29 C5 演进）；消息面 HostCommand/返回值类型由 wire.ts 从 CliAdapter/CliDirectory 派生（issue #73：缺 case 编译红、payload 逐 case 精确窄化、返回值直传）
 import type { LogKind, AdapterEvent } from "@kanban/ipc-schema";
 import { AdapterError } from "../adapter";
 import { AdapterRouter, type AdapterFactory } from "../router-adapter";
@@ -46,7 +46,8 @@ export class CliHost {
     if (this.shuttingDown) throw new AdapterError("E_INTERNAL", `CliHost 正在停机（${cmd.kind} 被拒绝）`);
     switch (cmd.kind) {
       case "createSession": {
-        const r = await this.router.createSession(cmd.payload);
+        // 目录级命令（arch D2）：cli 顶层参数经 Router.forCli 分发（缺省 fake 兜底单点在 Router）
+        const r = await this.router.forCli(cmd.cli).createSession(cmd.payload);
         return { sessionId: r.sessionId, nativeSessionId: r.nativeSessionId ?? null, model: r.model };
       }
       case "sendTurn":
@@ -72,7 +73,7 @@ export class CliHost {
         await this.router.resume(cmd.payload);
         return;
       case "adoptSession":
-        await this.router.adoptSession(cmd.payload);
+        await this.router.forCli(cmd.cli).adoptSession?.(cmd.payload);
         return;
       case "dispose":
         await this.router.dispose(cmd.payload);
@@ -81,11 +82,11 @@ export class CliHost {
         // C5 演进（#44）：聚合各 Adapter 活跃子进程 pid 上报 Main（不路由会话，host 级查询）
         return this.router.listChildPids();
       case "listModels":
-        // issue #76：模型目录查询（按 cli 分发的目录级命令，不路由会话）
-        return this.router.listModels(cmd.payload);
+        // issue #76：模型目录查询（目录级命令，按 cli 分发不路由会话）
+        return this.router.forCli(cmd.cli).listModels(cmd.payload);
       case "listCommands":
-        // issue #89：斜杠命令列举（按 cli 分发的目录级命令，不路由会话）
-        return this.router.listCommands(cmd.payload);
+        // issue #89：斜杠命令列举（目录级命令，按 cli 分发不路由会话）
+        return this.router.forCli(cmd.cli).listCommands(cmd.payload);
       case "runOnce":
         return this.runOnceRunner.run(cmd.payload);
       case "cancelRunOnce":
