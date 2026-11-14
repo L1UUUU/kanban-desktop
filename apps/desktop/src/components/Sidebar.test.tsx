@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProjectRow } from "@kanban/ipc-schema";
-import type { PtySessionView, StructuredSessionView } from "../features/chat/chat-store";
+import type { ChatActionError, PtySessionView, StructuredSessionView } from "../features/chat/chat-store";
 import { Sidebar } from "./Sidebar";
 
 const P1: ProjectRow = { id: "p-1", name: "alpha", canonicalPath: "C:\\alpha", status: "ok", createdAt: "2026-11-05T00:00:00.000Z" };
@@ -346,7 +346,7 @@ describe("「＋」菜单未装 CLI 灰置（#80 spec #75：与详情面板菜�
 afterEach(cleanup);
 
 describe("侧栏会话行 hover 铅笔行内重命名（#94 / ADR 0003：手动主权，#84 同款交互）", () => {
-  function mountRenamable(onRenameSession = vi.fn((): Promise<string | null> => Promise.resolve(null))) {
+  function mountRenamable(onRenameSession = vi.fn((): Promise<ChatActionError | null> => Promise.resolve(null))) {
     mount({
       projects: [P1],
       currentProjectId: "p-1",
@@ -406,7 +406,7 @@ describe("侧栏会话行 hover 铅笔行内重命名（#94 / ADR 0003：手动�
   });
 
   it("提交失败：行内错误提示（不再静默）；再次进入编辑时清除", async () => {
-    mountRenamable(vi.fn(() => Promise.resolve("重命名失败：会话不存在")));
+    mountRenamable(vi.fn(() => Promise.resolve({ code: "E_INTERNAL", message: "重命名失败：会话不存在" })));
     fireEvent.click(screen.getByTitle("重命名会话"));
     const input = screen.getByTestId("session-rename-input");
     fireEvent.change(input, { target: { value: "新名字" } });

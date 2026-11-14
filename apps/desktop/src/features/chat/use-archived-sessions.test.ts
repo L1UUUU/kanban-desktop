@@ -80,7 +80,7 @@ describe("useArchivedSessions：拉取（session:archivedList）", () => {
     });
     const { result } = renderHook(() => useArchivedSessions(transport));
     act(() => result.current.refresh());
-    await waitFor(() => expect(result.current.error).toContain("读库失败"));
+    await waitFor(() => expect(result.current.error?.message).toContain("读库失败"));
     expect(result.current.rows).toBeNull();
     act(() => result.current.refresh());
     await waitFor(() => expect(result.current.rows?.map((r) => r.id)).toEqual(["r1", "r2"]));
@@ -100,7 +100,7 @@ describe("useArchivedSessions：拉取（session:archivedList）", () => {
     const { transport } = makeTransport({ throws: { "session:archivedList": 1 } });
     const { result } = renderHook(() => useArchivedSessions(transport));
     act(() => result.current.refresh());
-    await waitFor(() => expect(result.current.error).toBe("读取已归档会话失败：IPC 调用异常"));
+    await waitFor(() => expect(result.current.error?.message).toBe("读取已归档会话失败：IPC 调用异常"));
     expect(result.current.rows).toBeNull();
   });
 
@@ -148,7 +148,7 @@ describe("useArchivedSessions：取消归档（session:unarchive）", () => {
       act(() => result.current.refresh());
       await waitFor(() => expect(result.current.rows).toHaveLength(2));
       act(() => result.current.unarchive(R1));
-      await waitFor(() => expect(result.current.error).toContain("无法取消归档"));
+      await waitFor(() => expect(result.current.error?.message).toContain("无法取消归档"));
       expect(result.current.rows?.map((r) => r.id)).toEqual(["r1", "r2"]); // 行保留可重试
       expect(restored).toEqual([]);
       expect(sink.entries).toEqual([{ level: "error", scope: "chat", message: "取消归档失败", ctx: { sessionId: "r1" } }]);
@@ -168,7 +168,7 @@ describe("useArchivedSessions：取消归档（session:unarchive）", () => {
       act(() => result.current.refresh());
       await waitFor(() => expect(result.current.rows).toHaveLength(1));
       act(() => result.current.unarchive(R1));
-      await waitFor(() => expect(result.current.error).toBe("取消归档失败：IPC 服务不可用"));
+      await waitFor(() => expect(result.current.error?.message).toBe("取消归档失败：IPC 服务不可用"));
       expect(result.current.rows?.map((r) => r.id)).toEqual(["r1"]);
       expect(sink.entries).toEqual([{ level: "error", scope: "chat", message: "取消归档失败", ctx: { sessionId: "r1" } }]);
     } finally {
@@ -205,7 +205,7 @@ describe("useArchivedSessions：删除（session:delete）", () => {
       act(() => result.current.refresh());
       await waitFor(() => expect(result.current.rows).toHaveLength(1));
       act(() => result.current.remove(R1));
-      await waitFor(() => expect(result.current.error).toContain("数据库锁定"));
+      await waitFor(() => expect(result.current.error?.message).toContain("数据库锁定"));
       expect(result.current.rows?.map((r) => r.id)).toEqual(["r1"]); // 行保留可重试
       expect(sink.entries).toEqual([{ level: "error", scope: "chat", message: "删除已归档会话失败", ctx: { sessionId: "r1" } }]);
     } finally {

@@ -319,7 +319,7 @@ export function SettingsModal({
             )}
             {archivedError ? (
               <div data-testid="archived-error" className="py-1 text-[11px] text-destructive">
-                {archivedError}
+                {archivedError.message}
               </div>
             ) : null}
           </section>

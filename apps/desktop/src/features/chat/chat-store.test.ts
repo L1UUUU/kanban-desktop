@@ -349,7 +349,7 @@ describe("chat-store CLI 异常退出终态化（#13/spec H：不崩溃、不自
 describe("chat-store 会话内错误清除（#46）", () => {
   it("clearError：清除会话 lastError（错误卡「知道了」动作数据源）", () => {
     const store = makeStore();
-    store.setError("s-1", "E_INTERNAL", "x");
+    store.setError("s-1", { code: "E_INTERNAL", message: "x" });
     expect(structured(store, "s-1").lastError).not.toBeNull();
     store.clearError("s-1");
     expect(structured(store, "s-1").lastError).toBeNull();
@@ -414,7 +414,7 @@ describe("chat-store 草稿生命周期（#59：点「＋」只开草稿不落�
     const store = makeStore();
     store.openDraft(META);
     store.updateDraft({ input: "要重试的首条" });
-    store.setDraftSubmitError("E_SPAWN_NOT_FOUND", "未找到 claude 可执行文件");
+    store.setDraftSubmitError({ code: "E_SPAWN_NOT_FOUND", message: "未找到 claude 可执行文件" });
     const d = structuredDraft(store);
     expect(d.submitError).toMatchObject({ code: "E_SPAWN_NOT_FOUND", message: "未找到 claude 可执行文件" });
     expect(d.input).toBe("要重试的首条"); // 失败保留输入

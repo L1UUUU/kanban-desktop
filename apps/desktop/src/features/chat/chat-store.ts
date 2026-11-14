@@ -8,11 +8,12 @@
 import type { ChatEvent, CliKind, IpcRequest, IpcResult, PermMode, SessionRow, SessionStatus } from "@kanban/ipc-schema";
 import { createScopedLogger } from "../../lib/logger";
 import { TerminalDraftController, type OpenDraftOptions, type TerminalDraftCreated, type TerminalDraftSnapshot } from "../terminal/terminal-draft";
-import type { AssistantItem, SessionView, StructuredSessionView, ToolItem } from "./session-view";
+import type { AssistantItem, ChatActionError, SessionView, StructuredSessionView, ToolItem } from "./session-view";
 import { blankStructuredView, parseWireCli, sessionViewFromWire } from "./session-view";
 
 export type {
   AssistantItem,
+  ChatActionError,
   ChatItem,
   PendingApproval,
   PtySessionView,
@@ -65,8 +66,8 @@ export interface DraftSession {
   input: string;
   /** 本草稿替换过已有草稿（提示行显示「已替换上一个草稿」） */
   replacedHint: boolean;
-  /** 首条消息提交失败（创建+发送原子链错误；null=无） */
-  submitError: { code: string; message: string } | null;
+  /** 首条消息提交失败（创建+发送原子链错误；null=无；arch C7 起统一 ChatActionError 形态） */
+  submitError: ChatActionError | null;
 }
 
 /** 中央区草稿判别联合（issue #71 S4 / arch C8 单属主）：全局任一时刻至多一个，两类互相替换（ChatStore 为唯一写者） */
@@ -309,10 +310,10 @@ export class ChatStore {
     this.changed();
   }
 
-  /** #59：记录首条消息提交失败（创建+发送原子链错误；草稿与输入保留供重试） */
-  setDraftSubmitError(code: string, message: string): void {
+  /** #59：记录首条消息提交失败（创建+发送原子链错误；草稿与输入保留供重试；写入方统一经 chat-error 出口） */
+  setDraftSubmitError(error: ChatActionError): void {
     if (!this.draft) return;
-    this.draft.submitError = { code, message };
+    this.draft.submitError = error;
     this.changed();
   }
 
@@ -413,11 +414,11 @@ export class ChatStore {
     this.changed();
   }
 
-  /** IPC 错误结果展示（如过期审批响应；PTY 行无可渲染错误面——ChatPane 不渲染终端行，守卫不影响行为） */
-  setError(id: string, code: string, message: string): void {
+  /** IPC 失败结果展示（如过期审批响应；写入方统一经 chat-error 出口；PTY 行无可渲染错误面——ChatPane 不渲染终端行，守卫不影响行为） */
+  setError(id: string, error: ChatActionError): void {
     const s = this.sessions.get(id);
     if (!s || s.kind !== "structured") return;
-    s.lastError = { code, message };
+    s.lastError = error;
     this.changed();
   }
 

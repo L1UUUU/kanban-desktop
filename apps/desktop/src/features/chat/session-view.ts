@@ -6,6 +6,12 @@ import { createScopedLogger } from "../../lib/logger";
 // 本文件日志出口（scope 固定 chat，经 lib/logger 唯一出口发出）
 const log = createScopedLogger("chat");
 
+/** 会话域统一错误形态（arch C7 单轨）：renderer 侧 IPC 失败经 chat-error 统一出口归一为此形再落错误槽（会话 lastError / 草稿 submitError / 行内提示共用） */
+export interface ChatActionError {
+  code: string;
+  message: string;
+}
+
 /** 用户消息条目（ChatEvent 无 user 成员：renderer 发送时本地回显） */
 export interface UserItem {
   kind: "user";
@@ -66,7 +72,7 @@ export interface StructuredSessionView {
   pendingApproval: PendingApproval | null;
   /** 「本轮已取消」提示（turnnote）标记 */
   lastTurnInterrupted: boolean;
-  lastError: { code: string; message: string } | null;
+  lastError: ChatActionError | null;
   /** #21：Claude 同名 skill 冲突名（session:create 响应附回；仅创建时检测一次，空数组=无冲突，非 claude 会话恒空） */
   skillConflicts: string[];
   /** #21：冲突提示条已关闭（关闭仅隐藏，不影响会话；再次创建会话重新出现） */

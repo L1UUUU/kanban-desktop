@@ -1,15 +1,16 @@
 // 用途：会话控制器 hook（issue #71：全部会话写路径接线）—— transport → ChatStore 接线：启动恢复（session:list 断开会话登记）+ 无项目时 boot 演示草稿（#59：发出首条消息才创建会话，空会话永不进历史）+ 全部会话始终归并（切会话不中断，一致项 7）；
-// arch C8 草稿单属主：互斥/替换/丢弃/迟到登记内聚于 ChatStore（TerminalDraftController 为其私有机制），openSessionDraft 只做 cwd 解析与项目提示；TerminalManager/terminal:event 订阅隐藏在 seam 之后（use-terminals.ts 已消亡）
+// arch C8 草稿单属主：互斥/替换/丢弃/迟到登记内聚于 ChatStore（TerminalDraftController 为其私有机制），openSessionDraft 只做 cwd 解析与项目提示；TerminalManager/terminal:event 订阅隐藏在 seam 之后（use-terminals.ts 已消亡）；
+// arch C7 消息旅程编排收口 send-chain（发送/草稿提交不再经回调指针跨界），invoke 失败统一经 chat-error 出口落对应错误槽
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { AdapterEvent, ApprovalDecision, ChatEvent, CliKind, IpcResult, ModelsResult, PermMode, ProjectRow, SessionRow, SessionStatus, TerminalCommand } from "@kanban/ipc-schema";
-import { defaultSessionTitle } from "@kanban/ipc-schema";
 import type { ChatTransport } from "../../lib/kanban-api";
 import { createScopedLogger } from "../../lib/logger";
-import { ChatStore, type DraftSession, type SessionDraft, type SessionMeta, type SessionView } from "./chat-store";
+import { ChatStore, type ChatActionError, type DraftSession, type SessionDraft, type SessionMeta, type SessionView } from "./chat-store";
 import { selectStartupSessionId } from "./startup-select";
 import { ModelCatalog } from "./model-catalog";
 import { ComposerCommandSource } from "./composer-command-source";
-import { dispatchDraftSubmit, dispatchSessionSend, type SlashDispatchEnv } from "./slash-dispatch-exec";
+import { sendSessionText, submitDraftFirstMessage } from "./send-chain";
+import { exitSessionError, settleSessionInvoke, toActionError, transportUnavailable } from "./chat-error";
 import { TerminalManager } from "../terminal/TerminalManager";
 
 // 本文件日志出口（scope 固定 chat，经 lib/logger 唯一出口发出；终端链路日志随 arch C8 收编于 chat-store）
@@ -36,13 +37,13 @@ export type OpenDraftResult =
   | { ok: false; reason: "project-missing" };
 
 export interface ChatControllerActions {
-  /** 发送编排含斜杠派发（issue #92）：透传/展开发送、内置 /pty /kanban 本地执行、fail-closed 拒绝；返回 true=输入已消费 */
+  /** 发送编排含斜杠派发（issue #92；arch C7 收口 send-chain）：透传/展开发送、fail-closed 拒绝；返回 true=输入已消费 */
   send(text: string): Promise<boolean>;
   interrupt(): void;
   resolveApproval(decision: ApprovalDecision): void;
   /** 草稿打开动作（issue #71 S4 / arch C8）：cwd 解析 / 项目不存在提示在此；跨类互斥替换与 replacedHint 内聚于 ChatStore（openDraft/openPtyDraft 单调用） */
   openSessionDraft(input: OpenSessionDraftInput): OpenDraftResult;
-  /** #59：提交草稿 —— 经 session:create+firstMessage 原子完成「创建原生会话→落库→发送首条消息」；失败返回 false（草稿与输入保留） */
+  /** #59：提交草稿 —— 经 session:create+firstMessage 原子完成「创建原生会话→落库→发送首条消息」（arch C7 起编排收口 send-chain）；失败返回 false（草稿与输入保留） */
   submitDraft(): Promise<boolean>;
   /** 草稿本地编辑（能力收窄：仅首条消息输入/权限档位/模型三字段，非任意 patch） */
   updateDraft(patch: Partial<Pick<DraftSession, "input" | "permMode" | "model">>): void;
@@ -62,8 +63,8 @@ export interface ChatControllerActions {
   archiveSession(sessionId: string): Promise<void>;
   /** #62 删除会话（侧栏 hover「删除」经二次确认）：Main 编排 unlink+终止+删记录；成功后本地移除行（含激活切换），失败在该会话上报错（行保留可重试） */
   deleteSession(sessionId: string): Promise<void>;
-  /** #94 / ADR 0003 手动重命名（侧栏行内铅笔 → session:rename → manual 终态）：成功本地刷新标题返回 null；失败返回错误文案（行内提示） */
-  renameSession(sessionId: string, title: string): Promise<string | null>;
+  /** #94 / ADR 0003 手动重命名（侧栏行内铅笔 → session:rename → manual 终态）：成功本地刷新标题返回 null；失败返回统一错误形态（行内提示展示 message，arch C7 通道统一） */
+  renameSession(sessionId: string, title: string): Promise<ChatActionError | null>;
   /** #21：关闭同名 skill 冲突提示条（仅隐藏不影响会话） */
   dismissSkillConflict(sessionId: string): void;
   /** #46：错误卡「知道了」清除会话 lastError（仅隐藏） */
@@ -170,73 +171,6 @@ export function openSessionDraftAction(env: SessionDraftEnv, input: OpenSessionD
 }
 
 /**
- * #59 提交编排（模块级可直测）：session:create+firstMessage 原子链 ——
- * 成功：登记会话 + 首条消息本地回显 + 丢弃草稿；失败：草稿与输入保留（可重试），错误直达失败卡，
- * Main 回滚时事件先至的占位行按 rolledBackSessionId 撤销（不留空会话）。
- */
-export async function submitDraftChain(store: ChatStore, transport: ChatTransport, firstMessage?: string): Promise<boolean> {
-  const current = store.getSnapshot().draft;
-  // 单一就绪态守卫：模型未选（列表未就绪/未手输兜底）不提交——UI 发送钮同步禁用，此处为链路兜底
-  if (!current || current.kind !== "structured") return false;
-  const d = current.data;
-  if (d.input.trim().length === 0 || !d.model) return false;
-  // #92 斜杠派发：codex 展开类以展开文本为首条消息（覆盖草稿原文；气泡与 wire 同文本，所见即所发）
-  const sendText = firstMessage ?? d.input;
-  const r = await transport.invoke({
-    channel: "session:create",
-    cli: d.cli,
-    cwd: d.cwd,
-    projectId: d.projectId ?? undefined,
-    // 显式草稿名（boot 演示）才下发；占位名不在 renderer 构造，由 Main defaultSessionTitle 兜底（arch C8 标题单源）
-    ...(d.title ? { title: d.title } : {}),
-    model: d.model, // 所见即所发：默认选中项同样真实下发（无占位串）
-    permMode: d.permMode,
-    requirementId: d.requirementId,
-    firstMessage: sendText,
-  });
-  if (r.ok && r.sessionId) {
-    // #20：卡片进草稿的自动关联由 Main 原子完成（session_linked 推送回流看板 store）；拒绝仅报告不阻断会话
-    if (r.linked === false)
-      log.error("会话创建后自动关联被拒绝", {
-        sessionId: r.sessionId,
-        ...(r.reason ? { reason: r.reason } : {}),
-      });
-    store.registerSession({
-      sessionId: r.sessionId,
-      cli: r.cli ?? d.cli,
-      title: r.title ?? d.title ?? defaultSessionTitle(d.cli),
-      permMode: d.permMode,
-      model: d.model,
-      projectId: d.projectId,
-      cwd: d.cwd,
-      dirIdentity: r.dirIdentity ?? "none",
-      worktreeName: r.worktreeName ?? null,
-      // #21：Main 仅对 claude 会话附同名 skill 冲突名（其余 CLI 缺省无冲突）
-      skillConflicts: r.skillConflicts ?? [],
-    });
-    store.appendUserMessage(r.sessionId, sendText); // 首条消息本地回显（内容不经事件流回传；= 实际发送文本）
-    store.discardDraft();
-    return true;
-  }
-  // 失败：草稿与输入保留（可重试），错误直达失败卡；不留空会话（Main 已回滚记录）
-  const code = r.ok ? "E_INTERNAL" : r.error.code;
-  const message = r.ok ? "未知错误" : r.error.message;
-  // Main 回滚时事件（session_status 等）可能已先至渲染端建占位行——按回滚 id 撤销，不留空会话
-  if (!r.ok && r.error.rolledBackSessionId) store.removeSession(r.error.rolledBackSessionId);
-  // #55（spec #52 G 节）：提交失败留痕（带关键参数；requirementId 可选键条件携带，防 ctx 出现 undefined）
-  log.error("草稿提交失败（创建+发送首条消息）", {
-    cli: d.cli,
-    code,
-    message,
-    cwd: d.cwd,
-    ...(d.projectId ? { projectId: d.projectId } : {}),
-    ...(d.requirementId ? { requirementId: d.requirementId } : {}),
-  });
-  store.setDraftSubmitError(code, message);
-  return false;
-}
-
-/**
  * #42 恢复编排（模块级可直测）：两步 IPC —— readHistory 快照重建消息流 → resume 重连。
  * 发出即「恢复中」（不可中断，D1）；任一步失败进「失败」态（重试/复制详情）；
  * 成功收敛由 resume 后实时 session_status 驱动（store 复位 resumeState + 状态徽标回 idle）。
@@ -275,25 +209,25 @@ export async function setModelChain(store: ChatStore, transport: ChatTransport, 
     return true;
   }
   store.updateSession(sessionId, { model: prev, modelChangePending: false }); // 回滚为切换前值
-  store.setError(sessionId, r.error.code, r.error.message); // 会话内既有错误形态（错误卡直达）
-  log.error("会话模型切换失败", { sessionId, code: r.error.code, message: r.error.message, model });
+  const error = exitSessionError(store, sessionId, r.error); // 会话内既有错误形态（错误卡直达，arch C7 统一出口）
+  log.error("会话模型切换失败", { sessionId, code: error.code, message: error.message, model });
   return false;
 }
 
 /**
  * #94 / ADR 0003 手动重命名编排（模块级可直测）：session:rename → 成功本地刷新标题并返回 null（无错误）；
- * 失败/异常返回错误文案（行内提示用），标题不动（DB 单一事实源，无乐观更新）。
+ * 失败/异常返回统一错误形态（行内提示展示 message，arch C7 通道统一；标题不动——DB 单一事实源，无乐观更新）。
  */
-export async function renameSessionChain(store: ChatStore, transport: ChatTransport, sessionId: string, title: string): Promise<string | null> {
+export async function renameSessionChain(store: ChatStore, transport: ChatTransport, sessionId: string, title: string): Promise<ChatActionError | null> {
   try {
     const r = await transport.invoke({ channel: "session:rename", sessionId, title });
     if (r.ok) {
       store.updateSession(sessionId, { title });
       return null;
     }
-    return r.error.message;
+    return toActionError(r.error);
   } catch (err) {
-    return err instanceof Error ? err.message : String(err);
+    return toActionError(err);
   }
 }
 
@@ -325,8 +259,7 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
     let manager!: TerminalManager;
     const store = new ChatStore({
       invoke: (req) =>
-        transport?.invoke(req) ??
-        Promise.resolve({ ok: false, error: { code: "E_INTERNAL", message: "transport 不可用" } } satisfies IpcResult),
+        transport?.invoke(req) ?? Promise.resolve({ ok: false, error: transportUnavailable() } satisfies IpcResult),
       disposeTerminal: (terminalId) => manager.dispose(terminalId),
     });
     manager = new TerminalManager({
@@ -348,15 +281,14 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
   const [models] = useState(
     () =>
       new ModelCatalog((req) =>
-        transport?.invokeModels?.(req) ??
-        Promise.resolve({ ok: false, error: { code: "E_INTERNAL", message: "transport 不可用" } } satisfies ModelsResult),
+        transport?.invokeModels?.(req) ?? Promise.resolve({ ok: false, error: transportUnavailable() } satisfies ModelsResult),
       ),
   );
   // 斜杠命令源（issue #90）：补全菜单数据；同 models 款闭包捕获首帧 transport（App 经 useMemo 同步建桥）
   const [commands] = useState(
     () =>
       new ComposerCommandSource(
-        (req) => transport?.invoke(req) ?? Promise.resolve({ ok: false, error: { code: "E_INTERNAL", message: "transport 不可用" } } satisfies IpcResult),
+        (req) => transport?.invoke(req) ?? Promise.resolve({ ok: false, error: transportUnavailable() } satisfies IpcResult),
       ),
   );
   const snap = useSyncExternalStore(store.subscribe, store.getSnapshot);
@@ -417,31 +349,18 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
 
   const actions = useMemo<Omit<ChatControllerActions, "discardAllDrafts" | "clearActiveIfForeignProject">>(() => {
     const activeId = (): string | null => store.getSnapshot().activeId;
-    const report = (p: Promise<IpcResult>, sessionId: string): void => {
-      void p.then((r) => {
-        if (!r.ok) store.setError(sessionId, r.error.code, r.error.message);
-      });
-    };
-    // #92 斜杠派发环境（透传/展开/fail-closed 编排收口在 slash-dispatch-exec；此处只注入依赖；ADR 0004 零内置后无本地执行出口）
-    const slashEnv = (): SlashDispatchEnv | null =>
-      transport
-        ? {
-            store,
-            transport,
-            commands,
-          }
-        : null;
     return {
       send: async (text) => {
         const id = activeId();
-        const env = slashEnv();
-        if (!id || !env || text.trim().length === 0) return true;
-        return dispatchSessionSend(env, id, text);
+        // arch C7：发送编排（派发判定+链路执行）收口 send-chain；transport 缺席/无会话/空文本按已消费处理
+        if (!transport || !id || text.trim().length === 0) return true;
+        return (await sendSessionText({ store, transport, commands }, id, text)) === "consumed";
       },
       interrupt: () => {
         const id = activeId();
         if (!id || !transport) return;
-        report(transport.invoke({ channel: "session:interrupt", sessionId: id }), id);
+        // fire-and-forget：失败（!ok/异常）统一落会话错误槽（arch C7 统一出口）
+        settleSessionInvoke(store, id, transport.invoke({ channel: "session:interrupt", sessionId: id }));
       },
       resolveApproval: (decision) => {
         const id = activeId();
@@ -450,21 +369,22 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
         const pending = active?.kind === "structured" ? active.pendingApproval : null;
         if (!id || !pending || !transport) return;
         store.clearApproval(id); // 决定即时生效：卡片立即消失（后续输出经事件流差异呈现）
-        report(
+        settleSessionInvoke(
+          store,
+          id,
           transport.invoke({
             channel: "session:resolveApproval",
             sessionId: id,
             requestId: pending.requestId,
             decision,
           }),
-          id,
         );
       },
       openSessionDraft: (input) => openSessionDraftAction({ store, resolveCwd, onNotice }, input),
       submitDraft: async () => {
-        const env = slashEnv();
-        if (!env || !transport) return false;
-        return dispatchDraftSubmit(env, (firstMessage) => submitDraftChain(store, transport, firstMessage));
+        if (!transport) return false;
+        // arch C7：草稿提交编排（派发判定+原子链）收口 send-chain，无回调注入
+        return (await submitDraftFirstMessage({ store, transport, commands })) === "consumed";
       },
       updateDraft: (patch) => store.updateDraft(patch),
       clearDraftSubmitError: () => store.clearDraftSubmitError(),
@@ -488,23 +408,25 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
       archiveSession: async (sessionId) => {
         if (!transport) return;
         const r = await transport.invoke({ channel: "session:archive", sessionId });
-        if (r.ok) store.removeSession(sessionId);
-        else {
-          store.setError(sessionId, r.error.code, r.error.message);
-          log.error("会话归档失败", { sessionId, code: r.error.code, message: r.error.message });
+        if (r.ok) {
+          store.removeSession(sessionId);
+          return;
         }
+        const error = exitSessionError(store, sessionId, r.error); // 失败在该会话上报错（行保留可重试）
+        log.error("会话归档失败", { sessionId, code: error.code, message: error.message });
       },
       deleteSession: async (sessionId) => {
         if (!transport) return;
         const r = await transport.invoke({ channel: "session:delete", sessionId });
-        if (r.ok) store.removeSession(sessionId);
-        else {
-          store.setError(sessionId, r.error.code, r.error.message);
-          log.error("会话删除失败", { sessionId, code: r.error.code, message: r.error.message });
+        if (r.ok) {
+          store.removeSession(sessionId);
+          return;
         }
+        const error = exitSessionError(store, sessionId, r.error); // 失败在该会话上报错（行保留可重试）
+        log.error("会话删除失败", { sessionId, code: error.code, message: error.message });
       },
-      renameSession: (sessionId, title): Promise<string | null> =>
-        transport ? renameSessionChain(store, transport, sessionId, title) : Promise.resolve("transport 不可用"),
+      renameSession: (sessionId, title): Promise<ChatActionError | null> =>
+        transport ? renameSessionChain(store, transport, sessionId, title) : Promise.resolve(transportUnavailable()),
     };
   }, [transport, store, resolveCwd, onNotice, commands]);
 

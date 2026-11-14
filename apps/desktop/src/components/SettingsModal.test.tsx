@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ProjectRow, SessionRow } from "@kanban/ipc-schema";
+import type { ChatActionError } from "../features/chat/session-view";
 import type { ArchivedSessionsController } from "../features/chat/use-archived-sessions";
 import { SettingsModal } from "./SettingsModal";
 
@@ -117,9 +118,9 @@ const GROUP_ROWS: SessionRow[] = [
  * fake 控制器（#74）：rows/error 经 getter 活读（用例改 state 后 rerender 即生效，模拟控制器状态推进）；
  * 三个动作记录调用次数与入参——通道载荷/错误面断言在 use-archived-sessions.test，此处只断言视图正确转调
  */
-function fakeArchived(initial: { rows?: SessionRow[] | null; error?: string | null } = {}): {
+function fakeArchived(initial: { rows?: SessionRow[] | null; error?: ChatActionError | null } = {}): {
   controller: ArchivedSessionsController;
-  state: { rows: SessionRow[] | null; error: string | null };
+  state: { rows: SessionRow[] | null; error: ChatActionError | null };
   calls: { refresh: number; unarchive: SessionRow[]; remove: SessionRow[] };
 } {
   const state = { rows: initial.rows ?? null, error: initial.error ?? null };
@@ -147,7 +148,7 @@ function fakeArchived(initial: { rows?: SessionRow[] | null; error?: string | nu
 /** 打开面板（注入 fake 控制器与 projects/currentProjectId props；rows=null 模拟未拉取/降级；归档区不再触桥，config 区无桥走降级不影响断言） */
 function openWithController(
   rows: SessionRow[] | null,
-  props: { currentProjectId?: string | null; error?: string | null } = {},
+  props: { currentProjectId?: string | null; error?: ChatActionError | null } = {},
 ): ReturnType<typeof fakeArchived> {
   const h = fakeArchived({ rows, error: props.error });
   render(
@@ -239,7 +240,7 @@ describe("已归档会话：取消归档（#74 经控制器）", () => {
   });
 
   it("控制器 error（取消归档/删除失败共用通道）→ archived-error 文案直达渲染", () => {
-    openWithController(GROUP_ROWS, { currentProjectId: "p-1", error: "取消归档失败：当前 CLI 不支持会话收养，无法取消归档：claude" });
+    openWithController(GROUP_ROWS, { currentProjectId: "p-1", error: { code: "E_INTERNAL", message: "取消归档失败：当前 CLI 不支持会话收养，无法取消归档：claude" } });
     expect(screen.getByTestId("archived-error").textContent).toContain("无法取消归档");
     expect(withinItem("r1")).toBeTruthy(); // 行保留可重试
   });
@@ -265,7 +266,7 @@ describe("已归档会话：删除（#63 与侧栏同款二次确认）", () => 
   });
 
   it("控制器 error（删除失败）→ archived-error 渲染、行保留（可重试）", () => {
-    openWithController(GROUP_ROWS, { currentProjectId: "p-1", error: "删除失败：解除看板关联失败：数据库锁定" });
+    openWithController(GROUP_ROWS, { currentProjectId: "p-1", error: { code: "E_INTERNAL", message: "删除失败：解除看板关联失败：数据库锁定" } });
     expect(screen.getByTestId("archived-error").textContent).toContain("数据库锁定");
     expect(withinItem("r1")).toBeTruthy();
   });

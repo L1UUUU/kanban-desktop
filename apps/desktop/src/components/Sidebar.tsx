@@ -1,15 +1,15 @@
 // 用途：侧栏 —— 项目区（注册引导/项目行切换/悬浮「＋」CLI 新建菜单）+ 结构化会话与 PTY 终端两组会话行（CLI 色点/目录徽标/状态徽标/需求徽标/PTY 停止按钮，按当前项目过滤）+ 底部运行信息（原型一致项 1/2/3/6；PTY 实体 #12；REQ 徽标 #20；hover 归档 #58；hover 删除+二次确认 #62；分组标题语义澄清 #87；#94 结构化行 hover 铅笔行内重命名）
 import { Fragment, useRef, useState, type ReactNode } from "react";
 import type { AppInfo, CliKind, ProjectRow } from "@kanban/ipc-schema";
-import type { PtySessionView, SessionView, StructuredSessionView } from "../features/chat/chat-store";
+import type { ChatActionError, PtySessionView, SessionView, StructuredSessionView } from "../features/chat/chat-store";
 import { StatusBadge } from "../features/chat/components/StatusBadge";
 import { CLI_DOT_CLS, NEW_MENU_CLIS } from "../lib/cli-catalog";
 import { CLI_NOT_INSTALLED_HINT, isCliUnavailable, useCliInstallStatus } from "../lib/use-cli-status";
 import { DeleteSessionDialog } from "./DeleteSessionDialog";
 import { DirBadge } from "./DirBadge";
 
-/** #94 会话行内重命名提交签名：返回 null=成功、文案=失败（#84 RequirementCard 同款） */
-export type RenameSessionHandler = (sessionId: string, title: string) => Promise<string | null>;
+/** #94 会话行内重命名提交签名：返回 null=成功、统一错误形态=失败（#84 RequirementCard 同款交互；arch C7 错误通道统一，展示仍为行内 message） */
+export type RenameSessionHandler = (sessionId: string, title: string) => Promise<ChatActionError | null>;
 
 /** 会话行需求徽标（原型一致项 6，.req-badge）：REQ-id 文本 + 点击跳看板；span 避免 button 嵌套。
  *  可收缩截断（#65）：与状态徽标并存的 130px 行预算下 flex-none 徽标会把标题挤到 0 宽 */
@@ -261,7 +261,7 @@ export function Sidebar({
                       setRenamingId(null);
                       if (!onRenameSession) return;
                       void onRenameSession(s.sessionId, next).then((err) => {
-                        if (err) setRenameError({ id: s.sessionId, message: err });
+                        if (err) setRenameError({ id: s.sessionId, message: err.message });
                       });
                     }}
                     onCancel={() => setRenamingId(null)}

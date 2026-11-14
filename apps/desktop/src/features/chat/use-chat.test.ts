@@ -1,11 +1,15 @@
-// 用途：use-chat 编排函数密封测试（A 类，issue #71 S1/S5）—— 真 ChatStore + 内存 fake transport 直测：submitDraftChain 原子链、resumeChain 三态、openSessionDraftAction（cwd 解析/提示/单调用委托；arch C8 互斥内聚于 store，矩阵经 store 快照判别联合断言）（无 React 树、无 fs/db/进程）；切会话/全丢弃两动作已内聚为 store 单调用，行为断言移 chat-store.test「草稿单属主」套；含 resolveSessionCwd 纯函数直测（issue #71 S5 自 harness 下沉，紧邻被测源码）
+// 用途：use-chat 编排函数密封测试（A 类，issue #71 S1/S5）—— 真 ChatStore + 内存 fake transport 直测：resumeChain 三态、
+// openSessionDraftAction（cwd 解析/提示/单调用委托；arch C8 互斥内聚于 store，矩阵经 store 快照判别联合断言）、
+// setModelChain/renameSessionChain（arch C7 错误统一形态断言）（无 React 树、无 fs/db/进程）；
+// 切会话/全丢弃两动作已内聚为 store 单调用，行为断言移 chat-store.test「草稿单属主」套；
+// submitDraftChain 原子链直测随 arch C7 收口 send-chain（移 send-chain.test）；含 resolveSessionCwd 纯函数直测（issue #71 S5 自 harness 下沉，紧邻被测源码）
 import { describe, expect, it } from "vitest";
 import type { ChatEvent, IpcRequest, IpcResult, ProjectRow, SessionEventWire } from "@kanban/ipc-schema";
 import type { ChatTransport } from "../../lib/kanban-api";
 import { ChatStore, type ChatStoreDeps } from "./chat-store";
 import type { DraftSession, StructuredSessionView } from "./chat-store";
 import type { TerminalDraftSnapshot } from "../terminal/terminal-draft";
-import { openSessionDraftAction, renameSessionChain, resolveSessionCwd, resumeChain, setModelChain, submitDraftChain, subscribeSessionEvents, type SessionDraftEnv } from "./use-chat";
+import { openSessionDraftAction, renameSessionChain, resolveSessionCwd, resumeChain, setModelChain, subscribeSessionEvents, type SessionDraftEnv } from "./use-chat";
 
 /** 最小构造依赖（PTY 草稿 IPC 链路 stub；互斥矩阵经 store 快照断言，不驱动终端创建） */
 const MIN_DEPS: ChatStoreDeps = {
@@ -79,80 +83,6 @@ const HISTORY_EVENTS: ChatEvent[] = [
   { type: "message_completed", sessionId: "s-resume", seq: 1, at: "2026-01-01T00:00:01Z", itemId: "i-1", partId: "p-1" },
 ];
 
-/** 装配：已开结构化草稿并填入首条输入与模型的 store（#77 起单一就绪态：未选模型不提交） */
-function storeWithDraft(): ChatStore {
-  const store = new ChatStore(MIN_DEPS);
-  store.openDraft({ cli: "claude", cwd: "C:\\repo", title: "草稿会话", model: "gpt-5.6-luna" });
-  store.updateDraft({ input: "首条消息" });
-  return store;
-}
-
-describe("submitDraftChain（session:create+firstMessage 原子链）", () => {
-  it("成功：登记会话并激活 + 首条消息本地回显 + 草稿丢弃", async () => {
-    const store = storeWithDraft();
-    const { transport, requests } = makeTransport({
-      "session:create": { ok: true, sessionId: "s-1", cli: "claude", title: "草稿会话" },
-    });
-    await expect(submitDraftChain(store, transport)).resolves.toBe(true);
-    const snap = store.getSnapshot();
-    expect(snap.draft).toBeNull(); // 草稿已丢
-    expect(snap.activeId).toBe("s-1");
-    expect(structured(store, "s-1").items).toEqual([{ kind: "user", itemId: expect.stringMatching(/^u-/), text: "首条消息" }]); // 本地回显
-    expect(requests.filter((r) => r.channel === "session:create")).toHaveLength(1);
-  });
-
-  it("成功：create 响应元数据回填（dirIdentity/skillConflicts 缺省值）", async () => {
-    const store = storeWithDraft();
-    const { transport } = makeTransport({ "session:create": { ok: true, sessionId: "s-1" } });
-    await submitDraftChain(store, transport);
-    const s = structured(store, "s-1");
-    expect(s.cli).toBe("claude"); // 响应缺 cli 回落草稿值
-    expect(s.dirIdentity).toBe("none");
-    expect(s.skillConflicts).toEqual([]);
-  });
-
-  it("失败：草稿与输入保留（可重试）+ submitError 直达失败卡", async () => {
-    const store = storeWithDraft();
-    const { transport } = makeTransport({
-      "session:create": { ok: false, error: { code: "E_SPAWN_NOT_FOUND", message: "未找到 claude 可执行文件" } },
-    });
-    await expect(submitDraftChain(store, transport)).resolves.toBe(false);
-    const snap = store.getSnapshot();
-    expect(structuredDraft(store).input).toBe("首条消息"); // 输入保留
-    expect(structuredDraft(store).submitError).toEqual({ code: "E_SPAWN_NOT_FOUND", message: "未找到 claude 可执行文件" });
-    expect(snap.sessions).toHaveLength(0);
-    // 可重试：换成功应答重跑同链
-    const ok = makeTransport({ "session:create": { ok: true, sessionId: "s-2" } });
-    await expect(submitDraftChain(store, ok.transport)).resolves.toBe(true);
-    expect(store.getSnapshot().draft).toBeNull();
-    expect(store.getSession("s-2")).toBeTruthy();
-  });
-
-  it("回滚出口：rolledBackSessionId 先至占位行被撤销（不留空会话）", async () => {
-    const store = storeWithDraft();
-    // 事件先至：applyEvent 已为回滚 id 建占位行（真实链路中 session_status 先于 create 响应到达）
-    store.applyEvent({ type: "session_status", sessionId: "s-rollback", seq: 0, at: "2026-01-01T00:00:00Z", status: "running" });
-    expect(store.getSnapshot().sessions).toHaveLength(1);
-    const { transport } = makeTransport({
-      "session:create": { ok: false, error: { code: "E_INTERNAL", message: "首条消息发送失败（注入）", rolledBackSessionId: "s-rollback" } },
-    });
-    await expect(submitDraftChain(store, transport)).resolves.toBe(false);
-    expect(store.getSnapshot().sessions).toHaveLength(0); // 占位行按回滚 id 撤销
-    expect(structuredDraft(store).submitError?.code).toBe("E_INTERNAL"); // 失败仍留草稿
-  });
-
-  it("守卫：无草稿/空输入/未选模型直接 false，不发任何请求", async () => {
-    const empty = new ChatStore(MIN_DEPS);
-    const { transport, requests } = makeTransport();
-    await expect(submitDraftChain(empty, transport)).resolves.toBe(false); // 无草稿
-    empty.openDraft({ cli: "fake", cwd: "C:\\demo" });
-    await expect(submitDraftChain(empty, transport)).resolves.toBe(false); // 空输入
-    empty.updateDraft({ input: "有输入但模型未就绪" });
-    await expect(submitDraftChain(empty, transport)).resolves.toBe(false); // 单一就绪态：模型未选（列表未就绪/未手输）不提交
-    expect(requests).toHaveLength(0);
-  });
-});
-
 describe("resumeChain（readHistory 快照重建 → resume 重连两步编排）", () => {
   /** 装配：登记一个断开会话的 store */
   function storeWithDisconnected(): ChatStore {
@@ -217,29 +147,6 @@ describe("resumeChain（readHistory 快照重建 → resume 重连两步编排�
     void resumeChain(store, transport, "s-resume");
     expect(structured(store, "s-resume").resumeState).toEqual({ phase: "resuming" });
     expect(requests[0]?.channel).toBe("session:readHistory");
-  });
-
-  it("参数下发：权限档位/模型/首条文本随 session:create 携带（所见即所发，默认选中项同样下发，issue #77）", async () => {
-    const store = storeWithDraft();
-    store.updateDraft({ permMode: "full", model: "gpt-6-luna", input: "带参数首条" });
-    const requests: IpcRequest[] = [];
-    const transport: ChatTransport = {
-      invoke: (req) => {
-        requests.push(req);
-        return Promise.resolve({ ok: true, sessionId: "s-p" } satisfies IpcResult);
-      },
-      onEvent: () => () => undefined,
-      onTerminalEvent: () => () => undefined,
-      onTrackerEvent: () => () => undefined,
-    };
-    await expect(submitDraftChain(store, transport)).resolves.toBe(true);
-    const create = requests.find((r) => r.channel === "session:create") as IpcRequest & { permMode?: string; model?: string; firstMessage?: string };
-    expect(create).toMatchObject({ permMode: "full", model: "gpt-6-luna", firstMessage: "带参数首条" });
-    // 新草稿未选模型（目录未就绪态）：守卫直接拦截，不发出请求（「默认占位不下发」语义已被就绪态阻塞取代）
-    store.openDraft({ cli: "fake", cwd: "C:\\demo" });
-    store.updateDraft({ input: "第二条" });
-    await expect(submitDraftChain(store, transport)).resolves.toBe(false);
-    expect(requests.filter((r) => r.channel === "session:create")).toHaveLength(1);
   });
 });
 
@@ -384,7 +291,7 @@ describe("setModelChain（issue #79：session:setModel 中途切换编排）", (
   });
 });
 
-describe("renameSessionChain（session:rename 手动重命名，#94 / ADR 0003）", () => {
+describe("renameSessionChain（session:rename 手动重命名，#94 / ADR 0003；arch C7 返回统一错误形态）", () => {
   it("成功：invoke session:rename → 本地刷新标题，返回 null（无错误）", async () => {
     const store = new ChatStore(MIN_DEPS);
     store.registerSession({ sessionId: "s-1", cli: "claude", title: "默认演示", permMode: "auto" });
@@ -394,15 +301,18 @@ describe("renameSessionChain（session:rename 手动重命名，#94 / ADR 0003�
     expect(requests).toEqual([{ channel: "session:rename", sessionId: "s-1", title: "我起的名字" }]);
   });
 
-  it("IPC 失败：返回错误文案（行内提示），标题不动", async () => {
+  it("IPC 失败：返回统一错误形态（行内提示展示 message），标题不动", async () => {
     const store = new ChatStore(MIN_DEPS);
     store.registerSession({ sessionId: "s-1", cli: "claude", title: "默认演示", permMode: "auto" });
     const { transport } = makeTransport({ "session:rename": { ok: false, error: { code: "E_SESSION_NOT_FOUND", message: "会话不存在：s-1" } } });
-    await expect(renameSessionChain(store, transport, "s-1", "我起的名字")).resolves.toBe("会话不存在：s-1");
+    await expect(renameSessionChain(store, transport, "s-1", "我起的名字")).resolves.toEqual({
+      code: "E_SESSION_NOT_FOUND",
+      message: "会话不存在：s-1",
+    });
     expect(store.getSession("s-1")?.title).toBe("默认演示");
   });
 
-  it("transport 异常：返回异常文案，标题不动（不静默）", async () => {
+  it("transport 异常：返回统一错误形态（异常兜底 E_INTERNAL + message 原文），标题不动（不静默）", async () => {
     const store = new ChatStore(MIN_DEPS);
     store.registerSession({ sessionId: "s-1", cli: "claude", title: "默认演示", permMode: "auto" });
     const transport: ChatTransport = {
@@ -411,7 +321,7 @@ describe("renameSessionChain（session:rename 手动重命名，#94 / ADR 0003�
       onTerminalEvent: () => () => undefined,
       onTrackerEvent: () => () => undefined,
     };
-    await expect(renameSessionChain(store, transport, "s-1", "我起的名字")).resolves.toBe("桥已断");
+    await expect(renameSessionChain(store, transport, "s-1", "我起的名字")).resolves.toEqual({ code: "E_INTERNAL", message: "桥已断" });
     expect(store.getSession("s-1")?.title).toBe("默认演示");
   });
 });
