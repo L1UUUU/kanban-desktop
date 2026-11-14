@@ -19,6 +19,7 @@ import { AppShell } from "../../App";
 import type { ChatController } from "../chat/use-chat";
 import type { SessionView } from "../chat/chat-store";
 import type { ChatTransport } from "../../lib/kanban-api";
+import type { CliStatusChannel } from "../../lib/use-cli-status";
 import { RelatedSessionsArea } from "./RelatedSessionsArea";
 
 // 未关闭的 db 连接（afterEach 统一关，避免 Windows 上临时目录删除 EPERM）
@@ -438,7 +439,7 @@ describe("详情面板关联区（#20；原型一致项 4 关联区）", () => {
   });
 });
 
-describe("「＋新建会话」菜单未装 CLI 灰置（#80：与侧栏菜单共享禁用逻辑）", () => {
+describe("「＋新建会话」菜单未装 CLI 灰置（#80：与侧栏菜单共享禁用逻辑，arch D9 经 transport seam）", () => {
   const card = {
     id: "REQ-003",
     title: "灰置需求",
@@ -449,18 +450,15 @@ describe("「＋新建会话」菜单未装 CLI 灰置（#80：与侧栏菜单�
     sessions: [],
   };
 
-  afterEach(() => {
-    window.api = undefined as unknown as typeof window.api;
-  });
-
   it("未装项灰置 + 「未安装」标注 + 点击无效；已装项与 PTY 项恒可选", async () => {
-    window.api = {
+    const transport: CliStatusChannel = {
       invokeCliStatus: async () => ({ ok: true, installed: { codex: true, claude: false, opencode: true } }),
-    } as unknown as typeof window.api;
+    };
     const onCreateSession = vi.fn();
     render(
       <RelatedSessionsArea
         card={card}
+        transport={transport}
         actions={{ onUnlink: () => undefined, onLinkExisting: async () => null, onJumpToSession: () => undefined, onCreateSession }}
       />,
     );
@@ -483,7 +481,7 @@ describe("「＋新建会话」菜单未装 CLI 灰置（#80：与侧栏菜单�
     expect(onCreateSession).toHaveBeenCalledWith({ kind: "pty" }, card);
   });
 
-  it("无 window.api（jsdom 降级）：菜单项全部可选不灰置", async () => {
+  it("transport 未接（旧 fake/降级口径）：菜单项全部可选不灰置", async () => {
     const onCreateSession = vi.fn();
     render(
       <RelatedSessionsArea

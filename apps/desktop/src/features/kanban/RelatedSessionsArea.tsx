@@ -1,8 +1,9 @@
-// 用途：详情面板「关联会话」区（#20，原型一致项 4 关联区）—— 关联会话列表（CLI 色点 + 活动状态徽标 + 跳转 + 解除，US18 分离：活动状态只在会话行显示）、「＋新建会话」四 CLI 菜单（PTY 项标注「无 skill 信号」；session:create/terminal:create+requirementId 原子关联）、关联已有会话选择器（仅当前项目未关联会话，含 PTY）+ link 拒绝原因直达呈现；挂点 data-testid="detail-sessions" 保持稳定（#19 约定），无动作上下文时保持占位形态
+// 用途：详情面板「关联会话」区（#20，原型一致项 4 关联区）—— 关联会话列表（CLI 色点 + 活动状态徽标 + 跳转 + 解除，US18 分离：活动状态只在会话行显示）、「＋新建会话」四 CLI 菜单（NewSessionCliMenu 深组件，arch D9；PTY 项标注「无 skill 信号」；session:create/terminal:create+requirementId 原子关联）、关联已有会话选择器（仅当前项目未关联会话，含 PTY）+ link 拒绝原因直达呈现；挂点 data-testid="detail-sessions" 保持稳定（#19 约定），无动作上下文时保持占位形态
 import { useState } from "react";
 import type { RequirementCardRow } from "@kanban/ipc-schema";
-import { CLI_DOT_CLS, NEW_MENU_CLIS } from "../../lib/cli-catalog";
-import { CLI_NOT_INSTALLED_HINT, isCliUnavailable, useCliInstallStatus } from "../../lib/use-cli-status";
+import { NewSessionCliMenu } from "../../components/NewSessionCliMenu";
+import { CLI_DOT_CLS } from "../../lib/cli-catalog";
+import type { CliStatusChannel } from "../../lib/use-cli-status";
 import type { SessionView } from "../chat/chat-store";
 import type { SessionDraftCli } from "../chat/use-chat";
 import { StatusBadge } from "../chat/components/StatusBadge";
@@ -28,6 +29,8 @@ export interface RelatedSessionsAreaProps {
   sessionToReq?: Record<string, string>;
   /** 关联区动作（缺省时保持 #19 占位形态——挂点在无动作上下文时不半渲染） */
   actions?: RelatedSessionActions;
+  /** cli:status 通道（arch D9：经 transport seam 拉「＋新建会话」菜单安装表；缺省不拦菜单） */
+  transport?: CliStatusChannel | null;
 }
 
 /** 会话行需求徽标展示名：CLI 类型后缀区分 PTY 终端（判别联合 kind 收窄） */
@@ -35,11 +38,9 @@ function optionLabel(s: SessionView): string {
   return s.kind === "pty" ? `${s.title} · PTY` : s.title;
 }
 
-export function RelatedSessionsArea({ card, sessions = [], sessionToReq = {}, actions }: RelatedSessionsAreaProps) {
+export function RelatedSessionsArea({ card, sessions = [], sessionToReq = {}, actions, transport = null }: RelatedSessionsAreaProps) {
   // 「＋新建会话」菜单开合（一次只开一个，与侧栏项目「＋」菜单同交互形态）
   const [menuOpen, setMenuOpen] = useState(false);
-  // #80：菜单打开时拉取 CLI 安装表（未装灰置；与侧栏菜单共享禁用逻辑）
-  const cliInstalled = useCliInstallStatus(menuOpen);
   // link 拒绝原因（null=无待展示；成功关联即清除）
   const [rejectReason, setRejectReason] = useState<string | null>(null);
 
@@ -120,45 +121,17 @@ export function RelatedSessionsArea({ card, sessions = [], sessionToReq = {}, ac
         >
           ＋ 新建会话（自动关联）
         </button>
-        {menuOpen ? (
-          <div className="absolute left-0 top-full z-10 mt-1 min-w-[190px] rounded-lg border border-border bg-muted p-1 shadow-[0_8px_24px_rgba(0,0,0,.5)]">
-            {NEW_MENU_CLIS.map(({ cli, label }) => {
-              // #80：未装灰置 + 「未安装」标注（标注形态沿用 PTY 项尾注先例），点击无效；fake/pty 恒可选不经探测
-              const unavailable = isCliUnavailable(cliInstalled, cli);
-              return (
-                <button
-                  key={cli}
-                  type="button"
-                  data-testid={`new-session-item-${cli}`}
-                  disabled={unavailable}
-                  title={unavailable ? CLI_NOT_INSTALLED_HINT : undefined}
-                  className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs enabled:hover:bg-card disabled:cursor-not-allowed disabled:opacity-50"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    actions.onCreateSession({ kind: "structured", cli }, card);
-                  }}
-                >
-                  <span aria-hidden className={`inline-block h-2 w-2 flex-none rounded-full ${CLI_DOT_CLS[cli]}`} />
-                  {label}
-                  {unavailable ? <span className="ml-auto text-[11px] text-fg-faint">未安装</span> : null}
-                </button>
-              );
-            })}
-            <button
-              type="button"
-              data-testid="new-session-item-pty"
-              className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs hover:bg-card"
-              onClick={() => {
-                setMenuOpen(false);
-                actions.onCreateSession({ kind: "pty" }, card);
-              }}
-            >
-              <span aria-hidden className="inline-block h-2 w-2 flex-none rounded-full bg-pty" />
-              PTY 终端
-              <span className="ml-auto text-[11px] text-fg-faint">无 skill 信号</span>
-            </button>
-          </div>
-        ) : null}
+        {/* ＋新建会话：四 CLI 菜单（创建即自动关联本需求，S2-11）；arch D9 深组件——安装表拉取/灰置/PTY 尾注内聚，本区只留触发与回调（#80 灰置口径不变） */}
+        <NewSessionCliMenu
+          transport={transport}
+          open={menuOpen}
+          onClose={() => setMenuOpen(false)}
+          ptyNote="无 skill 信号"
+          menuClassName="left-0 min-w-[190px]"
+          itemClassName="text-xs"
+          itemTestIdPrefix="new-session-item"
+          onPick={(cli: SessionDraftCli) => actions.onCreateSession(cli, card)}
+        />
       </div>
       {/* 关联已有会话：仅列出当前项目未关联会话（原型一致项 4；选择即发起 link） */}
       <select

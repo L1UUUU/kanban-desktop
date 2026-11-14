@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProjectRow } from "@kanban/ipc-schema";
 import type { ChatActionError, PtySessionView, StructuredSessionView } from "../features/chat/chat-store";
+import type { CliStatusChannel } from "../lib/use-cli-status";
 import { Sidebar } from "./Sidebar";
 
 const P1: ProjectRow = { id: "p-1", name: "alpha", canonicalPath: "C:\\alpha", status: "ok", createdAt: "2026-11-05T00:00:00.000Z" };
@@ -287,23 +288,19 @@ describe("侧栏会话行 hover「删除」+ 二次确认弹窗（#62 spec #57 /
   });
 });
 
-describe("「＋」菜单未装 CLI 灰置（#80 spec #75：与详情面板菜单共享禁用逻辑）", () => {
-  afterEach(() => {
-    window.api = undefined as unknown as typeof window.api;
-  });
-
-  /** fake 桥：只接 invokeCliStatus（其余面本组件不用）；flip 改写应答驱动「模拟装完」 */
-  function fakeBridge(initial: { codex: boolean; claude: boolean; opencode: boolean }) {
+describe("「＋」菜单未装 CLI 灰置（#80 spec #75：与详情面板菜单共享禁用逻辑，arch D9 经 transport seam）", () => {
+  /** fake cli:status 通道（mock transport 而非 window.api）；flip 改写应答驱动「模拟装完」 */
+  function fakeChannel(initial: { codex: boolean; claude: boolean; opencode: boolean }) {
     let installed = initial;
-    window.api = {
+    const transport: CliStatusChannel = {
       invokeCliStatus: async () => ({ ok: true, installed }),
-    } as unknown as typeof window.api;
-    return { flip: (next: typeof installed) => { installed = next; } };
+    };
+    return { transport, flip: (next: typeof installed) => { installed = next; } };
   }
 
   it("未装项灰置 + 「未安装」标注 + 悬停说明，点击无效；已装项与 PTY 项不受影响", async () => {
-    fakeBridge({ codex: true, claude: false, opencode: true });
-    const h = mount({ projects: [P1], currentProjectId: "p-1" });
+    const { transport } = fakeChannel({ codex: true, claude: false, opencode: true });
+    const h = mount({ projects: [P1], currentProjectId: "p-1", transport });
     fireEvent.click(screen.getByRole("button", { name: "＋" }));
 
     const claudeItem = await waitFor(() => {
@@ -323,8 +320,8 @@ describe("「＋」菜单未装 CLI 灰置（#80 spec #75：与详情面板菜�
   });
 
   it("探测翻转（模拟装完）：重开菜单恢复可选并创建会话，无需重启", async () => {
-    const { flip } = fakeBridge({ codex: true, claude: false, opencode: true });
-    const h = mount({ projects: [P1], currentProjectId: "p-1" });
+    const { transport, flip } = fakeChannel({ codex: true, claude: false, opencode: true });
+    const h = mount({ projects: [P1], currentProjectId: "p-1", transport });
     fireEvent.click(screen.getByRole("button", { name: "＋" }));
     await waitFor(() => {
       expect((screen.getByRole("button", { name: "Claude未安装" }) as HTMLButtonElement).disabled).toBe(true);

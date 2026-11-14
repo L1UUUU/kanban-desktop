@@ -1,12 +1,13 @@
-// 用途：侧栏 —— 项目区（注册引导/项目行切换/悬浮「＋」CLI 新建菜单）+ 结构化会话与 PTY 终端两组会话行（CLI 色点/目录徽标/状态徽标/需求徽标/PTY 停止按钮，按当前项目过滤）+ 底部运行信息（原型一致项 1/2/3/6；PTY 实体 #12；REQ 徽标 #20；hover 归档 #58；hover 删除+二次确认 #62；分组标题语义澄清 #87；#94 结构化行 hover 铅笔行内重命名）
+// 用途：侧栏 —— 项目区（注册引导/项目行切换/悬浮「＋」CLI 新建菜单（NewSessionCliMenu 深组件，arch D9））+ 结构化会话与 PTY 终端两组会话行（CLI 色点/目录徽标/状态徽标/需求徽标/PTY 停止按钮，按当前项目过滤）+ 底部运行信息（原型一致项 1/2/3/6；PTY 实体 #12；REQ 徽标 #20；hover 归档 #58；hover 删除+二次确认 #62；分组标题语义澄清 #87；#94 结构化行 hover 铅笔行内重命名）
 import { Fragment, useRef, useState, type ReactNode } from "react";
 import type { AppInfo, CliKind, ProjectRow } from "@kanban/ipc-schema";
 import type { ChatActionError, PtySessionView, SessionView, StructuredSessionView } from "../features/chat/chat-store";
 import { StatusBadge } from "../features/chat/components/StatusBadge";
-import { CLI_DOT_CLS, NEW_MENU_CLIS } from "../lib/cli-catalog";
-import { CLI_NOT_INSTALLED_HINT, isCliUnavailable, useCliInstallStatus } from "../lib/use-cli-status";
+import { CLI_DOT_CLS } from "../lib/cli-catalog";
+import type { CliStatusChannel } from "../lib/use-cli-status";
 import { DeleteSessionDialog } from "./DeleteSessionDialog";
 import { DirBadge } from "./DirBadge";
+import { NewSessionCliMenu } from "./NewSessionCliMenu";
 
 /** #94 会话行内重命名提交签名：返回 null=成功、统一错误形态=失败（#84 RequirementCard 同款交互；arch C7 错误通道统一，展示仍为行内 message） */
 export type RenameSessionHandler = (sessionId: string, title: string) => Promise<ChatActionError | null>;
@@ -48,6 +49,8 @@ export interface SidebarProps {
   onCreateSession(projectId: string, cli: CliKind): void;
   /** 「＋」菜单 PTY 项：在该项目目录新建终端会话（#12） */
   onCreatePtySession(projectId: string): void;
+  /** cli:status 通道（arch D9：经 transport seam 拉「＋」菜单安装表；缺省不拦菜单） */
+  transport?: CliStatusChannel | null;
   /** PTY 行停止按钮：显式终止终端进程（唯一停止入口） */
   onKillTerminal(terminalId: string): void;
   /** #58 会话行 hover「归档」（结构化与 PTY 同款）：Main 编排中断/终止+写归档标记，行移出默认列表 */
@@ -123,6 +126,7 @@ export function Sidebar({
   onRegisterProject,
   onCreateSession,
   onCreatePtySession,
+  transport = null,
   onKillTerminal,
   onArchiveSession,
   onDeleteSession,
@@ -133,8 +137,6 @@ export function Sidebar({
 }: SidebarProps) {
   // 「＋」菜单开在哪个项目行上（一次只开一个）
   const [menuProjectId, setMenuProjectId] = useState<string | null>(null);
-  // #80：菜单打开时拉取 CLI 安装表（未装灰置；与详情面板菜单共享禁用逻辑）
-  const cliInstalled = useCliInstallStatus(menuProjectId !== null);
   // #62 待二次确认删除的会话行（null=确认弹窗关闭）
   const [deleteTarget, setDeleteTarget] = useState<SessionView | null>(null);
   // #94 行内重命名编辑态（结构化行独有；editingId=null=无）与失败提示（再次进入编辑时清除）
@@ -200,42 +202,18 @@ export function Sidebar({
             >
               ＋
             </button>
-            {menuProjectId === p.id ? (
-              <div className="absolute left-3.5 top-full z-10 mt-1 min-w-[150px] rounded-lg border border-border bg-muted p-1 shadow-[0_8px_24px_rgba(0,0,0,.5)]">
-                {NEW_MENU_CLIS.map(({ cli, label }) => {
-                  // #80：未装灰置 + 「未安装」标注（悬停说明），点击无效；fake/pty 恒可选不经探测
-                  const unavailable = isCliUnavailable(cliInstalled, cli);
-                  return (
-                    <button
-                      key={cli}
-                      type="button"
-                      disabled={unavailable}
-                      title={unavailable ? CLI_NOT_INSTALLED_HINT : undefined}
-                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] enabled:hover:bg-card disabled:cursor-not-allowed disabled:opacity-50"
-                      onClick={() => {
-                        setMenuProjectId(null);
-                        onCreateSession(p.id, cli);
-                      }}
-                    >
-                      <span className={`inline-block h-2 w-2 rounded-full ${CLI_DOT_CLS[cli]}`} />
-                      {label}
-                      {unavailable ? <span className="ml-auto text-[11px] text-fg-faint">未安装</span> : null}
-                    </button>
-                  );
-                })}
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] hover:bg-card"
-                  onClick={() => {
-                    setMenuProjectId(null);
-                    onCreatePtySession(p.id);
-                  }}
-                >
-                  <span className="inline-block h-2 w-2 rounded-full bg-pty" />
-                  PTY 终端
-                </button>
-              </div>
-            ) : null}
+            {/* ＋新建会话菜单（arch D9 深组件）：open 态/安装表拉取/灰置与 PTY 项内聚；本组件只留锚点与回调（#80 灰置口径不变） */}
+            <NewSessionCliMenu
+              transport={transport}
+              open={menuProjectId === p.id}
+              onClose={() => setMenuProjectId(null)}
+              onPick={(cli) => {
+                if (cli.kind === "pty") onCreatePtySession(p.id);
+                else onCreateSession(p.id, cli.cli);
+              }}
+              menuClassName="left-3.5 min-w-[150px]"
+              itemClassName="text-[13px]"
+            />
           </div>
         ))
       )}

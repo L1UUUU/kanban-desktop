@@ -1,6 +1,7 @@
 // 用途：preload 桥接的 renderer 侧 transport —— 通道经声明表驱动 lib/bridge-factory 生成（arch D8：出站开发态 zod 校验（spec E）+ 事件订阅，新通道 = 声明表加一行）
 import {
   adapterEventSchema,
+  cliStatusRequestSchema,
   ipcRequestSchema,
   memoryEventSchema,
   memoryRequestSchema,
@@ -9,6 +10,8 @@ import {
   terminalEventSchema,
   trackerChangeSchema,
   type AdapterEvent,
+  type CliStatusRequest,
+  type CliStatusResult,
   type IpcRequest,
   type IpcResult,
   type MemoryEventWire,
@@ -35,6 +38,8 @@ export interface ChatTransport {
   onMemoryEvent?(handler: (event: MemoryEventWire) => void): () => void;
   /** #77：models:ipc 请求（models:list 按 CLI 拉取模型目录；可选——未接的旧 fake 由模型目录降级为错误态手输兜底） */
   invokeModels?(req: ModelsRequest): Promise<ModelsResult>;
+  /** #80 + arch D9：cli:status 请求（「＋」新建菜单安装表；可选——未接（旧 fake/桥缺失）时菜单不灰置，点击后由创建链报错） */
+  invokeCliStatus?(req: CliStatusRequest): Promise<CliStatusResult>;
   /** #95：session:event 事件订阅（摘要标题异步完成推送，schema 见 sessionEventSchema；可选——未接的旧 fake 安全降级） */
   onSessionEvent?(handler: (event: SessionEventWire) => void): () => void;
 }
@@ -48,6 +53,7 @@ export const windowBridgeSpec = {
     invoke: { channel: "invoke", schema: ipcRequestSchema, label: "出站请求" },
     invokeMemory: { channel: "invokeMemory", schema: memoryRequestSchema, label: "出站 memory 请求" },
     invokeModels: { channel: "invokeModels", schema: modelsRequestSchema, label: "出站 models 请求" },
+    invokeCliStatus: { channel: "invokeCliStatus", schema: cliStatusRequestSchema, label: "出站 cli:status 请求" },
   },
   events: {
     onEvent: { channel: "onChatEvent", schema: adapterEventSchema, message: "入站事件不符合 schema" },

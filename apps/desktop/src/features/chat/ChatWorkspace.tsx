@@ -109,6 +109,7 @@ export function ChatWorkspace({
   return (
     <div className="grid min-h-0 flex-1" style={{ gridTemplateColumns: `${Math.round(sidebar.size)}px 6px 1fr` }}>
       <Sidebar
+        transport={transport}
         projects={projects.projects}
         currentProjectId={projects.currentProjectId}
         sessions={controller.sessions}
@@ -163,6 +164,7 @@ export function ChatWorkspace({
           onOpenRequirement={onOpenRequirement}
           related={{
             sessions: controller.sessions,
+            transport,
             actions: {
               onUnlink: (sessionId) => void kanban?.unlink(sessionId),
               onLinkExisting: (sessionId, requirementId) =>
