@@ -1,6 +1,7 @@
-// 用途：需求详情滑出面板（#19，原型一致项 4/5）—— 看板右侧滑出：标题行内编辑（kanban:rename，事件流保证重启不回退）/ uncertain 提示条 +「确认当前阶段」（= setStage 当前阶段）/ 五段阶段修正条（含当前依据展示 skill·CLI·证据等级·时间；manual 显示手动修正）/ 删除需求 + 二次确认弹层；关联会话区为 RelatedSessionsArea 挂点（#20 填充）；需求经验区为 MemoryArea 挂点（#33 填充，挂关联会话区之后）
-import { useRef, useState } from "react";
+// 用途：需求详情滑出面板（#19，原型一致项 4/5）—— 看板右侧滑出：标题行内编辑（kanban:rename，事件流保证重启不回退；arch D11 起交互经 useInlineRename 单源）/ uncertain 提示条 +「确认当前阶段」（= setStage 当前阶段）/ 五段阶段修正条（含当前依据展示 skill·CLI·证据等级·时间；manual 显示手动修正）/ 删除需求 + 二次确认弹层；关联会话区为 RelatedSessionsArea 挂点（#20 填充）；需求经验区为 MemoryArea 挂点（#33 填充，挂关联会话区之后）
+import { useState } from "react";
 import type { KanbanStageInput, RequirementCardRow, StageBasisWire } from "@kanban/ipc-schema";
+import { useInlineRename } from "../../lib/use-inline-rename";
 import { KANBAN_COLUMNS, cliLabel, formatDetailBasis } from "./columns";
 import { MemoryArea } from "./MemoryArea";
 import { RelatedSessionsArea, type RelatedSessionsAreaProps } from "./RelatedSessionsArea";
@@ -43,39 +44,14 @@ export function DetailPanel({
   /** #33：需求记忆控制器（需求经验区数据源与动作；缺省时该区保持占位形态） */
   memory?: RequirementMemoryController | null;
 }) {
-  // 行内标题草稿：外部标题变化（rename 回流/再水化）在渲染期同步回输入框（React 调整态模式，不用 effect）
-  const [title, setTitle] = useState(card.title);
-  const [syncedTitle, setSyncedTitle] = useState(card.title);
-  if (syncedTitle !== card.title) {
-    setSyncedTitle(card.title);
-    setTitle(card.title);
-  }
+  // 标题行内重命名交互单源（arch D11，persistent 常驻形态）：外部标题变化（rename 回流/再水化）持续同步草稿；
+  // 编辑会话=一次聚焦，Enter 经 blur 委托提交、Esc 还原后残余 blur 只收尾不提交；失败回滚 + 行内提示，成功清除
+  const rename = useInlineRename({
+    title: card.title,
+    onCommit: (next) => actions.onRename(card.id, next),
+    session: { kind: "persistent" },
+  });
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  // 重命名失败行内提示（#84：失败回滚 + 提示，不再静默日志）；成功或重新编辑后清除
-  const [renameError, setRenameError] = useState<string | null>(null);
-  // Esc 还原哨兵：Escape 已恢复草稿后，随后的 blur 只收尾不提交（防陈旧草稿被提交，不依赖渲染时序）
-  const escapeRef = useRef(false);
-
-  /** 提交标题：空白不落（恢复原标题），否则 kanban:rename——失败回滚原值 + 行内错误提示 */
-  const commitTitle = (): void => {
-    if (escapeRef.current) {
-      escapeRef.current = false;
-      return;
-    }
-    const next = title.trim();
-    if (!next || next === card.title) {
-      setTitle(card.title);
-      return;
-    }
-    void actions.onRename(card.id, next).then((err) => {
-      if (err) {
-        setTitle(card.title); // store 未变（rename 失败），显式回滚原值
-        setRenameError(err);
-      } else {
-        setRenameError(null);
-      }
-    });
-  };
 
   const basisText = formatDetailBasis(card.stageBasis);
 
@@ -141,17 +117,15 @@ export function DetailPanel({
               aria-label="需求标题"
               title="点击编辑标题（自动建卡的初始标题为「待命名需求」）"
               className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1.5 py-0.5 font-semibold text-foreground hover:border-border focus:border-border focus:bg-muted focus:outline-none"
-              value={title}
-              onChange={(e) => {
-                escapeRef.current = false; // 新输入即新意图，解除 Esc 哨兵
-                setTitle(e.target.value);
-              }}
-              onBlur={commitTitle}
+              value={rename.draft}
+              onChange={(e) => rename.onChange(e.target.value)}
+              onFocus={rename.onFocus}
+              onBlur={rename.commit}
               onKeyDown={(e) => {
+                // Enter 经 blur 委托提交（保持提交后失焦的既有观感）；Esc 先还原（hook 置哨兵）再 blur 收尾
                 if (e.key === "Enter") e.currentTarget.blur();
                 if (e.key === "Escape") {
-                  escapeRef.current = true;
-                  setTitle(card.title);
+                  rename.cancel();
                   e.currentTarget.blur();
                 }
               }}
@@ -167,9 +141,9 @@ export function DetailPanel({
               ✕
             </button>
           </div>
-          {renameError ? (
+          {rename.error ? (
             <p data-testid="detail-rename-error" className="px-3.5 pb-2 text-[11px] text-destructive">
-              重命名失败：{renameError}
+              重命名失败：{rename.error}
             </p>
           ) : null}
         </div>

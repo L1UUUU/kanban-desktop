@@ -1,15 +1,16 @@
 // 用途：侧栏 —— 项目区（注册引导/项目行切换/悬浮「＋」CLI 新建菜单（NewSessionCliMenu 深组件，arch D9））+ 结构化会话与 PTY 终端两组会话行（CLI 色点/目录徽标/状态徽标/需求徽标/PTY 停止按钮，按当前项目过滤）+ 底部运行信息（原型一致项 1/2/3/6；PTY 实体 #12；REQ 徽标 #20；hover 归档 #58；hover 删除+二次确认 #62；分组标题语义澄清 #87；#94 结构化行 hover 铅笔行内重命名）
-import { Fragment, useRef, useState, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import type { AppInfo, CliKind, ProjectRow } from "@kanban/ipc-schema";
 import type { ChatActionError, PtySessionView, SessionView, StructuredSessionView } from "../features/chat/chat-store";
 import { StatusBadge } from "../features/chat/components/StatusBadge";
 import { CLI_DOT_CLS } from "../lib/cli-catalog";
+import { useInlineRename } from "../lib/use-inline-rename";
 import type { CliStatusChannel } from "../lib/use-cli-status";
 import { DeleteSessionDialog } from "./DeleteSessionDialog";
 import { DirBadge } from "./DirBadge";
 import { NewSessionCliMenu } from "./NewSessionCliMenu";
 
-/** #94 会话行内重命名提交签名：返回 null=成功、统一错误形态=失败（#84 RequirementCard 同款交互；arch C7 错误通道统一，展示仍为行内 message） */
+/** #94 会话行内重命名提交签名：返回 null=成功、统一错误形态=失败（arch C7 错误通道统一，展示仍为行内 message；arch D11 起交互经 useInlineRename 单源） */
 export type RenameSessionHandler = (sessionId: string, title: string) => Promise<ChatActionError | null>;
 
 /** 会话行需求徽标（原型一致项 6，.req-badge）：REQ-id 文本 + 点击跳看板；span 避免 button 嵌套。
@@ -67,8 +68,8 @@ export interface SidebarProps {
 }
 
 /**
- * #94 会话行内重命名输入（#84 RequirementCard 同款交互：Enter/blur 提交、Esc 还原、settledRef 防重复提交）。
- * 空白/未变直接退出不提交；提交回调由父层驱动 session:rename 并按结果清编辑态/显示错误。
+ * #94 会话行内重命名输入（arch D11：交互单源 useInlineRename——Enter/blur 提交、Esc 还原、settledRef 防重复提交；挂载即编辑会话）。
+ * 空白/未变直接退出不提交；提交回调由父层驱动 session:rename 并按结果清编辑态/显示错误（错误提示由父层持有——须在输入框卸载后继续显示）。
  */
 function SessionRenameInput({
   title,
@@ -79,38 +80,30 @@ function SessionRenameInput({
   onCommit(next: string): void;
   onCancel(): void;
 }) {
-  const [draft, setDraft] = useState(title);
-  // 一次编辑会话只提交/还原一次（Enter 直接提交后残余 blur、unmount 前 blur 不再重复发 session:rename）
-  const settledRef = useRef(false);
-  const commit = (): void => {
-    if (settledRef.current) return;
-    settledRef.current = true;
-    const next = draft.trim();
-    if (!next || next === title) {
-      onCancel();
-      return;
-    }
-    onCommit(next);
-  };
-  const cancel = (): void => {
-    if (settledRef.current) return;
-    settledRef.current = true;
-    onCancel();
-  };
+  const rename = useInlineRename({
+    title,
+    onCommit: (next) => {
+      onCommit(next); // 父层同步清编辑态并驱动 session:rename（失败提示由父层行内持有，此处恒报成功）
+      return Promise.resolve(null);
+    },
+    onSettle: onCancel,
+    session: { kind: "toggle", active: true },
+    selectOnFocus: true,
+  });
   return (
     <input
       data-testid="session-rename-input"
       aria-label="会话标题"
       title="重命名会话（Enter 提交，Esc 还原）"
       autoFocus
-      onFocus={(e) => e.target.select()}
+      onFocus={rename.onFocus}
       className="min-w-0 grow rounded-md border border-border bg-background px-1.5 text-[13px] text-foreground outline-none focus:border-primary"
-      value={draft}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={commit}
+      value={rename.draft}
+      onChange={(e) => rename.onChange(e.target.value)}
+      onBlur={rename.commit}
       onKeyDown={(e) => {
-        if (e.key === "Enter") commit();
-        if (e.key === "Escape") cancel();
+        if (e.key === "Enter") rename.commit();
+        if (e.key === "Escape") rename.cancel();
       }}
     />
   );

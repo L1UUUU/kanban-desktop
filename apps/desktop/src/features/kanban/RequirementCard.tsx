@@ -1,6 +1,6 @@
-// 用途：需求卡片（#18）—— 标题/关联会话数/阶段依据行/uncertain「待确认」黄徽标/verified 绿徽标（原型一致项 3）；点击开详情面板（#19），选中卡高亮；#84 起悬浮编辑按钮 + 行内重命名（Enter/blur 提交、Esc 还原、失败回滚 + 行内提示）
-import { useEffect, useRef, useState } from "react";
+// 用途：需求卡片（#18）—— 标题/关联会话数/阶段依据行/uncertain「待确认」黄徽标/verified 绿徽标（原型一致项 3）；点击开详情面板（#19），选中卡高亮；#84 起悬浮编辑按钮 + 行内重命名（arch D11：交互经 useInlineRename 单源——Enter/blur 提交、Esc 还原、失败回滚 + 行内提示）
 import type { RequirementCardRow } from "@kanban/ipc-schema";
+import { useInlineRename } from "../../lib/use-inline-rename";
 import { formatStageBasis } from "./columns";
 
 export function RequirementCard({
@@ -29,46 +29,15 @@ export function RequirementCard({
   // verified 徽标判据：当前阶段依据为 skill 信号且证据等级 verified（uncertain 由 tracker 独立维护）
   const verified = card.stageBasis?.kind === "skill" && card.stageBasis.evidenceLevel === "verified";
 
-  // 行内标题草稿：进入编辑的上升沿同步草稿与清错误（渲染期调整态模式，与 DetailPanel 同款）
-  const [draft, setDraft] = useState(card.title);
-  const [editingSeen, setEditingSeen] = useState(editing);
-  const [renameError, setRenameError] = useState<string | null>(null);
-  // 一次编辑会话只提交/还原一次（Enter 直接提交后残余 blur、unmount 前 blur 不再重复发 kanban:rename）；
-  // 哨兵在 editing 上升沿的 effect 中重置（React 保证 passive effects 先于下一离散事件处理，渲染期不写 ref）
-  const settledRef = useRef(false);
-  useEffect(() => {
-    if (editing) settledRef.current = false;
-  }, [editing]);
-  if (editingSeen !== editing) {
-    setEditingSeen(editing);
-    if (editing) {
-      setDraft(card.title);
-      setRenameError(null);
-    }
-  }
-
-  /** 提交行内重命名（Enter/blur）：空白/未变不落（直接退出），否则 onRename——失败标题保持原值（store 未变）+ 行内错误提示 */
-  const commitRename = (): void => {
-    if (settledRef.current) return;
-    settledRef.current = true;
-    const next = draft.trim();
-    if (!next || next === card.title || !onRename) {
-      onEndEdit?.();
-      return;
-    }
-    void onRename(card.id, next).then((err) => {
-      if (err) setRenameError(err);
-      onEndEdit?.();
-    });
-  };
-
-  /** Esc 还原：放弃草稿直接退出编辑（不经 blur 提交，避免草稿被当作提交内容） */
-  const cancelEdit = (): void => {
-    if (settledRef.current) return;
-    settledRef.current = true;
-    setDraft(card.title);
-    onEndEdit?.();
-  };
+  // 行内重命名交互单源（arch D11）：editing 上升沿开新会话（草稿同步/清错误/哨兵重置在 hook 内）；
+  // 提交回调落定后才 settle（onEndEdit 在 .then 后），失败文案停在本卡错误槽
+  const rename = useInlineRename({
+    title: card.title,
+    onCommit: (next) => (onRename ? onRename(card.id, next) : Promise.resolve(null)),
+    onSettle: () => onEndEdit?.(),
+    session: { kind: "toggle", active: editing },
+    selectOnFocus: true,
+  });
 
   return (
     <div
@@ -84,15 +53,15 @@ export function RequirementCard({
           aria-label="卡片标题"
           title="重命名需求（Enter 提交，Esc 还原）"
           autoFocus
-          // 聚焦全选：建卡即命名时输入即覆盖缺省标题「待命名需求」
-          onFocus={(e) => e.target.select()}
+          // 聚焦全选：建卡即命名时输入即覆盖缺省标题「待命名需求」（hook selectOnFocus）
+          onFocus={rename.onFocus}
           className="w-full rounded-md border border-border bg-background px-1.5 py-0.5 text-[13px] text-foreground outline-none focus:border-primary"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={commitRename}
+          value={rename.draft}
+          onChange={(e) => rename.onChange(e.target.value)}
+          onBlur={rename.commit}
           onKeyDown={(e) => {
-            if (e.key === "Enter") commitRename();
-            if (e.key === "Escape") cancelEdit();
+            if (e.key === "Enter") rename.commit();
+            if (e.key === "Escape") rename.cancel();
           }}
         />
       ) : (
@@ -128,10 +97,10 @@ export function RequirementCard({
           ✎
         </button>
       ) : null}
-      {renameError && !editing ? (
-        // 重命名失败行内提示（#84：不再静默；再次进入编辑时清除）
+      {rename.error && !editing ? (
+        // 重命名失败行内提示（#84：不再静默；再次进入编辑时清除——hook 会话上升沿）
         <p data-testid="card-rename-error" className="mt-1 text-[11px] text-destructive">
-          {renameError}
+          {rename.error}
         </p>
       ) : null}
     </div>
