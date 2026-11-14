@@ -1,6 +1,7 @@
-// 用途：MemoryStore —— memory_batches 批次生命周期 + memory_candidates 候选追加/display_no 项目内递增/审核状态机（仅 pending 可流转、edit 仅 claim 与 scope、溯源不可变）+ Dice 冲突标注 + accepted md 双写序（Markdown 先写 temp+rename → SQLite 事务后提交）+ 需求删除级联（终态知识排除，spec #27 D/F/G/J 节，演进自 poc-5 review/store）
+// 用途：MemoryStore —— memory_batches 批次生命周期 + memory_candidates 候选追加/display_no 项目内递增/审核状态机（仅 pending 可流转、edit 仅 claim 与 scope、溯源不可变；arch D7 起流转规则单源本层，拒绝抛类型化 MemoryRejectionError）+ Dice 冲突标注 + accepted md 双写序（Markdown 先写 temp+rename → SQLite 事务后提交）+ 需求删除级联（终态知识排除，spec #27 D/F/G/J 节，演进自 poc-5 review/store）
 import { rmSync } from "node:fs";
 import { CONFLICT_THRESHOLD, diceSimilarity, type ExtractedCandidate } from "./similarity";
+import { MemoryRejectionError } from "./rejection";
 import { ensureMemoryTables, type SqliteDb } from "./ddl";
 import { acceptedMdPath, renderAcceptedMd, requirementDir, writeAtomic } from "./markdown";
 
@@ -191,12 +192,16 @@ export class MemoryStore {
    * 审核动作（状态机，spec #27 G 节）：仅 pending 可流转，终态不可再改；
    * accept/edit 走双写序——先写 accepted/CAND-xxxx.md（temp+rename）→ SQLite 事务后提交；
    * edit 仅 claim 与 scope（溯源不可变），忽略/接受不改溯源字段。
+   * 流转规则单源（arch D7）：拒绝抛类型化 MemoryRejectionError（reason 码 + detail 文案），service 只做 wire 方言映射。
    */
   reviewCandidate(id: string, action: ReviewAction, edit?: { claim?: string; scope?: string }): MemoryCandidateRecord {
     const current = this.getCandidate(id);
-    if (!current) throw new Error(`候选不存在: ${id}`);
+    if (!current) throw new MemoryRejectionError("candidate-not-found", `候选不存在：${id}`);
     if (current.status !== "pending") {
-      throw new Error(`候选 ${current.displayNo} 状态为 ${current.status}，仅 pending 可审核（终态不可覆盖）`);
+      throw new MemoryRejectionError(
+        "candidate-final",
+        `候选 ${current.displayNo} 状态为 ${current.status}，终态不可再流转`,
+      );
     }
     if (action === "ignore") {
       this.db.prepare("UPDATE memory_candidates SET status = 'ignored', reviewed_at = ? WHERE id = ?").run(this.now(), id);
@@ -207,7 +212,7 @@ export class MemoryStore {
         editedClaim = edit?.claim?.trim() || null;
         editedScope = edit?.scope?.trim() || null;
         if (editedClaim == null && editedScope == null) {
-          throw new Error("edit 需要 claim 或 scope 至少一项修改");
+          throw new MemoryRejectionError("edit-empty", "编辑后接受需要 claim 或 scope 至少一项修改");
         }
       }
       const next: MemoryCandidateRecord = {
@@ -260,15 +265,19 @@ export class MemoryStore {
    * 已接受知识再编辑（issue #31，US21：claim/适用范围可再编辑、溯源不可变）：仅 accepted/edited 可编辑；
    * 传入字段覆盖 edited 值（未提供保持既有），md 重写（双写序：Markdown 先写 → SQLite 事务后提交），
    * reviewed_at 保留原审核时间（再编辑不是审核）。
+   * 可编辑判定单源（arch D7）：拒绝抛类型化 MemoryRejectionError，service 只做 wire 方言映射。
    */
   editAccepted(id: string, edit: { claim?: string; scope?: string }): MemoryCandidateRecord {
     const current = this.getCandidate(id);
-    if (!current) throw new Error(`候选不存在: ${id}`);
+    if (!current) throw new MemoryRejectionError("candidate-not-found", `候选不存在：${id}`);
     if (current.status !== "accepted" && current.status !== "edited") {
-      throw new Error(`候选 ${current.displayNo} 状态为 ${current.status}，仅 accepted/edited 知识可再编辑`);
+      throw new MemoryRejectionError(
+        "candidate-not-editable",
+        `候选 ${current.displayNo} 状态为 ${current.status}，仅已接受知识可编辑（pending 请走审核 edit）`,
+      );
     }
     if (edit.claim == null && edit.scope == null) {
-      throw new Error("editAccepted 需要 claim 或 scope 至少一项修改");
+      throw new MemoryRejectionError("edit-empty", "editAccepted 需要 claim 或 scope 至少一项修改");
     }
     const next: MemoryCandidateRecord = {
       ...current,

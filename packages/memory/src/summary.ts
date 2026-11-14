@@ -1,6 +1,7 @@
 // 用途：SummaryStore —— 需求开发总结防覆盖与版本（memory_summaries 行 + requirements/<REQ>/summary.md）：内容 hash 基准、人工编辑后重提取走 proposed 暂存不覆盖、resolveSummary 二选一、新 proposed 替换旧未处置 proposed、应用内总结编辑写回（issue #38，spec #27 D/F/I 节 US13/US23，演进自 poc-5 store.writeSummary）
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { proposedMdPath, sha256Text, summaryMdPath, writeAtomic } from "./markdown";
+import { MemoryRejectionError } from "./rejection";
 import { ensureMemoryTables, type SqliteDb } from "./ddl";
 
 /** memory_summaries 行投影 */
@@ -83,7 +84,7 @@ export class SummaryStore {
   editSummary(requirementId: string, content: string): void {
     const row = this.getSummary(requirementId);
     if (!row) {
-      throw new Error(`需求 ${requirementId} 无总结（应用内编辑的前提是已有总结）`);
+      throw new MemoryRejectionError("no-summary", `需求 ${requirementId} 尚无总结（先完成一次提取）`);
     }
     writeAtomic(row.mdPath, content);
     this.db
@@ -91,13 +92,14 @@ export class SummaryStore {
       .run(this.now(), requirementId);
   }
 
-  /** 处置 proposed：accept-new 采纳新版（覆盖 summary.md 并更新 hash 基准）/ keep-human 保留人工版；处置后暂存清除 */
+  /** 处置 proposed：accept-new 采纳新版（覆盖 summary.md 并更新 hash 基准）/ keep-human 保留人工版；处置后暂存清除。无未处置 proposed 拒绝单源本层（arch D7，抛类型化 MemoryRejectionError） */
   resolveSummary(requirementId: string, choice: "accept-new" | "keep-human"): void {
     const row = this.getSummary(requirementId);
     if (!row || !row.proposedMdPath || row.proposedBatchId == null) {
-      throw new Error(`需求 ${requirementId} 无未处置的 proposed 总结`);
+      throw new MemoryRejectionError("no-proposed", `需求 ${requirementId} 无未处置的 proposed 总结`);
     }
     if (choice === "accept-new") {
+      // proposed 文件缺失保持普通 Error：库与磁盘不一致的非预期态（启动修复域），service 走未预期异常路径不映射业务拒绝
       if (!existsSync(row.proposedMdPath)) {
         throw new Error(`proposed 文件缺失: ${row.proposedMdPath}（以启动修复对账后再处置）`);
       }

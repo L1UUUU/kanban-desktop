@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import * as nodeSqlite from "node:sqlite";
 import { afterAll, describe, expect, it } from "vitest";
 import { ensureMemoryTables, type SqliteDb } from "./ddl";
+import { MemoryRejectionError, type MemoryRejectionReason } from "./rejection";
 import { sha256Text } from "./markdown";
 import { SummaryStore } from "./summary";
 
@@ -35,6 +36,17 @@ function mkStore(): { store: SummaryStore; root: string } {
 function must<T>(v: T | null | undefined): T {
   if (v == null) throw new Error("记录应存在");
   return v;
+}
+
+/** 断言业务拒绝码（arch D7 处置/编辑前提规则单源本层的直测锚点）：返回捕获的 reason；未抛或抛非业务拒绝即测试失败 */
+function rejectOf(fn: () => unknown): MemoryRejectionReason {
+  try {
+    fn();
+  } catch (err) {
+    if (err instanceof MemoryRejectionError) return err.reason;
+    throw err;
+  }
+  throw new Error("应抛业务拒绝");
 }
 
 describe("总结写入与防覆盖", () => {
@@ -144,14 +156,14 @@ describe("resolveSummary（二选一处置，处置后暂存清除）", () => {
     expect(readFileSync(next.mdPath, "utf8")).toBe("v3 覆盖");
   });
 
-  it("无未处置 proposed 时 resolveSummary 抛错", () => {
+  it("无未处置 proposed 时 resolveSummary 拒（no-proposed）", () => {
     const { store } = mkStore();
     store.writeSummary({ requirementId: "REQ-001", projectId: "p1", batchId: "B1", content: "v1" });
-    expect(() => store.resolveSummary("REQ-001", "accept-new")).toThrow(/proposed/);
-    expect(() => store.resolveSummary("REQ-999", "keep-human")).toThrow(/proposed/);
+    expect(rejectOf(() => store.resolveSummary("REQ-001", "accept-new"))).toBe("no-proposed");
+    expect(rejectOf(() => store.resolveSummary("REQ-999", "keep-human"))).toBe("no-proposed");
   });
 
-  it("accept-new 但 proposed 文件缺失：抛明确错误（指针与文件不一致留给启动修复）", () => {
+  it("accept-new 但 proposed 文件缺失：抛未预期异常（指针与文件不一致留给启动修复，非业务拒绝）", () => {
     const { store } = mkStore();
     store.writeSummary({ requirementId: "REQ-001", projectId: "p1", batchId: "B1", content: "v1" });
     const file = must(store.getSummary("REQ-001")).mdPath;
@@ -201,9 +213,9 @@ describe("editSummary 总结正文写回（issue #38，spec #27 I-8/US13：人�
     expect(existsSync(proposed.proposedMdPath ?? "")).toBe(true);
   });
 
-  it("无总结行时抛错（应用内编辑前提是已有总结；service 层转业务拒绝）", () => {
+  it("无总结行时拒（no-summary；应用内编辑前提是已有总结，service 层映射业务拒绝）", () => {
     const { store } = mkStore();
-    expect(() => store.editSummary("REQ-404", "正文")).toThrow(/总结/);
+    expect(rejectOf(() => store.editSummary("REQ-404", "正文"))).toBe("no-summary");
   });
 });
 

@@ -1,10 +1,11 @@
-// 用途：MemoryStore 密封测试 —— 批次生命周期、候选追加与 display_no 项目内递增、状态机（仅 pending 可流转、终态抛错、edit 仅 claim/scope、溯源不可变）、双写序（Markdown 先写 temp+rename → SQLite 事务后提交）、Dice 冲突/notes 标注（spec #27 D/F/G 节，演进自 poc-5 review/store）
+// 用途：MemoryStore 密封测试 —— 批次生命周期、候选追加与 display_no 项目内递增、状态机（仅 pending 可流转、终态类型化拒绝 arch D7 reason 码直测、edit 仅 claim/scope、溯源不可变）、双写序（Markdown 先写 temp+rename → SQLite 事务后提交）、Dice 冲突/notes 标注（spec #27 D/F/G 节，演进自 poc-5 review/store）
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as nodeSqlite from "node:sqlite";
 import { afterAll, describe, expect, it } from "vitest";
 import { ensureMemoryTables, type SqliteDb } from "./ddl";
+import { MemoryRejectionError, type MemoryRejectionReason } from "./rejection";
 import { SummaryStore } from "./summary";
 import { MemoryStore, type MemoryCandidateRecord, type ReviewAction } from "./store";
 
@@ -47,6 +48,17 @@ function seedCandidate(store: MemoryStore, claim: string, over?: { projectId?: s
 function must<T>(v: T | null | undefined): T {
   if (v == null) throw new Error("记录应存在");
   return v;
+}
+
+/** 断言业务拒绝码（arch D7 流转规则单源 store 的直测锚点）：返回捕获的 reason；未抛或抛非业务拒绝即测试失败 */
+function rejectOf(fn: () => unknown): MemoryRejectionReason {
+  try {
+    fn();
+  } catch (err) {
+    if (err instanceof MemoryRejectionError) return err.reason;
+    throw err;
+  }
+  throw new Error("应抛业务拒绝");
 }
 
 describe("批次生命周期（memory_batches）", () => {
@@ -211,38 +223,38 @@ describe("候选状态机（pending → accepted/edited/ignored；仅 pending �
     expect(existsSync(join(root, "p1", "accepted"))).toBe(false);
   });
 
-  it("终态不可再流转：accepted/edited/ignored 再审均抛错且状态保持", () => {
+  it("终态不可再流转：accepted/edited/ignored 再审均拒（candidate-final）且状态保持", () => {
     const { store } = mkStore();
     const acc = seedCandidate(store, "已接受经验");
     store.reviewCandidate(acc.id, "accept");
     for (const action of ["accept", "edit", "ignore"] as ReviewAction[]) {
-      expect(() => store.reviewCandidate(acc.id, action, action === "edit" ? { claim: "改" } : undefined)).toThrow(/仅 pending 可审核/);
+      expect(rejectOf(() => store.reviewCandidate(acc.id, action, action === "edit" ? { claim: "改" } : undefined))).toBe("candidate-final");
     }
     expect(must(store.getCandidate(acc.id)).status).toBe("accepted");
 
     const ed = seedCandidate(store, "已编辑经验", { batchId: "B2" });
     store.reviewCandidate(ed.id, "edit", { claim: "改后" });
-    expect(() => store.reviewCandidate(ed.id, "ignore")).toThrow(/仅 pending 可审核/);
+    expect(rejectOf(() => store.reviewCandidate(ed.id, "ignore"))).toBe("candidate-final");
     expect(must(store.getCandidate(ed.id)).status).toBe("edited");
 
     const ig = seedCandidate(store, "已忽略经验", { batchId: "B3" });
     store.reviewCandidate(ig.id, "ignore");
-    expect(() => store.reviewCandidate(ig.id, "accept")).toThrow(/仅 pending 可审核/);
+    expect(rejectOf(() => store.reviewCandidate(ig.id, "accept"))).toBe("candidate-final");
     expect(must(store.getCandidate(ig.id)).status).toBe("ignored");
   });
 
-  it("候选不存在抛错；未知审核动作抛错", () => {
+  it("候选不存在拒（candidate-not-found，detail 含候选 id）；未知审核动作抛未预期异常", () => {
     const { store } = mkStore();
-    expect(() => store.reviewCandidate("nope", "accept")).toThrow(/不存在/);
+    expect(rejectOf(() => store.reviewCandidate("nope", "accept"))).toBe("candidate-not-found");
     const rec = seedCandidate(store, "x");
     expect(() => store.reviewCandidate(rec.id, "weird" as ReviewAction)).toThrow(/未知审核动作/);
     expect(must(store.getCandidate(rec.id)).status).toBe("pending");
   });
 
-  it("edit 不带任何修改抛错（claim/scope 至少一项）", () => {
+  it("edit 不带任何修改拒（edit-empty，claim/scope 至少一项）", () => {
     const { store } = mkStore();
     const rec = seedCandidate(store, "x");
-    expect(() => store.reviewCandidate(rec.id, "edit", {})).toThrow(/至少一项/);
+    expect(rejectOf(() => store.reviewCandidate(rec.id, "edit", {}))).toBe("edit-empty");
     expect(must(store.getCandidate(rec.id)).status).toBe("pending");
   });
 });
@@ -415,17 +427,17 @@ describe("已接受知识再编辑 editAccepted（issue #31，US21：claim/适�
     expect(readFileSync(must(updated.mdPath), "utf8")).toContain("二次编辑");
   });
 
-  it("仅 accepted/edited 可编辑：pending/ignored 拒绝；候选不存在与空编辑抛错", () => {
+  it("仅 accepted/edited 可编辑：pending/ignored 拒（candidate-not-editable）；候选不存在（candidate-not-found）与空编辑（edit-empty）拒", () => {
     const { store } = mkStore();
     const p = seedCandidate(store, "待审");
-    expect(() => store.editAccepted(p.id, { claim: "x" })).toThrow(/pending/);
+    expect(rejectOf(() => store.editAccepted(p.id, { claim: "x" }))).toBe("candidate-not-editable");
     store.reviewCandidate(p.id, "ignore");
-    expect(() => store.editAccepted(p.id, { claim: "x" })).toThrow(/ignored/);
+    expect(rejectOf(() => store.editAccepted(p.id, { claim: "x" }))).toBe("candidate-not-editable");
 
     const acc = seedCandidate(store, "已接受", { batchId: "B2" });
     store.reviewCandidate(acc.id, "accept");
-    expect(() => store.editAccepted(acc.id, {})).toThrow(/至少一项/);
-    expect(() => store.editAccepted("ghost", { claim: "x" })).toThrow(/不存在/);
+    expect(rejectOf(() => store.editAccepted(acc.id, {}))).toBe("edit-empty");
+    expect(rejectOf(() => store.editAccepted("ghost", { claim: "x" }))).toBe("candidate-not-found");
   });
 });
 

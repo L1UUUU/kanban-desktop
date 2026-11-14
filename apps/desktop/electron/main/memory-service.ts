@@ -1,8 +1,9 @@
-// 用途：MemoryService（spec #27 A 节）—— Main 进程内的 memory 深模块：store 级动作全量（审核三动作/终态拒绝/resolveSummary/需求一次读/项目一次读含查询过滤/知识再编辑/#35 删除级联入口）+ #32 提取管线编排（extract 启动真批次 / cancel 终止临时执行整批丢弃 / stop 退出序列停止）+ openMemoryService 启动对账装配；db 句柄、数据根目录与双桥（readTranscript/runOnce）经注入，需求关联会话/标题由 Main 查询后传入（memory 不依赖 tracker）
+// 用途：MemoryService（spec #27 A 节）—— Main 进程内的 memory 深模块：store 级动作全量（审核三动作/终态拒绝/resolveSummary/需求一次读/项目一次读含查询过滤/知识再编辑/#35 删除级联入口；arch D7 起审核流转规则单源 @kanban/memory，本层只把类型化业务拒绝映射为 wire 方言）+ #32 提取管线编排（extract 启动真批次 / cancel 终止临时执行整批丢弃 / stop 退出序列停止）+ openMemoryService 启动对账装配；db 句柄、数据根目录与双桥（readTranscript/runOnce）经注入，需求关联会话/标题由 Main 查询后传入（memory 不依赖 tracker）
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import type { MemoryEventWire, MemorySummaryRow, TranscriptEvent } from "@kanban/ipc-schema";
 import {
+  MemoryRejectionError,
   MemoryStore,
   SummaryStore,
   reconcileMemory,
@@ -189,47 +190,40 @@ export class MemoryService {
     }
   }
 
-  /** 候选审核三动作（US16：仅 pending 可流转、终态拒绝；edit 仅 claim/scope、溯源只读） */
+  /** 候选审核三动作（US16）：流转规则与拒绝文案单源 store（arch D7），此处仅把类型化业务拒绝映射为 wire 方言 */
   reviewCandidate(
     candidateId: string,
     action: ReviewAction,
     edit?: { claim?: string; scope?: string },
   ): CandidateResult | MemoryRejectionResult {
-    const current = this.store.getCandidate(candidateId);
-    if (!current) return { ok: false, reason: "candidate-not-found", detail: `候选不存在：${candidateId}` };
-    if (current.status !== "pending") {
-      return {
-        ok: false,
-        reason: "candidate-final",
-        detail: `候选 ${current.displayNo} 状态为 ${current.status}，终态不可再流转`,
-      };
+    try {
+      return { ok: true, candidate: this.store.reviewCandidate(candidateId, action, edit) };
+    } catch (err) {
+      return mapRejection(err);
     }
-    if (action === "edit" && !(edit?.claim?.trim() || edit?.scope?.trim())) {
-      return { ok: false, reason: "edit-empty", detail: "编辑后接受需要 claim 或 scope 至少一项修改" };
-    }
-    return { ok: true, candidate: this.store.reviewCandidate(candidateId, action, edit) };
   }
 
-  /** 总结 proposed 二选一处置（US14：accept-new 采纳新版 / keep-human 保留人工版；处置后暂存清除） */
+  /** 总结 proposed 二选一处置（US14：accept-new 采纳新版 / keep-human 保留人工版；处置后暂存清除）。无 proposed 拒绝单源 summary store（arch D7），此处仅映射 wire 方言 */
   resolveSummary(requirementId: string, choice: "accept-new" | "keep-human"): MemoryRejectionResult | { ok: true } {
-    const row = this.summaries.getSummary(requirementId);
-    if (!row || row.proposedMdPath == null || row.proposedBatchId == null) {
-      return { ok: false, reason: "no-proposed", detail: `需求 ${requirementId} 无未处置的 proposed 总结` };
+    try {
+      this.summaries.resolveSummary(requirementId, choice);
+      return { ok: true };
+    } catch (err) {
+      return mapRejection(err);
     }
-    this.summaries.resolveSummary(requirementId, choice);
-    return { ok: true };
   }
 
-  /** 总结正文编辑写回（issue #38，spec #27 I-8/US13）：写盘人工版并保持防覆盖基准；成功后 UI 经一次读刷新 */
+  /** 总结正文编辑写回（issue #38，spec #27 I-8/US13）：需求存在性（tracker 口径）守卫在此（store 不依赖 tracker，arch D7 不收编）；无总结拒绝单源 summary store，此处仅映射 wire 方言 */
   editSummary(requirementId: string, content: string): MemoryRejectionResult | { ok: true } {
     if (this.deps.requirementExists && !this.deps.requirementExists(requirementId)) {
       return { ok: false, reason: "requirement-not-found", detail: `需求 ${requirementId} 不存在，无法编辑总结` };
     }
-    if (!this.summaries.getSummary(requirementId)) {
-      return { ok: false, reason: "no-summary", detail: `需求 ${requirementId} 尚无总结（先完成一次提取）` };
+    try {
+      this.summaries.editSummary(requirementId, content);
+      return { ok: true };
+    } catch (err) {
+      return mapRejection(err);
     }
-    this.summaries.editSummary(requirementId, content);
-    return { ok: true };
   }
 
   /** 详情面板一次读（US13/US18）：需求全部批次 + 跨批次全部候选 + 总结（无数据宽容返回空集） */
@@ -275,18 +269,13 @@ export class MemoryService {
     return { ok: true, knowledge, summaries };
   }
 
-  /** 已接受知识再编辑（US21：claim/适用范围可再编辑、溯源不可变；pending/ignored 不是知识，拒绝） */
+  /** 已接受知识再编辑（US21：claim/适用范围可再编辑、溯源不可变）。可编辑判定单源 store（arch D7），此处仅映射 wire 方言 */
   editAccepted(candidateId: string, edit: { claim?: string; scope?: string }): CandidateResult | MemoryRejectionResult {
-    const current = this.store.getCandidate(candidateId);
-    if (!current) return { ok: false, reason: "candidate-not-found", detail: `候选不存在：${candidateId}` };
-    if (current.status !== "accepted" && current.status !== "edited") {
-      return {
-        ok: false,
-        reason: "candidate-not-editable",
-        detail: `候选 ${current.displayNo} 状态为 ${current.status}，仅已接受知识可编辑（pending 请走审核 edit）`,
-      };
+    try {
+      return { ok: true, candidate: this.store.editAccepted(candidateId, edit) };
+    } catch (err) {
+      return mapRejection(err);
     }
-    return { ok: true, candidate: this.store.editAccepted(candidateId, edit) };
   }
 
   /** 需求删除级联入口（issue #35，spec #27 J 节 US22）：kanban:delete 时由 Main 调用；accepted/edited 知识保留（项目级资产） */
@@ -314,6 +303,12 @@ export class MemoryService {
       proposedContent: row.proposedMdPath != null ? readTextIfExists(row.proposedMdPath) : null,
     };
   }
+}
+
+/** store 类型化业务拒绝 → wire 方言映射（arch D7：流转规则单源 memory 包，service 只做翻译，不重查规则；未预期异常原样 rethrow 走信封层既有异常路径） */
+function mapRejection(err: unknown): MemoryRejectionResult {
+  if (err instanceof MemoryRejectionError) return { ok: false, reason: err.reason, detail: err.message };
+  throw err;
 }
 
 /** 读文本文件；不存在返回 null（启动修复前的中间态防御） */

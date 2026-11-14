@@ -1,4 +1,4 @@
-// 用途：MemoryService 密封测试 + handleMemoryIpc 入站校验与路由 + openMemoryService 启动对账（issue #31，spec #27 A/C/H 节；store 级动作全量、extract/cancel 入口拒绝语义（#32 真实现，管线全量分支见 memory-pipeline.test.ts）、projectMemory 查询过滤、需求删除级联 #35）
+// 用途：MemoryService 密封测试 + handleMemoryIpc 入站校验与路由 + openMemoryService 启动对账（issue #31，spec #27 A/C/H 节；store 级动作全量、extract/cancel 入口拒绝语义（#32 真实现，管线全量分支见 memory-pipeline.test.ts）、projectMemory 查询过滤、需求删除级联 #35；arch D7 起审核流转规则单源 store，本文件收敛测 service 的 wire 方言映射——业务拒绝逐字断言 reason/detail，未预期异常仍抛出）
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -156,6 +156,18 @@ describe("resolveSummary 二选一处置", () => {
     const after = ctx.service.requirementMemory("REQ-001");
     expect(after.ok).toBe(true);
     if (after.ok) expect(after.summary?.proposedBatchId).toBeNull();
+  });
+
+  it("未预期异常原样抛出（arch D7 service 只映射业务拒绝，不吞不造码）：proposed 指针与文件不一致 → 异常而非 ok:false", () => {
+    const ctx = makeService();
+    seedExtracted(ctx);
+    // 人工编辑磁盘总结 → 再写新版产生 proposed（复用 #30 防覆盖机制）
+    const row = ctx.service.summaries.getSummary("REQ-001");
+    writeFileSync(row!.mdPath, "人工编辑过的总结", "utf8");
+    ctx.service.store.createBatch({ id: "B2", requirementId: "REQ-001", projectId: "p1" });
+    const proposed = ctx.service.summaries.writeSummary({ requirementId: "REQ-001", projectId: "p1", batchId: "B2", content: "新版总结" });
+    rmSync(proposed.proposedMdPath as string); // 库指针在、文件不在：启动修复域的不一致态
+    expect(() => ctx.service.resolveSummary("REQ-001", "accept-new")).toThrow(/proposed 文件缺失/);
   });
 });
 
