@@ -79,8 +79,8 @@ export interface AdoptSessionInput {
 }
 
 /**
- * CLI exe 解析失败（#46）：三 exe resolver 全链落空时抛出；各 Adapter createSession 捕获后映射为
- * AdapterError("E_SPAWN_NOT_FOUND")（协议级，renderer classify 归 spawn_not_found 卡）。
+ * CLI exe 解析失败（#46）：exe 解析链（arch C4 骨架 exe-chain.ts）全链落空时抛出；各 Adapter spawn 阶段
+ * catch 经 exe-chain 的 mapSpawnFailure 单点映射为 AdapterError("E_SPAWN_NOT_FOUND")（协议级，renderer classify 归 spawn_not_found 卡）。
  * 独立于 AdapterError（run-once 等既有 catch 继续按普通 Error 包装 E_INTERNAL，行为不变）。
  */
 export class ExeNotFoundError extends Error {

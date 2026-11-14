@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { LogKind, AdapterEvent, ApprovalDecision, ApprovalSuggestion, ChatEvent, ChatEventSeed, CommandEntry, ModelEntry, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
-import { AdapterError, ExeNotFoundError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListCommandsInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
+import { AdapterError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListCommandsInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
+import { mapSpawnFailure } from "./exe-chain";
 import type { OpenCodeSseEvent, OpenCodeServerClientLike } from "./opencode/client";
 import { OpenCodeServerHost, type OpenCodeServerHostLike, type OpenCodeServerHostOptions } from "./opencode/server-host";
 import { isAuthFailureStatus, isAuthFailureText, isProtocolDisconnectText } from "./session-error";
@@ -146,10 +147,8 @@ export class OpenCodeAdapter implements CliAdapter {
     try {
       client = await this.host.acquire(init.cwd, mode, sessionId);
     } catch (e) {
-      // #46：exe 解析失败协议级映射（E_SPAWN_NOT_FOUND → renderer spawn 卡）；其余包装为创建失败
-      if (e instanceof ExeNotFoundError) throw new AdapterError("E_SPAWN_NOT_FOUND", e.message);
-      if (e instanceof AdapterError) throw e;
-      throw new AdapterError("E_INTERNAL", e instanceof Error ? e.message : String(e));
+      // #46：spawn 阶段失败协议映射单点（exe 解析失败 → E_SPAWN_NOT_FOUND → renderer spawn 卡）；其余包装为创建失败（裸消息）
+      throw mapSpawnFailure(e);
     }
     let nativeId: string;
     try {
@@ -179,10 +178,8 @@ export class OpenCodeAdapter implements CliAdapter {
     try {
       client = await this.host.acquire(input.cwd, "auto", ownerKey);
     } catch (e) {
-      // #46 对齐 createSession：exe 解析失败协议级映射；其余包装目录拉取失败
-      if (e instanceof ExeNotFoundError) throw new AdapterError("E_SPAWN_NOT_FOUND", e.message);
-      if (e instanceof AdapterError) throw e;
-      throw new AdapterError("E_INTERNAL", e instanceof Error ? e.message : String(e));
+      // #46 对齐 createSession：spawn 阶段失败协议映射单点；其余包装目录拉取失败（裸消息）
+      throw mapSpawnFailure(e);
     }
     try {
       const r = await client.api("GET", "/config/providers");
@@ -216,10 +213,8 @@ export class OpenCodeAdapter implements CliAdapter {
     try {
       client = await this.host.acquire(input.cwd, "auto", ownerKey);
     } catch (e) {
-      // #46 对齐 createSession/listModels：exe 解析失败协议级映射；其余包装目录拉取失败
-      if (e instanceof ExeNotFoundError) throw new AdapterError("E_SPAWN_NOT_FOUND", e.message);
-      if (e instanceof AdapterError) throw e;
-      throw new AdapterError("E_INTERNAL", e instanceof Error ? e.message : String(e));
+      // #46 对齐 createSession/listModels：spawn 阶段失败协议映射单点；其余包装命令目录拉取失败（裸消息）
+      throw mapSpawnFailure(e);
     }
     try {
       const r = await client.api("GET", "/command");

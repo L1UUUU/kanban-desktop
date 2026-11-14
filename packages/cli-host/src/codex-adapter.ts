@@ -5,6 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import type { LogKind, AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, CommandEntry, ModelEntry, PermMode, SessionStatus, TranscriptEvent } from "@kanban/ipc-schema";
 import { AdapterError, ExeNotFoundError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListCommandsInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
+import { mapSpawnFailure } from "./exe-chain";
 import { resolveCodexExe } from "./codex/exe";
 import { listCodexPromptCommands } from "./codex/prompt-commands";
 import { CodexRpcClient } from "./codex/rpc";
@@ -276,10 +277,8 @@ export class CodexAdapter implements CliAdapter {
       if (!title) this.log("title-empty", `Codex 标题摘要 exit 0 但输出文件缺失或为空：${out}`);
       return title || null;
     } catch (e) {
-      // #46 对齐 ensureStarted：exe 解析失败协议级映射；启动/超时/exit 非零包装均为 AdapterError 原样透传
-      if (e instanceof ExeNotFoundError) throw new AdapterError("E_SPAWN_NOT_FOUND", e.message);
-      if (e instanceof AdapterError) throw e;
-      throw new AdapterError("E_INTERNAL", `Codex 标题摘要失败：${e instanceof Error ? e.message : String(e)}`);
+      // #46 对齐 ensureStarted：spawn 阶段失败协议映射单点；启动/超时/exit 非零包装均为 AdapterError 原样透传
+      throw mapSpawnFailure(e, "Codex 标题摘要失败");
     } finally {
       rmSync(out, { force: true }); // 临时文件即用即清
     }
@@ -501,8 +500,8 @@ export class CodexAdapter implements CliAdapter {
     try {
       client = this.clientFactory();
     } catch (e) {
-      // #46：exe 解析失败协议级映射（E_SPAWN_NOT_FOUND → renderer spawn 卡）；其余原样抛出
-      if (e instanceof ExeNotFoundError) throw new AdapterError("E_SPAWN_NOT_FOUND", e.message);
+      // #46：exe 解析失败协议级映射（mapSpawnFailure 单点 → E_SPAWN_NOT_FOUND → renderer spawn 卡）；其余原样抛出
+      if (e instanceof ExeNotFoundError) throw mapSpawnFailure(e);
       throw e;
     }
     client.onDead((err) => this.handleProcessDeath(err));

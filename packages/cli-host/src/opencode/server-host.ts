@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import net from "node:net";
 import type { LogKind, PermMode } from "@kanban/ipc-schema";
-import { resolveOpenCodeExe } from "./exe";
+import { ExeResolveCache } from "../exe-chain";
+import { OPENCODE_EXE_CHAIN } from "./exe";
 import { OpenCodeHttpServerClient, type OpenCodeServerClientLike } from "./client";
 
 /** Adapter 消费的宿主面（生产 OpenCodeServerHost；测试注入 FakeHost） */
@@ -162,7 +163,8 @@ export class OpenCodeServerHost implements OpenCodeServerHostLike {
   private readonly manualExe: string | null;
   private readonly xdgRoot: string | undefined;
   private readonly extraConfig: Record<string, unknown> | undefined;
-  private exeCache: string | null = null;
+  /** exe 解析结果缓存（成功才记忆；实现单源在 exe-chain，arch C4） */
+  private readonly exeCache = new ExeResolveCache();
 
   constructor(options: OpenCodeServerHostOptions = {}) {
     this.manualExe = options.exe ?? null;
@@ -397,9 +399,6 @@ export class OpenCodeServerHost implements OpenCodeServerHostLike {
   }
 
   private resolveExe(): string {
-    if (this.exeCache) return this.exeCache;
-    const exe = resolveOpenCodeExe({ manualOverride: this.manualExe });
-    this.exeCache = exe;
-    return exe;
+    return this.exeCache.resolve(OPENCODE_EXE_CHAIN, { manualOverride: this.manualExe });
   }
 }

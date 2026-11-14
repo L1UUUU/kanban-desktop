@@ -1,9 +1,7 @@
-// 用途：解析真实 claude 可执行文件路径（spawn 直连目标，不经 .cmd shim / PATH 兜底；spec G 通用决策 + poc-7 实证链路）+ 解析链候选并集（#49 残留检测）
-import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+// 用途：claude exe 解析链差异声明（arch C4）—— manual→env→npm 全局→where/which 的链骨架单源在 ../exe-chain，此处只声明 claude 的候选步（npm 全局布局 + PATH 兜底过滤）；对外 resolve/listCandidates 签名保持
 import path from "node:path";
-import { ExeNotFoundError } from "../adapter";
-import { dedupePaths, lookupAllPathLines, type ExeCandidateProbes } from "../exe-probes";
+import { listExeChainCandidates, npmGlobalExeStep, pathLookupExeStep, resolveExeChain, type ExeChainSpec } from "../exe-chain";
+import type { ExeCandidateProbes } from "../exe-probes";
 
 /** 解析优先级：手动覆盖（config cliExe.claude）→ env KANBAN_CLAUDE_BIN → npm 全局 bin/claude.exe → where/which 显式解析 */
 export interface ClaudeExeOptions {
@@ -11,88 +9,34 @@ export interface ClaudeExeOptions {
   manualOverride?: string | null;
 }
 
-/** 通过 npm root -g 定位全局安装根（win32 下 npm 是 .cmd，经 ComSpec 执行避免 shell 转义问题；与 codex/exe.ts 同链路） */
-function npmRootGlobal(): string {
-  if (process.platform === "win32") {
-    return execFileSync(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", "npm root -g"], {
-      encoding: "utf8",
-    }).trim();
-  }
-  return execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim();
-}
-
-/** 经 PATH 显式解析可执行文件绝对路径（where/which 只用于「找到路径」，spawn 仍直连该绝对路径，不回退 PATH 运行时查找） */
-function fromPathLookup(): string | null {
-  try {
-    const cmd = process.platform === "win32" ? "where" : "which";
-    const out = execFileSync(cmd, ["claude"], { encoding: "utf8" }).trim();
-    // where 可能返回多行（.cmd/.exe/…），优先真实 exe，其次非 shim 的可执行
-    for (const line of out.split(/\r?\n/).filter(Boolean)) {
-      if (existsSync(line) && line.toLowerCase().endsWith(".exe")) return line;
-    }
-    return null; // 只有 .cmd shim（npm shim 指向 node 脚本）时不采用：spawn .cmd 会留孤儿（PoC 1 发现 4）
-  } catch {
-    return null; // PATH 上无 claude
-  }
-}
-
 /**
- * 解析 claude 真实 exe：找不到时抛错（含已尝试路径与覆盖方法，失败可定位）。
- * spec G：claude 兜底回退 PATH 在产品中不可用 —— 本函数所有分支都返回「显式绝对路径」。
+ * claude 解析链声明：候选并集与 resolve 从同一条链派生（采纳条件天然一致）。
+ * PATH 兜底：resolve 只采纳真实 .exe（posix 无扩展名结果不采纳——现行行为保持）；并集 win32 只收 .exe、posix 收非 .cmd。
  */
+export const CLAUDE_EXE_CHAIN: ExeChainSpec = {
+  cli: "claude",
+  envVar: "KANBAN_CLAUDE_BIN",
+  steps: [
+    // npm 全局 @anthropic-ai/claude-code/bin/claude.exe（poc-7 实证形态；posix 下为无扩展名可执行）
+    npmGlobalExeStep({
+      layout: (root) => path.join(root, "@anthropic-ai", "claude-code", "bin", process.platform === "win32" ? "claude.exe" : "claude"),
+      miss: (_root, candidate) => `npm 全局 ${candidate} 不存在`,
+    }),
+    pathLookupExeStep({
+      name: "claude",
+      adoptFirst: (line) => line.toLowerCase().endsWith(".exe"),
+      adoptAll: (line) =>
+        process.platform === "win32" ? line.toLowerCase().endsWith(".exe") : !line.toLowerCase().endsWith(".cmd"),
+    }),
+  ],
+};
+
+/** 解析 claude 真实 exe：找不到时抛 ExeNotFoundError（含已尝试路径与覆盖方法，失败可定位）。spec G：本函数所有分支都返回「显式绝对路径」，claude 兜底回退 PATH 在产品中不可用 */
 export function resolveClaudeExe(options: ClaudeExeOptions = {}): string {
-  const tried: string[] = [];
-  // 1) config 手动覆盖
-  if (options.manualOverride) {
-    if (existsSync(options.manualOverride)) return options.manualOverride;
-    tried.push(`手动覆盖 ${options.manualOverride}（不存在）`);
-  }
-  // 2) env 覆盖（测试/特殊环境；CliHostClient 经 env 传给 worker）
-  if (process.env.KANBAN_CLAUDE_BIN) {
-    if (existsSync(process.env.KANBAN_CLAUDE_BIN)) return process.env.KANBAN_CLAUDE_BIN;
-    tried.push(`KANBAN_CLAUDE_BIN=${process.env.KANBAN_CLAUDE_BIN}（不存在）`)
-  }
-  // 3) npm 全局 @anthropic-ai/claude-code/bin/claude.exe（poc-7 实证形态；posix 下为无扩展名可执行）
-  try {
-    const root = npmRootGlobal();
-    const bin = process.platform === "win32" ? "claude.exe" : "claude";
-    const exe = path.join(root, "@anthropic-ai", "claude-code", "bin", bin);
-    if (existsSync(exe)) return exe;
-    tried.push(`npm 全局 ${path.join(root, "@anthropic-ai", "claude-code", "bin", bin)} 不存在`)
-  } catch (e) {
-    tried.push(`npm root -g 探测失败：${e instanceof Error ? e.message : String(e)}`)
-  }
-  // 4) where/which 显式解析（仅采纳真实 .exe / 可执行文件）
-  const looked = fromPathLookup();
-  if (looked) return looked;
-  tried.push("where/which 未解析到 claude 可执行文件（.cmd shim 不采用）")
-  throw new ExeNotFoundError(
-    `未找到 claude 可执行文件（已尝试：${tried.join("；")}）。请在设置中手动指定 claude.exe 路径或设置 KANBAN_CLAUDE_BIN。`,
-  );
+  return resolveExeChain(CLAUDE_EXE_CHAIN, options);
 }
 
-/**
- * claude 解析链全量候选路径并集（#49 残留检测的 exe 匹配粒度；采纳条件与 resolveClaudeExe 一致）。
- * 顺序：manualOverride → KANBAN_CLAUDE_BIN → npm 全局 bin/claude.exe → where/which 全部真实可执行（.cmd shim 不采用，多结果全收）；去重。
- */
+/** claude 解析链全量候选路径并集（#49 残留检测的 exe 匹配粒度；与 resolveClaudeExe 自同一条链派生） */
 export function listClaudeExeCandidates(options: ClaudeExeOptions & ExeCandidateProbes = {}): string[] {
-  const paths: string[] = [];
-  if (options.manualOverride && existsSync(options.manualOverride)) paths.push(options.manualOverride);
-  if (process.env.KANBAN_CLAUDE_BIN && existsSync(process.env.KANBAN_CLAUDE_BIN)) paths.push(process.env.KANBAN_CLAUDE_BIN);
-  try {
-    const root = (options.npmRoot ?? npmRootGlobal)();
-    const bin = process.platform === "win32" ? "claude.exe" : "claude";
-    const exe = path.join(root, "@anthropic-ai", "claude-code", "bin", bin);
-    if (existsSync(exe)) paths.push(exe);
-  } catch {
-    /* npm root -g 探测失败：无全局候选 */
-  }
-  const lines = (options.pathLookup ?? (() => lookupAllPathLines("claude")))("claude");
-  // where 多结果全收（不只首个命中）：win32 只收真实 .exe，posix 收非 .cmd 可执行（与 fromPathLookup 同过滤）
-  for (const line of lines) {
-    if (process.platform === "win32" ? line.toLowerCase().endsWith(".exe") : !line.toLowerCase().endsWith(".cmd")) {
-      paths.push(line);
-    }
-  }
-  return dedupePaths(paths);
+  return listExeChainCandidates(CLAUDE_EXE_CHAIN, options);
 }

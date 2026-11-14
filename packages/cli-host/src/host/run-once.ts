@@ -1,13 +1,12 @@
-// 用途：run-once 一次性 CLI 进程执行器（spec #27 C 节 C5 演进，issue #29）—— exe 解析（cli→各 CLI 探测链）、runId 取消注册表与终态归类（completed/failed/timeout/cancelled）；spawn 骨架与 Windows 坑位清单单源在 ../one-shot（arch C3 合并）；子进程为 worker 子进程，自动落入宿主 Windows Job Object（Main 侧 JobGuard，t0-01：宿主强杀则 OS 全灭无孤儿）
+// 用途：run-once 一次性 CLI 进程执行器（spec #27 C 节 C5 演进，issue #29）—— exe 解析经 exe-registry 注册表（arch C4 cli→链单源分发）与 ExeResolveCache 单源缓存、runId 取消注册表与终态归类（completed/failed/timeout/cancelled）；spawn 骨架与 Windows 坑位清单单源在 ../one-shot（arch C3 合并）；子进程为 worker 子进程，自动落入宿主 Windows Job Object（Main 侧 JobGuard，t0-01：宿主强杀则 OS 全灭无孤儿）
 import type { LogKind } from "@kanban/ipc-schema";
 import { AdapterError } from "../adapter";
-import { resolveClaudeExe } from "../claude/exe";
-import { resolveCodexExe } from "../codex/exe";
-import { resolveOpenCodeExe } from "../opencode/exe";
+import { ExeResolveCache } from "../exe-chain";
+import { EXE_CHAINS } from "../exe-registry";
 import { OneShotSpawnError, spawnOneShot, type OneShotHandle } from "../one-shot";
 
-/** run-once 支持的 CLI（exe 解析复用各 CLI 既有探测链：手动覆盖→env→npm 全局→where/which） */
-const RUN_ONCE_CLIS = ["claude", "codex", "opencode"] as const;
+/** run-once 支持的 CLI（exe 解析链注册表键序单源；链内容：手动覆盖→env→npm 全局→CLI 特定位） */
+const RUN_ONCE_CLIS = Object.keys(EXE_CHAINS);
 
 /** 单次执行超时缺省（spec F：提取单段默认 300s，超时归批次 failed） */
 export const DEFAULT_RUN_ONCE_TIMEOUT_MS = 300_000;
@@ -39,17 +38,11 @@ export interface RunOnceResult {
   durationMs: number;
 }
 
-/** exe 解析（成功缓存；与 ClaudeAdapter.exeCache 同策略） */
-function resolveRunOnceExe(cli: string, cache: Map<string, string>): string {
-  const hit = cache.get(cli);
-  if (hit) return hit;
-  let exe: string;
-  if (cli === "claude") exe = resolveClaudeExe();
-  else if (cli === "codex") exe = resolveCodexExe();
-  else if (cli === "opencode") exe = resolveOpenCodeExe();
-  else throw new AdapterError("E_INTERNAL", `run-once 未支持的 CLI：${cli}（支持：${RUN_ONCE_CLIS.join("/")}）`);
-  cache.set(cli, exe);
-  return exe;
+/** exe 解析（成功缓存；ExeResolveCache 单源实现，arch C4） */
+function resolveRunOnceExe(cli: string, cache: ExeResolveCache): string {
+  const spec = EXE_CHAINS[cli];
+  if (!spec) throw new AdapterError("E_INTERNAL", `run-once 未支持的 CLI：${cli}（支持：${RUN_ONCE_CLIS.join("/")}）`);
+  return cache.resolve(spec);
 }
 
 /**
@@ -59,7 +52,7 @@ function resolveRunOnceExe(cli: string, cache: Map<string, string>): string {
 export class RunOnceRunner {
   /** 进行中的一次性执行（取消锚点：handle.cancel 置 cancelled 并 kill，由 close 统一收口） */
   private readonly active = new Map<string, OneShotHandle>();
-  private readonly exeCache = new Map<string, string>();
+  private readonly exeCache = new ExeResolveCache();
   /** #54：诊断上报（2 参 kind 回调；worker 形态经 CliHost 透传到 {log} 消息，缺省丢弃） */
   private readonly log: (kind: LogKind, detail: string) => void;
 

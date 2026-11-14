@@ -5,8 +5,9 @@ import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import type { LogKind, AdapterEvent, ApprovalSuggestion, ChatEvent, ChatEventSeed, CommandEntry, ModelEntry, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
 import { transformHookEvents } from "@kanban/tracker";
-import { AdapterError, ExeNotFoundError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListCommandsInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
-import { resolveClaudeExe } from "./claude/exe";
+import { AdapterError, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListCommandsInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
+import { ExeResolveCache, mapSpawnFailure } from "./exe-chain";
+import { CLAUDE_EXE_CHAIN } from "./claude/exe";
 import { listClaudeSkillCommands } from "./claude/skill-commands";
 import { ClaudeSetModelError, ClaudeStreamClient, type ClaudeStreamOptions } from "./claude/client";
 import { prepareSessionHookDir, resolveHookNodeBin, tailJsonl, writeSessionSettings, type SessionHookFiles } from "./claude/hook-inject";
@@ -114,7 +115,8 @@ export class ClaudeAdapter implements CliAdapter {
   /** #95：config 手动覆盖 exe（summarizeTitle 的 exe 解析复用同链）与摘要一次性超时 */
   private readonly manualExe: string | null;
   private readonly summarizeTimeoutMs: number;
-  private exeCache: string | null = null;
+  /** exe 解析结果缓存（成功才记忆；实现单源在 exe-chain，arch C4） */
+  private readonly exeCache = new ExeResolveCache();
   /** 模型目录缓存（listModels #78：握手成功结果复用，进程生命周期内不重复握手；失败清空可重试） */
   private modelsPromise: Promise<ModelEntry[]> | null = null;
 
@@ -136,10 +138,7 @@ export class ClaudeAdapter implements CliAdapter {
   }
 
   private resolveExe(manualOverride: string | null): string {
-    if (this.exeCache) return this.exeCache;
-    const exe = resolveClaudeExe({ manualOverride });
-    this.exeCache = exe;
-    return exe;
+    return this.exeCache.resolve(CLAUDE_EXE_CHAIN, { manualOverride });
   }
 
   async createSession(init: CreateSessionInput): Promise<{ sessionId: string; nativeSessionId?: string | null; model?: string | null }> {
@@ -166,10 +165,8 @@ export class ClaudeAdapter implements CliAdapter {
       }
       this.emit(s, { type: "session_status", status: "idle" });
     } catch (e) {
-      // #46：exe 解析失败协议级映射（E_SPAWN_NOT_FOUND → renderer spawn 卡）；其余包装为创建失败
-      if (e instanceof ExeNotFoundError) throw new AdapterError("E_SPAWN_NOT_FOUND", e.message);
-      if (e instanceof AdapterError) throw e;
-      throw new AdapterError("E_INTERNAL", `创建 Claude 会话失败：${e instanceof Error ? e.message : String(e)}`);
+      // #46：spawn 阶段失败协议映射单点（exe 解析失败 → E_SPAWN_NOT_FOUND → renderer spawn 卡）；其余包装为创建失败
+      throw mapSpawnFailure(e, "创建 Claude 会话失败");
     }
     return { sessionId, nativeSessionId, model: init.model }; // model 透传（--model spawn 参数；未指定 undefined=账号默认未知，issue #76）
   }
@@ -197,10 +194,8 @@ export class ClaudeAdapter implements CliAdapter {
     try {
       wire = this.clientFactory({ cwd, args: [], log: this.log });
     } catch (e) {
-      // #46 对齐 createSession：exe 解析失败协议级映射；其余包装目录拉取失败
-      if (e instanceof ExeNotFoundError) throw new AdapterError("E_SPAWN_NOT_FOUND", e.message);
-      if (e instanceof AdapterError) throw e;
-      throw new AdapterError("E_INTERNAL", `拉取 Claude 模型目录失败：${e instanceof Error ? e.message : String(e)}`);
+      // #46 对齐 createSession：spawn 阶段失败协议映射单点；其余包装目录拉取失败
+      throw mapSpawnFailure(e, "拉取 Claude 模型目录失败");
     }
     try {
       return mapInitModels(await wire.start());
@@ -294,10 +289,8 @@ export class ClaudeAdapter implements CliAdapter {
       }
       return toTitleLine(r.stdout) || null;
     } catch (e) {
-      // #46 对齐 createSession：exe 解析失败协议级映射；runTitleOneShot 的启动/超时错误与 exit 非零包装均为 AdapterError 原样透传
-      if (e instanceof ExeNotFoundError) throw new AdapterError("E_SPAWN_NOT_FOUND", e.message);
-      if (e instanceof AdapterError) throw e;
-      throw new AdapterError("E_INTERNAL", `Claude 标题摘要失败：${e instanceof Error ? e.message : String(e)}`);
+      // #46 对齐 createSession：spawn 阶段失败协议映射单点；runTitleOneShot 的启动/超时错误与 exit 非零包装均为 AdapterError 原样透传
+      throw mapSpawnFailure(e, "Claude 标题摘要失败");
     }
   }
 
