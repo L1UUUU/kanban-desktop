@@ -10,13 +10,16 @@ import { OpenCodeServerHost, type OpenCodeServerHostLike, type OpenCodeServerHos
 import { readCommandSnapshot, readMessageSnapshot } from "./opencode/snapshot";
 import { isAuthFailureStatus, isAuthFailureText, isProtocolDisconnectText } from "./session-error";
 
-/** 全能力（approval/interrupt/resume/readHistory 实证于 poc-3 + 1.15.7 探针；skillSignal=command 路由 self_reported） */
+/** 全能力（approval/interrupt/resume/readHistory 实证于 poc-3 + 1.15.7 探针；skillSignal=command 路由 self_reported）；runOnce 为托管形态能力（worker RunOnceRunner），adapter 单元恒 false（arch C13） */
 const OPENCODE_CAPABILITIES: AdapterCapabilities = {
   approval: true,
   interrupt: true,
   resume: true,
   readHistory: true,
   skillSignal: true,
+  adoptSession: true,
+  runOnce: false,
+  listChildPids: true,
 };
 
 /** magpie 网关模型 ID 含斜杠：按第一个斜杠切 provider，余下合并为 model（poc-3 §10.1） */

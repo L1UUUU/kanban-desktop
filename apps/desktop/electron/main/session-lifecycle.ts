@@ -39,7 +39,8 @@ export function createAdapterSessionProcesses(
     interrupt: (sessionId) => adapter.interruptTurn(sessionId),
     terminate: (rec) => (rec.kind === "pty" ? Promise.resolve(pty.kill(rec.id)) : adapter.dispose({ sessionId: rec.id })),
     adopt: (input) =>
-      adapter.adoptSession
+      // arch C13：缺席判定单源 = 能力面 adoptSession（方法存在性仅作 TS 收窄保险）；降级行为不变——同错误消息 reject，由 ipc 层既有 catch 映射错误形状
+      adapter.capabilities.adoptSession && adapter.adoptSession
         ? adapter.adoptSession(input)
         : Promise.reject(new Error(`当前 CLI 不支持会话收养，无法取消归档：${input.cli ?? ""}`)),
     spawnTerminal: (terminalId, req) => pty.spawn(terminalId, req),

@@ -206,9 +206,9 @@ describe("Main 入站强制校验", () => {
     expect(res1.ok).toBe(false);
     if (!res1.ok) expect(res1.error.code).toBe("E_SESSION_NOT_FOUND");
 
-    // 抛非 AdapterError 的 adapter → E_INTERNAL 兜底
+    // 抛非 AdapterError 的 adapter → E_INTERNAL 兜底（arch C13：可选面缺席如实声明，本测试只驱动 session:send）
     const boom = {
-      capabilities: new FakeAdapter({ clock: new VirtualClock() }).capabilities,
+      capabilities: { approval: true, interrupt: true, resume: true, readHistory: true, skillSignal: true, adoptSession: false, runOnce: false, listChildPids: false },
       createSession: async () => ({ sessionId: "s-boom" }),
       sendTurn: async () => {
         throw new Error("boom");
@@ -1113,7 +1113,8 @@ describe("session:create 首条消息原子化（#59：草稿提交 = 创建原�
     const disposed: Array<string | undefined> = [];
     const sentTurns: Array<{ sessionId: string; text: string }> = [];
     const adapter = {
-      capabilities: base.capabilities,
+      // arch C13：包装层未透传可选面方法——能力如实声明缺席（本夹具只驱动 create/send/dispose）
+      capabilities: { ...base.capabilities, adoptSession: false, runOnce: false, listChildPids: false },
       createSession: async () => {
         seq += 1;
         if (opts?.failCreate) throw new AdapterError("E_SPAWN_NOT_FOUND", "未找到 CLI 可执行文件（注入）");
@@ -1219,7 +1220,8 @@ describe("session:create 首条消息原子化（#59：草稿提交 = 创建原�
     const clock = new VirtualClock();
     const base = new FakeAdapter({ clock });
     const adapter = {
-      capabilities: base.capabilities,
+      // arch C13：包装层未透传可选面方法——能力如实声明缺席（本夹具只驱动 create/send/dispose）
+      capabilities: { ...base.capabilities, adoptSession: false, runOnce: false, listChildPids: false },
       createSession: async () => ({ sessionId: "s-internal" }),
       sendTurn: async () => {
         throw new Error("boom");
@@ -1280,7 +1282,8 @@ describe("会话标题派生与手动重命名（#94 / ADR 0003：四态状态�
     const clock = new VirtualClock();
     const base = new FakeAdapter({ clock });
     const adapter = {
-      capabilities: base.capabilities,
+      // arch C13：包装层未透传可选面方法——能力如实声明缺席（本夹具只驱动 create/send/dispose）
+      capabilities: { ...base.capabilities, adoptSession: false, runOnce: false, listChildPids: false },
       createSession: async () => ({ sessionId: "s-rollback-title" }),
       sendTurn: async () => {
         throw new AdapterError("E_INTERNAL", "发送失败（注入）");
@@ -1338,7 +1341,8 @@ describe("会话标题派生与手动重命名（#94 / ADR 0003：四态状态�
     const clock = new VirtualClock();
     const base = new FakeAdapter({ clock });
     const adapter = {
-      capabilities: base.capabilities,
+      // arch C13：包装层未透传可选面方法——能力如实声明缺席（本夹具只驱动 create/send/dispose）
+      capabilities: { ...base.capabilities, adoptSession: false, runOnce: false, listChildPids: false },
       createSession: async () => ({ sessionId: "s-send-fail" }),
       sendTurn: async () => {
         throw new Error("boom");

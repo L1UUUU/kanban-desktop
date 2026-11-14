@@ -101,12 +101,20 @@ function summarizeCommand(cmd: HostCommand): string {
  * fork 失败（构建产物缺失等）时抛错由调用方决定回退进程内 AdapterRouter。
  */
 export class CliHostClient implements CliAdapter {
+  /**
+   * 托管形态静态能力面（arch C13）：可选面经 wire 恒可达——worker 内 router 所辖 Fake/三 CLI adapter 全实现
+   * adoptSession/listChildPids（能力并集 true），runOnce/cancelRunOnce 由 worker CliHost 的 RunOnceRunner 提供。
+   * wire 侧不往返能力查询，main 消费点按本声明统一门控降级。
+   */
   readonly capabilities: AdapterCapabilities = {
     approval: true,
     interrupt: true,
     resume: true,
     readHistory: true,
     skillSignal: false,
+    adoptSession: true,
+    runOnce: true,
+    listChildPids: true,
   };
   private proc: UtilityProcessLike;
   private nextId = 1;

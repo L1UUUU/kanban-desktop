@@ -69,13 +69,16 @@ export interface FakeAdapterOptions {
   homeDir?: string;
 }
 
-/** 全能力 Fake：UI 不隐藏任何控件（spec B capabilities 语义） */
+/** 全能力 Fake：UI 不隐藏任何控件（spec B capabilities 语义）；runOnce 为托管形态能力（worker RunOnceRunner），adapter 单元恒 false（arch C13） */
 const FAKE_CAPABILITIES: AdapterCapabilities = {
   approval: true,
   interrupt: true,
   resume: true,
   readHistory: true,
   skillSignal: true,
+  adoptSession: true,
+  runOnce: false,
+  listChildPids: true,
 };
 
 /** Fake 摘要标题固定值（#95 / ADR 0003 决策 3）：整机 e2e 断言侧栏标题翻转；契约套默认精确断言值 */

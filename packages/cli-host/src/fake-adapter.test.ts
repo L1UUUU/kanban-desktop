@@ -27,7 +27,7 @@ afterEach(() => {
 });
 
 describe("FakeAdapter 专属场景", () => {
-  it("capabilities 全真：UI 不隐藏审批/中断/恢复/历史/技能信号控件", () => {
+  it("capabilities 全真：UI 不隐藏审批/中断/恢复/历史/技能信号控件；可选面声明与方法在场同步（arch C13）", () => {
     const adapter = new FakeAdapter({ clock: new VirtualClock() });
     expect(adapter.capabilities).toEqual({
       approval: true,
@@ -35,6 +35,9 @@ describe("FakeAdapter 专属场景", () => {
       resume: true,
       readHistory: true,
       skillSignal: true,
+      adoptSession: true,
+      runOnce: false,
+      listChildPids: true,
     });
   });
 

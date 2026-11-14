@@ -58,13 +58,16 @@ const PERM_MAP: Record<PermMode, { extraArgs: string[]; strictAsk: boolean }> = 
   full: { extraArgs: ["--dangerously-skip-permissions"], strictAsk: false },
 };
 
-/** 全能力（approval/interrupt/resume/readHistory 实证于 PoC 7；skillSignal 双信号自本 Adapter 落地） */
+/** 全能力（approval/interrupt/resume/readHistory 实证于 PoC 7；skillSignal 双信号自本 Adapter 落地）；runOnce 为托管形态能力（worker RunOnceRunner），adapter 单元恒 false（arch C13） */
 const CLAUDE_CAPABILITIES: AdapterCapabilities = {
   approval: true,
   interrupt: true,
   resume: true,
   readHistory: true,
   skillSignal: true,
+  adoptSession: true,
+  runOnce: false,
+  listChildPids: true,
 };
 
 /** 待决审批：挂起 wire 响应直到用户决定（onControlRequest 挂起 Promise 模式，#8 同款） */

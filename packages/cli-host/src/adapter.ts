@@ -1,4 +1,4 @@
-// 用途：C1 Adapter 统一契约（spec B 冻结）—— 方法面 + capabilities + 带错误码的异常；实现侧（Fake/三 CLI）与宿主（CliHost/Main 路由）共同依赖；可选面含 adoptSession/listChildPids 与 runOnce/cancelRunOnce（issue #73 托管附加能力并入）
+// 用途：C1 Adapter 统一契约（spec B 冻结）—— 方法面 + capabilities + 带错误码的异常；实现侧（Fake/三 CLI）与宿主（CliHost/Main 路由）共同依赖；可选面含 adoptSession/listChildPids 与 runOnce/cancelRunOnce（issue #73 托管附加能力并入）；arch C13 起可选方法的缺席判定单源 = capabilities 同键布尔（方法本体保持 TS 可选）
 import type {
   ApprovalDecision,
   ApprovalSuggestion,
@@ -12,13 +12,25 @@ import type {
 } from "@kanban/ipc-schema";
 import type { RunOnceInput, RunOnceResult } from "./host/run-once";
 
-/** 能力声明：未实证能力 UI 不暴露控件（spec B capabilities） */
+/**
+ * 能力声明：未实证能力 UI 不暴露控件（spec B capabilities）。
+ * arch C13：可选方法（adoptSession / runOnce+cancelRunOnce / listChildPids）是否可用的判定单源收进本面——
+ * 声明 true ⇒ 同名（runOnce 门控 runOnce/cancelRunOnce 两个同门方法）方法必在场可调用；false ⇒ 调用方按各自业务降级，
+ * 不再对方法做 `?.` 存在性探测散判定。能力与方法在场的同步由实现方保证（adapter.contract 契约断言钉住）。
+ * summarizeTitle 不在此面：必选方法 + null 返回语义（ADR 0003 决策 3，null = 该会话无可摘要而非无能力）。
+ */
 export interface AdapterCapabilities {
   approval: boolean;
   interrupt: boolean;
   resume: boolean;
   readHistory: boolean;
   skillSignal: boolean;
+  /** 会话收养（adoptSession）：false ⇒ 方法缺席，恢复编排降级（reject / 落库断开） */
+  adoptSession: boolean;
+  /** 一次性执行（runOnce 与 cancelRunOnce 同门）：false ⇒ 两方法均缺席，记忆提取降级不接桥 */
+  runOnce: boolean;
+  /** 活跃子进程上报（listChildPids）：false ⇒ 方法缺席，聚合方按空集处理 */
+  listChildPids: boolean;
 }
 
 /** createSession 输入（cwd 必填；model/permMode 由 Adapter 映射到各 CLI 原生机制；cli 供 AdapterRouter 分发，单实现忽略） */
@@ -127,22 +139,22 @@ export interface CliAdapter {
   readTranscript(sessionId: string): Promise<TranscriptEvent[]>;
   resume(sessionId: string): Promise<void>;
   dispose(input?: DisposeInput): Promise<void>;
-  /** 应用重启后的会话收养（可选能力，#13）：登记断开会话供 readHistory/resume 恢复；未实现时恢复编排落库为断开并报错引导 */
+  /** 应用重启后的会话收养（可选能力，#13）：登记断开会话供 readHistory/resume 恢复；缺席判定单源 = capabilities.adoptSession（arch C13），未实现时恢复编排落库为断开并报错引导 */
   adoptSession?(input: AdoptSessionInput): Promise<void>;
   /**
    * C5 演进（#44 / spec #40 C 节）：上报本 Adapter 当前管理的全部活跃 CLI 子进程 pid（去重集合）。
-   * 可选成员：无子进程的实现（Fake 等）可省略（聚合方按空集处理）；
+   * 可选成员：缺席判定单源 = capabilities.listChildPids（arch C13），无子进程的实现（Fake 等）实现为空集返回；
    * 残留治理（#49）以此 worker/进程内形态上报的并集为「本应用活跃集合」判定基准。
    */
   listChildPids?(): Promise<number[]>;
   /**
    * 一次性 CLI 执行（#29 C5 演进；issue #73 并入 CliAdapter 可选面，取代 instanceof 探测）。
-   * 托管形态（utilityProcess worker）具备；进程内回退 AdapterRouter 未实现（undefined）——
-   * memory 提取经此可选面探测，缺该能力时降级 cli-unavailable（边界如实声明）。
-   * shortcut: AdapterRouter（进程内回退）暂不实现 runOnce/cancelRunOnce；复查触发条件 = 回退形态需要提取能力时给 Router 挂 RunOnceRunner
+   * 缺席判定单源 = capabilities.runOnce（arch C13）：托管形态（utilityProcess worker 的 CliHostClient）声明 true，
+   * 进程内回退 AdapterRouter 并集为 false——CLI 形态知识归声明侧，main 只查能力面。
+   * shortcut: AdapterRouter（进程内回退）暂不实现 runOnce/cancelRunOnce（能力并集恒 false）；复查触发条件 = 回退形态需要提取能力时给 Router 挂 RunOnceRunner
    */
   runOnce?(input: RunOnceInput): Promise<RunOnceResult>;
-  /** 取消进行中的一次性执行（与 runOnce 同门能力；未实现即缺席，调用方按无此能力处理） */
+  /** 取消进行中的一次性执行（与 runOnce 同门能力，缺席判定同查 capabilities.runOnce；未实现即缺席，调用方按无此能力处理） */
   cancelRunOnce?(runId: string): Promise<void>;
   /**
    * 模型目录查询（issue #76 / spec #75）：返回该 CLI 当前可用的模型目录（统一 ModelEntry 四字段条目；

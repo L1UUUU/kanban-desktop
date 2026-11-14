@@ -64,13 +64,16 @@ const DECISION_MAP: Record<string, string> = {
   deny: "declined",
 };
 
-/** 全能力 Codex（approval/interrupt/resume/readHistory 均实证；skillSignal 阶段 2 接 Tracker） */
+/** 全能力 Codex（approval/interrupt/resume/readHistory 均实证；skillSignal 阶段 2 接 Tracker）；runOnce 为托管形态能力（worker RunOnceRunner），adapter 单元恒 false（arch C13） */
 const CODEX_CAPABILITIES: AdapterCapabilities = {
   approval: true,
   interrupt: true,
   resume: true,
   readHistory: true,
   skillSignal: false,
+  adoptSession: true,
+  runOnce: false,
+  listChildPids: true,
 };
 
 /** model/list 分页保护上限（nextCursor 续拉；防异常游标死循环，issue #76） */

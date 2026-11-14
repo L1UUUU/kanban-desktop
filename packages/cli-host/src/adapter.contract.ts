@@ -91,6 +91,17 @@ export function defineAdapterContractTests(
   const suggestionsRequired = opts?.suggestionsRequired ?? true;
   const contractCwd = opts?.cwd ?? "C:\\demo";
 
+  it("能力面（arch C13）：可选方法能力声明与方法在场同步——adoptSession/listChildPids 声明即在场；runOnce 为托管形态能力（adapter 单元声明 false 且方法缺席）", async () => {
+    const { adapter } = await make();
+    expect(adapter.capabilities.adoptSession).toBe(true);
+    expect(adapter.adoptSession).toBeTypeOf("function");
+    expect(adapter.capabilities.listChildPids).toBe(true);
+    expect(adapter.listChildPids).toBeTypeOf("function");
+    expect(adapter.capabilities.runOnce).toBe(false);
+    expect(adapter.runOnce).toBeUndefined();
+    expect(adapter.cancelRunOnce).toBeUndefined(); // 与 runOnce 同门：能力 false ⇒ 两方法均缺席
+  });
+
   it("不变量 1：sendTurn 只表达已提交，内容一律经事件流返回", async () => {
     const { adapter, driveIdle } = await make();
     const col = createCollector(adapter);

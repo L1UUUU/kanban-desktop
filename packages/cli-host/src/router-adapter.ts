@@ -6,7 +6,7 @@ import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type Cl
 /** Router 构造工厂：cli → adapter（不支持该 CLI 时抛 AdapterError） */
 export type AdapterFactory = (cli: string) => CliAdapter;
 
-/** 能力并集（UI 门面视角；单会话能力以各 adapter 为准） */
+/** 能力并集（UI 门面视角；单会话能力以各 adapter 为准）。arch C13：可选面 adoptSession/runOnce/listChildPids 一并并集——adapter 单元 runOnce 恒 false（托管形态能力），并集结果即「进程内回退无 runOnce」的声明 */
 function mergeCapabilities(adapters: Iterable<CliAdapter>): AdapterCapabilities {
   const all = [...adapters];
   return {
@@ -15,6 +15,9 @@ function mergeCapabilities(adapters: Iterable<CliAdapter>): AdapterCapabilities 
     resume: all.some((a) => a.capabilities.resume),
     readHistory: all.some((a) => a.capabilities.readHistory),
     skillSignal: all.some((a) => a.capabilities.skillSignal),
+    adoptSession: all.some((a) => a.capabilities.adoptSession),
+    runOnce: all.some((a) => a.capabilities.runOnce),
+    listChildPids: all.some((a) => a.capabilities.listChildPids),
   };
 }
 
@@ -63,7 +66,8 @@ export class AdapterRouter implements CliAdapter {
   async adoptSession(input: AdoptSessionInput): Promise<void> {
     const cli = input.cli ?? "fake";
     const adapter = this.adapterForCli(cli);
-    if (!adapter.adoptSession) {
+    // arch C13：缺席判定单源 = 能力面 adoptSession（方法存在性仅作 TS 收窄保险，缺任一即同错误形状拒绝）
+    if (!adapter.capabilities.adoptSession || !adapter.adoptSession) {
       throw new AdapterError("E_INTERNAL", `该 CLI 不支持会话收养：${cli}`);
     }
     await adapter.adoptSession({ ...input, cli });
@@ -117,11 +121,13 @@ export class AdapterRouter implements CliAdapter {
     this.routing.clear();
   }
 
-  /** C5 演进（#44）：聚合各 Adapter 活跃子进程 pid（去重升序；未实现可选成员或无进程的 Adapter 贡献空集） */
+  /** C5 演进（#44）：聚合各 Adapter 活跃子进程 pid（去重升序；缺席判定单源 = 能力面 listChildPids（arch C13），无能力/无进程的 Adapter 贡献空集） */
   async listChildPids(): Promise<number[]> {
     const pids = new Set<number>();
     for (const adapter of this.adapters.values()) {
-      for (const pid of (await adapter.listChildPids?.()) ?? []) pids.add(pid);
+      // arch C13：能力面先行，方法存在性仅作 TS 收窄保险
+      if (!adapter.capabilities.listChildPids || !adapter.listChildPids) continue;
+      for (const pid of await adapter.listChildPids()) pids.add(pid);
     }
     return [...pids].sort((a, b) => a - b);
   }

@@ -201,12 +201,12 @@ app.whenReady().then(async () => {
 
   // #32 memory 面装配（spec #27 A/C 节）：打开库即对账（running 批次→failed 等四规则，崩溃窗口收敛不锁死需求）；
   // dataRoot=<userData>/memory（D 节布局根，亦是提取临时 cwd 根）；需求关联会话/标题/项目归属/存在性由 Main 查 tracker 后传入（memory 不依赖 tracker）
-  // #32 提取双桥：readTranscript 经 CliAdapter 契约（托管/进程内皆有）；runOnce/cancelRunOnce 经 CliAdapter 可选面探测（issue #73 取代 instanceof CliHostClient）
-  //（进程内回退未实现该可选成员——extract 落 cli-unavailable 业务拒绝，C5 降级路径如实声明边界）
+  // #32 提取双桥：readTranscript 经 CliAdapter 契约（托管/进程内皆有）；runOnce/cancelRunOnce 缺席判定单源 = 能力面 capabilities.runOnce
+  //（arch C13：托管形态 true / 进程内回退 false——CLI 形态知识归 adapter/router 能力声明，main 只查能力不探测方法）
   // #72 C1 Step3：事件发送器经共享工厂（出站过 schema 校验失败 throw；窗口不在时静默丢弃转发）
   const sendMemoryEvent = createValidatedSender(memoryEventSchema, "memory:event", getMainWindow);
-  const runOnceBridge = adapter.runOnce?.bind(adapter);
-  const cancelRunOnceBridge = adapter.cancelRunOnce?.bind(adapter);
+  const runOnceBridge = adapter.capabilities.runOnce && adapter.runOnce ? adapter.runOnce.bind(adapter) : undefined;
+  const cancelRunOnceBridge = adapter.capabilities.runOnce && adapter.cancelRunOnce ? adapter.cancelRunOnce.bind(adapter) : undefined;
   // 需求当前关联会话查询（arch C10 出舱至 linked-sessions.ts：tracker 反查 + kind 分流 + CLI 口径归一收进模块，装配根不再触碰 tracker 内部结构）
   const linkedSessions = createLinkedSessionQueries({ tracker: trackerEngine.tracker, sessions });
   const memoryService = openMemoryService({
@@ -431,8 +431,8 @@ app.whenReady().then(async () => {
         claude: listClaudeExeCandidates({ manualOverride: appConfig.cliExe.claude }),
         opencode: listOpenCodeExeCandidates({ manualOverride: appConfig.cliExe.opencode }),
       }),
-      // 可选面探测（issue #73）：回退形态 AdapterRouter 实现了 listChildPids——residue 活跃集合如实上报（修复旧 instanceof 探测丢弃回退形态 pid 的少报）
-      listActivePids: () => adapter.listChildPids?.() ?? Promise.resolve([]),
+      // arch C13：listChildPids 缺席判定单源 = 能力面（托管/进程内回退均实现并集 true；无能力时活跃集合降级空数组，行为不变）
+      listActivePids: () => (adapter.capabilities.listChildPids && adapter.listChildPids ? adapter.listChildPids() : Promise.resolve([])),
       registryPath: join(app.getPath("userData"), "opencode-servers.json"),
       // #58 全量会话记录（含已归档）：残留归属的「最近会话」回落对归档会话仍可归属（spec #57 决策附注）
       listSessions: () => sessions.listAll(),

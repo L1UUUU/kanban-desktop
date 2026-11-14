@@ -147,9 +147,9 @@ describe("CliHost runOnce 命令（C5 演进，#29；kind 改名 runOnce，issue
   });
 });
 
-/** 最小桩 adapter（不含可选成员 listChildPids——聚合方须按空集处理） */
+/** 最小桩 adapter（可选面全部缺席——能力声明全 false，arch C13 同步；聚合方对 listChildPids 按空集处理） */
 class BaseStubAdapter implements CliAdapter {
-  readonly capabilities = { approval: false, interrupt: false, resume: false, readHistory: false, skillSignal: false };
+  readonly capabilities = { approval: false, interrupt: false, resume: false, readHistory: false, skillSignal: false, adoptSession: false, runOnce: false, listChildPids: false };
   private n = 0;
   private readonly handlers = new Set<(event: AdapterEvent) => void>();
   async createSession(): Promise<{ sessionId: string; nativeSessionId?: string | null }> {
@@ -189,9 +189,10 @@ class BaseStubAdapter implements CliAdapter {
   }
 }
 
-/** pid 桩 adapter：listChildPids 受控；全量 dispose 清空（镜像进程终止语义） */
+/** pid 桩 adapter：listChildPids 受控；全量 dispose 清空（镜像进程终止语义）。arch C13：实现可选成员即如实声明能力 */
 class PidStubAdapter extends BaseStubAdapter {
   pids: number[] = [];
+  override readonly capabilities = { ...new BaseStubAdapter().capabilities, listChildPids: true };
   override async dispose(input?: DisposeInput): Promise<void> {
     if (!input?.sessionId) this.pids = [];
   }
@@ -212,12 +213,12 @@ describe("CliHost listChildPids 命令（C5 演进，#44）", () => {
     return { host, stubOf: (cli: string) => created.get(cli) as PidStubAdapter };
   }
 
-  it("聚合全部 Adapter 的 pid：去重升序；未实现可选成员的 Adapter 贡献空集；空 host 为空集", async () => {
+  it("聚合全部 Adapter 的 pid：去重升序；未声明 listChildPids 能力的 Adapter 贡献空集（arch C13 能力门）；空 host 为空集", async () => {
     const { host, stubOf } = makePidHost();
     expect(await host.command({ kind: "listChildPids", payload: undefined })).toEqual([]); // 空集合
     await host.command({ kind: "createSession", payload: { cwd: "C:\\demo", cli: "a" } });
     await host.command({ kind: "createSession", payload: { cwd: "C:\\demo", cli: "b" } });
-    await host.command({ kind: "createSession", payload: { cwd: "C:\\demo", cli: "bare" } }); // 未实现可选成员
+    await host.command({ kind: "createSession", payload: { cwd: "C:\\demo", cli: "bare" } }); // 未声明能力（未实现可选成员）
     stubOf("a").pids = [300, 100];
     stubOf("b").pids = [100, 200];
     expect(await host.command({ kind: "listChildPids", payload: undefined })).toEqual([100, 200, 300]);
