@@ -25,7 +25,7 @@ const openDbs: Array<{ close(): void }> = [];
 /** #59 草稿创建会话：打开草稿并发送首条消息（原 createSession 直建的草稿语义等价物；text 可携带剧本关键词） */
 async function createViaDraft(ctl: () => ChatController, cli: CliKind, opts?: { projectId?: string | null }, text = "默认演示"): Promise<void> {
   // issue #71 S4：经 openSessionDraft 单入口（cwd 由 projectId 解析），updateDraft 为收窄动作；#77 单一就绪态：待目录就绪自动选中模型后提交
-  const r = ctl().openSessionDraft({ projectId: opts?.projectId ?? null, cli });
+  const r = ctl().openSessionDraft({ kind: "structured", projectId: opts?.projectId ?? null, cli });
   if (!r.ok) throw new Error(`草稿打开失败：${r.reason}`);
   ctl().updateDraft({ input: text });
   await waitFor(() => {

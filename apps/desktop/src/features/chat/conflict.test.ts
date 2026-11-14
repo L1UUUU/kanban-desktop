@@ -1,16 +1,18 @@
 // 用途：主仓库并行冲突判据单测（spec I-4/#13）—— ≥2 活跃（running/waiting）同目录主仓库会话才提示；worktree/断开/空闲/PTY/异目录不计入
 import { describe, expect, it } from "vitest";
-import type { SessionView } from "./chat-store";
+import type { PtySessionView, StructuredSessionView } from "./session-view";
 import { detectMainRepoConflict, normalizeCwdKey } from "./conflict";
 
-/** 视图工厂：缺省主仓库 + 指定目录/身份/状态 */
-function view(over: Partial<SessionView> & { sessionId: string }): SessionView {
+/** 结构化视图工厂：缺省主仓库 + 指定目录/身份/状态 */
+function view(over: Partial<StructuredSessionView> & { sessionId: string }): StructuredSessionView {
   return {
+    kind: "structured",
     cli: "claude",
     title: over.title ?? over.sessionId,
     status: "idle",
     permMode: "auto",
     model: undefined,
+    modelChangePending: false,
     projectId: "p1",
     cwd: "C:\\repo",
     dirIdentity: "main",
@@ -19,8 +21,25 @@ function view(over: Partial<SessionView> & { sessionId: string }): SessionView {
     pendingApproval: null,
     lastTurnInterrupted: false,
     lastError: null,
+    skillConflicts: [],
+    skillConflictDismissed: false,
+    resumeState: { phase: "idle" },
     ...over,
-  } as SessionView;
+  };
+}
+
+/** PTY 终端视图工厂（最小行） */
+function ptyView(over: Partial<PtySessionView> & { sessionId: string }): PtySessionView {
+  return {
+    kind: "pty",
+    title: over.title ?? over.sessionId,
+    status: "idle",
+    projectId: "p1",
+    cwd: "C:\\repo",
+    dirIdentity: "main",
+    worktreeName: null,
+    ...over,
+  };
 }
 
 describe("detectMainRepoConflict（spec I-4 冲突提示条判据）", () => {
@@ -74,7 +93,7 @@ describe("detectMainRepoConflict（spec I-4 冲突提示条判据）", () => {
     expect(detectMainRepoConflict(sessions, "w")).toBeNull();
     expect(detectMainRepoConflict(sessions, "nope")).toBeNull();
     const withPty = [
-      view({ sessionId: "a", cli: "pty", status: "idle" }),
+      ptyView({ sessionId: "a", status: "idle" }),
       view({ sessionId: "b", status: "running" }),
       view({ sessionId: "c", status: "running" }),
     ];

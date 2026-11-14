@@ -1,11 +1,23 @@
 // 用途：聊天会话视图 store —— ChatEvent 按合并键归并成每会话 items（不变量 3/4 的 renderer 侧），useSyncExternalStore 兼容（快照引用稳定）；#59 起承载结构化会话草稿态
 // 行数评估（~547 行，超 500 行阈值）：主体是 applyEvent 的 ChatEvent 归并 switch（各 case 独立低交织），与会话登记/CRUD、#59 草稿态共享同一快照通知骨架（changed + 引用稳定 snapshot + 订阅），拆开只复制骨架不减耦合，本次不拆；触发条件：再承载一类独立状态域（如草稿态膨胀出独立面板状态）时按域拆分（草稿独立 store）。
 // issue #71 搭车：SessionView 族类型已 type-only 搬移 session-view.ts（单源），此处 re-export 保持既有 import 不变（过渡期）
+// arch C6：SessionView 为判别联合（kind=structured/pty），wire→view 转换单点在 session-view.ts（parseWireCli/sessionViewFromWire）
 import type { ChatEvent, CliKind, PermMode, SessionRow, SessionStatus } from "@kanban/ipc-schema";
 import { CLI_LABELS } from "../../lib/cli-catalog";
-import type { AssistantItem, SessionView, ToolItem } from "./session-view";
+import type { AssistantItem, SessionView, StructuredSessionView, ToolItem } from "./session-view";
+import { parseWireCli, sessionViewFromWire } from "./session-view";
 
-export type { AssistantItem, ChatItem, PendingApproval, ResumeState, SessionView, ToolItem, UserItem } from "./session-view";
+export type {
+  AssistantItem,
+  ChatItem,
+  PendingApproval,
+  PtySessionView,
+  ResumeState,
+  SessionView,
+  StructuredSessionView,
+  ToolItem,
+  UserItem,
+} from "./session-view";
 
 /** #46 会话创建失败信息（session:create 失败的错误形状：错误卡数据源；#59 起由草稿 submitError 构造） */
 export interface CreateFailure {
@@ -110,73 +122,69 @@ export class ChatStore {
   }
 
   registerSession(meta: SessionMeta): void {
+    const wire = parseWireCli(meta.cli);
     const existing = this.sessions.get(meta.sessionId);
-    if (existing) {
-      // 事件先到（applyEvent 占位）后注册：保留事件已累积的运行态（status/items 等），仅回填元数据
-      // （#59 起首条消息在 session:create 的 invoke 内即开始 turn，running 态可能早于注册到达）
-      existing.cli = meta.cli;
+    // 事件先到（applyEvent 占位）后注册：保留事件已累积的运行态（status/items 等），仅回填元数据
+    // （#59 起首条消息在 session:create 的 invoke 内即开始 turn，running 态可能早于注册到达）；
+    // kind 不一致的重复登记不可达（PTY 行无事件占位路径），以新行覆盖
+    if (existing && existing.kind === wire.kind) {
       existing.title = meta.title;
-      existing.permMode = meta.permMode;
-      existing.model = meta.model;
-      existing.modelChangePending = false; // #79：重登记即新会话语境，切换提示不跨登记残留
       existing.projectId = meta.projectId ?? null;
       existing.cwd = meta.cwd ?? existing.cwd;
       existing.dirIdentity = meta.dirIdentity ?? existing.dirIdentity;
       existing.worktreeName = meta.worktreeName ?? null;
-      existing.skillConflicts = meta.skillConflicts ?? [];
-      existing.skillConflictDismissed = false;
+      if (existing.kind === "structured" && wire.kind === "structured") {
+        existing.cli = wire.cli;
+        existing.permMode = meta.permMode;
+        existing.model = meta.model;
+        existing.modelChangePending = false; // #79：重登记即新会话语境，切换提示不跨登记残留
+        existing.skillConflicts = meta.skillConflicts ?? [];
+        existing.skillConflictDismissed = false;
+      }
       this.activeId = meta.sessionId;
       this.changed();
       return;
     }
-    this.sessions.set(meta.sessionId, {
-      sessionId: meta.sessionId,
-      cli: meta.cli,
-      title: meta.title,
-      status: "idle",
-      permMode: meta.permMode,
-      model: meta.model,
-      modelChangePending: false,
-      projectId: meta.projectId ?? null,
-      cwd: meta.cwd ?? null,
-      dirIdentity: meta.dirIdentity ?? "none",
-      worktreeName: meta.worktreeName ?? null,
-      items: [],
-      pendingApproval: null,
-      lastTurnInterrupted: false,
-      lastError: null,
-      skillConflicts: meta.skillConflicts ?? [],
-      skillConflictDismissed: false,
-      resumeState: { phase: "idle" },
-    });
+    this.sessions.set(
+      meta.sessionId,
+      sessionViewFromWire({
+        sessionId: meta.sessionId,
+        cli: meta.cli,
+        title: meta.title,
+        status: "idle",
+        permMode: meta.permMode,
+        model: meta.model,
+        projectId: meta.projectId ?? null,
+        cwd: meta.cwd ?? null,
+        dirIdentity: meta.dirIdentity ?? "none",
+        worktreeName: meta.worktreeName ?? null,
+        skillConflicts: meta.skillConflicts ?? [],
+      }),
+    );
     this.activeId = meta.sessionId;
     this.changed();
   }
 
   /** 重启恢复：按 DB 行登记历史会话（状态统一显示断开；不激活） */
   registerRestored(row: SessionRow): void {
-    this.sessions.set(row.id, {
-      sessionId: row.id,
-      cli: row.cli,
-      title: row.title ?? "历史会话",
-      status: "disconnected",
-      permMode: row.permMode ?? "auto",
-      // DB 无 model 列：恢复会话模型为空（undefined），chip 显示由显示层派生默认名（不写 store，issue #77）
-      model: undefined,
-      modelChangePending: false,
-      projectId: row.projectId,
-      cwd: row.cwd,
-      dirIdentity: row.dirIdentity,
-      worktreeName: row.worktreeName,
-      items: [],
-      pendingApproval: null,
-      lastTurnInterrupted: false,
-      lastError: null,
-      // #21：检测仅在创建时一次（spec E 节），重启恢复的历史会话不再检测
-      skillConflicts: [],
-      skillConflictDismissed: false,
-      resumeState: { phase: "idle" },
-    });
+    this.sessions.set(
+      row.id,
+      sessionViewFromWire({
+        sessionId: row.id,
+        cli: row.cli,
+        title: row.title ?? "历史会话",
+        status: "disconnected",
+        permMode: row.permMode ?? "auto",
+        // DB 无 model 列：恢复会话模型为空（undefined），chip 显示由显示层派生默认名（不写 store，issue #77）
+        model: undefined,
+        projectId: row.projectId,
+        cwd: row.cwd,
+        dirIdentity: row.dirIdentity,
+        worktreeName: row.worktreeName,
+        // #21：检测仅在创建时一次（spec E 节），重启恢复的历史会话不再检测
+        skillConflicts: [],
+      }),
+    );
     this.changed();
   }
 
@@ -258,10 +266,11 @@ export class ChatStore {
     this.changed();
   }
 
-  /** 本地会话设置更新（权限档位/模型 chip/标题（#94：派生与重命名标题的本地刷新出口）；modelChangePending 为 #79 切换成功标注，「下一轮起生效」提示数据源） */
-  updateSession(id: string, patch: Partial<Pick<SessionView, "permMode" | "model" | "modelChangePending" | "title">>): void {
+  /** 本地会话设置更新（权限档位/模型 chip/标题（#94：派生与重命名标题的本地刷新出口）；modelChangePending 为 #79 切换成功标注，「下一轮起生效」提示数据源）。
+   *  PTY 行直达此补丁不可达（重命名入口与摘要推送均为结构化专属，ADR 0003 PTY 豁免），kind 守卫不影响行为 */
+  updateSession(id: string, patch: Partial<Pick<StructuredSessionView, "permMode" | "model" | "modelChangePending" | "title">>): void {
     const s = this.sessions.get(id);
-    if (!s) return;
+    if (!s || s.kind !== "structured") return;
     Object.assign(s, patch);
     this.changed();
   }
@@ -281,7 +290,8 @@ export class ChatStore {
    */
   applySnapshot(id: string, events: ChatEvent[]): void {
     const s = this.sessions.get(id);
-    if (!s) return;
+    // PTY 无恢复路径（恢复引导条仅结构化会话渲染）——kind 守卫不影响行为
+    if (!s || s.kind !== "structured") return;
     s.items = [];
     s.pendingApproval = null;
     s.lastTurnInterrupted = false;
@@ -292,18 +302,18 @@ export class ChatStore {
     }
   }
 
-  /** 发送时本地回显用户消息（内容不经事件流回传，见不变量 1 的 renderer 侧补充） */
+  /** 发送时本地回显用户消息（内容不经事件流回传，见不变量 1 的 renderer 侧补充；结构化会话专属路径——PTY 无消息流） */
   appendUserMessage(id: string, text: string): void {
-    const s = this.requireView(id);
+    const s = this.requireStructuredView(id);
     userItemSeq += 1;
     s.items.push({ kind: "user", itemId: `u-${userItemSeq}`, text });
     this.changed();
   }
 
-  /** IPC 错误结果展示（如过期审批响应） */
+  /** IPC 错误结果展示（如过期审批响应；PTY 行无可渲染错误面——ChatPane 不渲染终端行，守卫不影响行为） */
   setError(id: string, code: string, message: string): void {
     const s = this.sessions.get(id);
-    if (!s) return;
+    if (!s || s.kind !== "structured") return;
     s.lastError = { code, message };
     this.changed();
   }
@@ -311,40 +321,41 @@ export class ChatStore {
   /** #46：清除会话错误（错误卡「知道了」动作：仅隐藏不影响会话） */
   clearError(id: string): void {
     const s = this.sessions.get(id);
-    if (!s || !s.lastError) return;
+    if (!s || s.kind !== "structured" || !s.lastError) return;
     s.lastError = null;
     this.changed();
   }
 
-  /** #42：恢复引导条进入「恢复中」（resume 发出后不可中断，D1） */
+  /** #42：恢复引导条进入「恢复中」（resume 发出后不可中断，D1；结构化专属——PTY 无恢复路径） */
   markResuming(id: string): void {
     const s = this.sessions.get(id);
-    if (!s) return;
+    if (!s || s.kind !== "structured") return;
     s.resumeState = { phase: "resuming" };
     this.changed();
   }
 
-  /** #42：恢复引导条进入「失败」（readHistory/resume 的 IPC 错误，供重试与复制详情） */
+  /** #42：恢复引导条进入「失败」（readHistory/resume 的 IPC 错误，供重试与复制详情；结构化专属） */
   markResumeFailed(id: string, code: string, message: string): void {
     const s = this.sessions.get(id);
-    if (!s) return;
+    if (!s || s.kind !== "structured") return;
     s.resumeState = { phase: "failed", code, message };
     this.changed();
   }
 
-  /** 用户已做出审批决定：卡片立即消失（决定即时生效；后续状态经事件流到达） */
+  /** 用户已做出审批决定：卡片立即消失（决定即时生效；后续状态经事件流到达；审批仅结构化会话产生） */
   clearApproval(id: string): void {
     const s = this.sessions.get(id);
-    if (s?.pendingApproval) {
+    if (!s || s.kind !== "structured") return;
+    if (s.pendingApproval) {
       s.pendingApproval = null;
       this.changed();
     }
   }
 
-  /** #21：关闭同名 skill 冲突提示条（仅隐藏不影响会话；冲突名保留，再次创建会话重新出现） */
+  /** #21：关闭同名 skill 冲突提示条（仅隐藏不影响会话；冲突名保留，再次创建会话重新出现；结构化专属） */
   dismissSkillConflict(id: string): void {
     const s = this.sessions.get(id);
-    if (!s || s.skillConflictDismissed) return;
+    if (!s || s.kind !== "structured" || s.skillConflictDismissed) return;
     s.skillConflictDismissed = true;
     this.changed();
   }
@@ -451,46 +462,49 @@ export class ChatStore {
   }
 
   /** 流式/运行中条目终态化：助手停光标、运行中工具置 interrupted（中断中的工具调用不自动继续、不宣称运行中） */
-  private finalizeLiveItems(s: SessionView): void {
+  private finalizeLiveItems(s: StructuredSessionView): void {
     for (const i of s.items) if (i.kind === "assistant") i.streaming = false;
     for (const i of s.items) if (i.kind === "tool" && i.status === "running") i.status = "interrupted";
   }
 
-  private findTool(s: SessionView, itemId: string): ToolItem | undefined {
+  private findTool(s: StructuredSessionView, itemId: string): ToolItem | undefined {
     return s.items.find((i): i is ToolItem => i.kind === "tool" && i.itemId === itemId);
   }
 
-  private ensureView(sessionId: string): SessionView {
-    let s = this.sessions.get(sessionId);
-    if (!s) {
-      s = {
-        sessionId,
-        cli: "fake",
-        title: "未知会话",
-        status: "idle",
-        permMode: "auto",
-        model: undefined, // 事件先至占位：模型未知（注册后回填，issue #77）
-        modelChangePending: false,
-        projectId: null,
-        cwd: null,
-        dirIdentity: "none",
-        worktreeName: null,
-        items: [],
-        pendingApproval: null,
-        lastTurnInterrupted: false,
-        lastError: null,
-        skillConflicts: [],
-        skillConflictDismissed: false,
-        resumeState: { phase: "idle" },
-      };
-      this.sessions.set(sessionId, s);
-    }
+  /** 事件先至占位（结构化专属路径：ChatEvent 仅来自结构化会话，终端事件走 updateStatus 直写）；
+   *  已登记为 PTY 的 id 收到 ChatEvent 不可达，以结构化占位覆盖维持「事件总能归并」的不变量 */
+  private ensureView(sessionId: string): StructuredSessionView {
+    const existing = this.sessions.get(sessionId);
+    if (existing?.kind === "structured") return existing;
+    const s: StructuredSessionView = {
+      kind: "structured",
+      sessionId,
+      cli: "fake",
+      title: "未知会话",
+      status: "idle",
+      permMode: "auto",
+      model: undefined, // 事件先至占位：模型未知（注册后回填，issue #77）
+      modelChangePending: false,
+      projectId: null,
+      cwd: null,
+      dirIdentity: "none",
+      worktreeName: null,
+      items: [],
+      pendingApproval: null,
+      lastTurnInterrupted: false,
+      lastError: null,
+      skillConflicts: [],
+      skillConflictDismissed: false,
+      resumeState: { phase: "idle" },
+    };
+    this.sessions.set(sessionId, s);
     return s;
   }
 
-  private requireView(id: string): SessionView {
+  /** 取结构化会话视图（缺失即抛；PTY 行无消息回显路径） */
+  private requireStructuredView(id: string): StructuredSessionView {
     const s = this.sessions.get(id);
-    if (!s) throw new Error(`会话未登记：${id}`);
+    if (!s || s.kind !== "structured") throw new Error(`会话未登记：${id}`);
     return s;
   }
 

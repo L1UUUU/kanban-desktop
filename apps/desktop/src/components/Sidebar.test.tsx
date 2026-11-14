@@ -2,14 +2,15 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProjectRow } from "@kanban/ipc-schema";
-import type { SessionView } from "../features/chat/chat-store";
+import type { PtySessionView, StructuredSessionView } from "../features/chat/chat-store";
 import { Sidebar } from "./Sidebar";
 
 const P1: ProjectRow = { id: "p-1", name: "alpha", canonicalPath: "C:\\alpha", status: "ok", createdAt: "2026-11-05T00:00:00.000Z" };
 const P2: ProjectRow = { id: "p-2", name: "beta", canonicalPath: "C:\\beta", status: "missing", createdAt: "2026-11-05T01:00:00.000Z" };
 
-function makeSession(partial: Partial<SessionView> = {}): SessionView {
+function makeSession(partial: Partial<StructuredSessionView> = {}): StructuredSessionView {
   return {
+    kind: "structured",
     sessionId: "s-1",
     cli: "codex",
     title: "调研 Vite 配置",
@@ -28,6 +29,21 @@ function makeSession(partial: Partial<SessionView> = {}): SessionView {
     skillConflicts: [],
     skillConflictDismissed: false,
     resumeState: { phase: "idle" },
+    ...partial,
+  };
+}
+
+/** PTY 终端视图工厂（最小行，缺省挂当前项目） */
+function makePtySession(partial: Partial<PtySessionView> = {}): PtySessionView {
+  return {
+    kind: "pty",
+    sessionId: "tty-1",
+    title: "终端 · pwsh",
+    status: "idle",
+    projectId: "p-1",
+    cwd: null,
+    dirIdentity: "none",
+    worktreeName: null,
     ...partial,
   };
 }
@@ -162,8 +178,8 @@ describe("侧栏会话区（原型一致项 3）", () => {
       currentProjectId: "p-1",
       sessions: [
         makeSession(),
-        makeSession({ sessionId: "tty-1", cli: "pty", title: "终端 · pwsh", status: "idle", projectId: "p-1" }),
-        makeSession({ sessionId: "tty-2", cli: "pty", title: "终端 · claude", status: "disconnected", projectId: "p-1" }),
+        makePtySession(),
+        makePtySession({ sessionId: "tty-2", title: "终端 · claude", status: "disconnected" }),
       ],
       activeId: "tty-1",
       onSelect,
@@ -210,7 +226,7 @@ describe("侧栏会话行 hover「归档」（#58 spec #57）", () => {
       currentProjectId: "p-1",
       sessions: [
         makeSession(),
-        makeSession({ sessionId: "tty-1", cli: "pty", title: "终端 · pwsh", status: "idle", projectId: "p-1" }),
+        makePtySession(),
       ],
       onArchiveSession,
     });
@@ -230,7 +246,7 @@ describe("侧栏会话行 hover「删除」+ 二次确认弹窗（#62 spec #57 /
       currentProjectId: "p-1",
       sessions: [
         makeSession(),
-        makeSession({ sessionId: "tty-1", cli: "pty", title: "终端 · pwsh", status: "idle", projectId: "p-1" }),
+        makePtySession(),
       ],
       onDeleteSession,
     });
@@ -336,7 +352,7 @@ describe("侧栏会话行 hover 铅笔行内重命名（#94 / ADR 0003：手动�
       currentProjectId: "p-1",
       sessions: [
         makeSession(),
-        makeSession({ sessionId: "tty-1", cli: "pty", title: "终端 · pwsh", status: "idle", projectId: "p-1" }),
+        makePtySession(),
       ],
       onRenameSession,
     });

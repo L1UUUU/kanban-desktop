@@ -230,7 +230,7 @@ async function createViaDraft(
   opts?: { projectId?: string | null; requirementId?: string },
   text = "默认演示",
 ): Promise<void> {
-  const r = ctl().openSessionDraft({ projectId: opts?.projectId ?? null, cli, requirementId: opts?.requirementId });
+  const r = ctl().openSessionDraft({ kind: "structured", projectId: opts?.projectId ?? null, cli, requirementId: opts?.requirementId });
   if (!r.ok) throw new Error(`草稿打开失败：${r.reason}`);
   ctl().updateDraft({ input: text });
   // 单一就绪态（#77）：模型目录就绪并自动选中默认项（combobox effect 写回草稿）后才可提交
@@ -623,7 +623,7 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     const t = mount();
     await t.flush();
     await act(async () => {
-      t.ctl().openSessionDraft({ projectId: null, cli: "fake" }); // cwd 经 resolveCwd 回落注入的演示目录
+      t.ctl().openSessionDraft({ kind: "structured", projectId: null, cli: "fake" }); // cwd 经 resolveCwd 回落注入的演示目录
     });
     // 草稿就位：中央区草稿面板，侧栏无会话行
     expect(screen.getByTestId("draft-hint").textContent).toContain("新会话 · Fake");
@@ -724,7 +724,7 @@ describe("聊天区（原型一致项 5/6/7）", () => {
     await t.flush();
     const before = t.ctl().sessions.length;
     await act(async () => {
-      const r = t.ctl().openSessionDraft({ projectId: "ghost", cli: "claude" });
+      const r = t.ctl().openSessionDraft({ kind: "structured", projectId: "ghost", cli: "claude" });
       expect(r).toEqual({ ok: false, reason: "project-missing" }); // cwd 解析失败单点拒绝
     });
     await t.flush();
@@ -1557,7 +1557,7 @@ describe("结构化会话草稿创建（#59：点「＋」只开草稿，首条�
   it("点「＋」选 CLI：只开草稿——无 session:create 请求（不落库、不起 CLI）、侧栏无新行、可输入可改权限/模型", async () => {
     const { t, projectId } = await bootWithProject("kb-ws-draft-open-");
     await act(async () => {
-      t.ctl().openSessionDraft({ projectId, cli: "claude" });
+      t.ctl().openSessionDraft({ kind: "structured", projectId, cli: "claude" });
     });
     // 不落库、不起 CLI；侧栏无行；草稿可交互（输入 + 权限/模型控件）
     expect(screen.queryAllByTestId("session-row")).toHaveLength(0);
@@ -1585,7 +1585,7 @@ describe("结构化会话草稿创建（#59：点「＋」只开草稿，首条�
     await t.flush();
     const projectId = await registerProject(t, projDir);
     await act(async () => {
-      t.ctl().openSessionDraft({ projectId, cli: "claude" });
+      t.ctl().openSessionDraft({ kind: "structured", projectId, cli: "claude" });
     });
     await act(async () => {
       send("注定失败的首条");
@@ -1611,12 +1611,12 @@ describe("结构化会话草稿创建（#59：点「＋」只开草稿，首条�
   it("再点「＋」：替换现有草稿并显示明确提示；原输入不保留", async () => {
     const { t, projectId } = await bootWithProject("kb-ws-draft-replace-");
     await act(async () => {
-      t.ctl().openSessionDraft({ projectId, cli: "claude" });
+      t.ctl().openSessionDraft({ kind: "structured", projectId, cli: "claude" });
     });
     // 在草稿输入框写入未发送的内容
     fireEvent.change(screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…"), { target: { value: "旧草稿的输入" } });
     await act(async () => {
-      t.ctl().openSessionDraft({ projectId, cli: "codex" });
+      t.ctl().openSessionDraft({ kind: "structured", projectId, cli: "codex" });
     });
     expect(screen.getByTestId("draft-hint").textContent).toContain("新会话 · Codex");
     expect(screen.getByTestId("draft-hint").textContent).toContain("已替换上一个草稿");
@@ -1630,7 +1630,7 @@ describe("结构化会话草稿创建（#59：点「＋」只开草稿，首条�
     });
     const fakeId = t.ctl().activeId;
     await act(async () => {
-      t.ctl().openSessionDraft({ projectId, cli: "claude" });
+      t.ctl().openSessionDraft({ kind: "structured", projectId, cli: "claude" });
     });
     fireEvent.change(screen.getByPlaceholderText("输入消息，/ 开头触发 Skill…"), { target: { value: "将被丢弃的输入" } });
     // 点侧栏会话行切换：草稿丢弃（无确认弹层）、输入消失、回到会话视图
@@ -1857,7 +1857,8 @@ describe("模型目录全链（#77：combobox 就绪态/阻塞/手输/恢复派�
     const model = screen.getByRole("combobox") as HTMLInputElement;
     await waitFor(() => expect(model.value).toBe("Fake 标准模型"));
     expect(model.value).not.toContain("默认模型"); // 无「默认模型」占位字样
-    expect(t.ctl().activeSession?.model).toBeUndefined(); // 派生显示不写入 store
+    const active = t.ctl().activeSession; // 恢复会话为结构化行（combobox 已断言派生显示）
+    expect(active?.kind === "structured" ? active.model : undefined).toBeUndefined(); // 派生显示不写入 store
   });
 });
 
@@ -1989,7 +1990,7 @@ describe("启动自动选中（issue #86：回到当前项目最近会话，只�
     const t = mount(transport);
     await t.flush(); // project:list 已就位；bootstrap 等 session:list 挂起中
     await act(async () => {
-      const r = t.ctl().openSessionDraft({ projectId: "p-1", cli: "claude" }); // 用户先手开草稿
+      const r = t.ctl().openSessionDraft({ kind: "structured", projectId: "p-1", cli: "claude" }); // 用户先手开草稿
       expect(r.ok).toBe(true);
     });
     await act(async () => {
@@ -2014,7 +2015,7 @@ describe("启动自动选中（issue #86：回到当前项目最近会话，只�
     const t = mount(transport);
     await t.flush();
     await act(async () => {
-      const r = t.ctl().openSessionDraft({ projectId: "p-1", cli: "pty" }); // 用户先手开 PTY 终端草稿
+      const r = t.ctl().openSessionDraft({ kind: "pty", projectId: "p-1" }); // 用户先手开 PTY 终端草稿
       expect(r.ok).toBe(true);
     });
     await act(async () => {
@@ -2190,7 +2191,7 @@ describe("斜杠派发闭环（#92：发送期派发判定 → 透传/展开，�
     await t.flush();
     const projectId = await registerProject(t, projDir);
     await act(async () => {
-      const r = t.ctl().openSessionDraft({ projectId, cli: "codex" });
+      const r = t.ctl().openSessionDraft({ kind: "structured", projectId, cli: "codex" });
       if (!r.ok) throw new Error("codex 草稿打开失败");
     });
     // 菜单可见（codex 目录模拟 → 项目级 prompt 进菜单）

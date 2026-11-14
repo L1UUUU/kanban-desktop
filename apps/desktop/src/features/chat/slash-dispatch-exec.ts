@@ -67,11 +67,12 @@ async function invokeExpand(
  */
 export async function dispatchSessionSend(env: SlashDispatchEnv, sessionId: string, text: string): Promise<boolean> {
   const session = env.store.getSession(sessionId);
-  if (!session || text.trim().length === 0) return true;
+  // 斜杠派发为结构化会话专属（composer 不渲染 PTY 行）；kind 收窄后 cli 即 CliKind
+  if (!session || session.kind !== "structured" || text.trim().length === 0) return true;
   const action = resolveSlashDispatch({
     text,
-    cli: session.cli as CliKind,
-    commands: snapshotCommands(env, session.cli as CliKind, session.cwd),
+    cli: session.cli,
+    commands: snapshotCommands(env, session.cli, session.cwd),
   });
   switch (action.action) {
     case "send-text":

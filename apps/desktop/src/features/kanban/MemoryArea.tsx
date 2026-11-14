@@ -1,17 +1,15 @@
 // 用途：详情面板「需求经验」区（#33，spec #27 I 节原型一致项 3–7 / 原型演示 ②③）—— 提取按钮（零 structured 关联会话禁用 + tooltip；进行中替换为四步进度 + 段 i/n + 取消）/ 批次卡（元信息 + 缺失警示 + failed 重试 + cancelled 灰显）/ proposed 提示条与对比弹层 / 候选列表（跨批次待审累计 + 已处置按批次折叠 + 冲突提示 + 三动作 + 去编辑）/ 候选编辑弹层；数据与动作经 use-requirement-memory controller 注入
 import { useState } from "react";
-import type { MemoryBatchRow, MemoryCandidateRow, MemoryResult, MemorySummaryChoice, RequirementCardRow } from "@kanban/ipc-schema";
+import type { CliKind, MemoryBatchRow, MemoryCandidateRow, MemoryResult, MemorySummaryChoice, RequirementCardRow } from "@kanban/ipc-schema";
 import { sessionCliLabel } from "../../lib/cli-catalog";
 import { CandidateEditDialog } from "./CandidateEditDialog";
 import { SummaryCompareDialog } from "./SummaryCompareDialog";
 import type { RequirementMemoryController } from "./use-requirement-memory";
 
-/** MemoryArea 所需的会话视图投影（结构化会话数判定 + 溯源 cli 标注） */
-export interface MemorySessionRef {
-  sessionId: string;
-  cli: string;
-  title: string;
-}
+/** MemoryArea 所需的会话视图投影（arch C6 判别联合结构子集：结构化会话数判定 + 溯源 cli 标注；SessionView 可直接传入） */
+export type MemorySessionRef =
+  | { sessionId: string; title: string; kind: "structured"; cli: CliKind }
+  | { sessionId: string; title: string; kind: "pty" };
 
 export interface MemoryAreaProps {
   /** 当前需求行（sessions = 已关联会话 id） */
@@ -101,10 +99,10 @@ export function MemoryArea({ card, memory, sessions = [] }: MemoryAreaProps) {
   const progress = memory.progress;
   const runningBatch = data?.batches.find((b) => b.status === "running") ?? null;
 
-  // structured 关联会话数：PTY 终端不参与提取（US2）；会话视图缺失时降级按关联数>0（后端 no-sessions 拒绝兜底）
+  // structured 关联会话数：PTY 终端不参与提取（US2；判别联合 kind 收窄）；会话视图缺失时降级按关联数>0（后端 no-sessions 拒绝兜底）
   const structuredCount = card.sessions.filter((id) => {
     const s = sessions.find((x) => x.sessionId === id);
-    return s ? s.cli !== "pty" : sessions.length === 0;
+    return s ? s.kind === "structured" : sessions.length === 0;
   }).length;
   const noStructuredSessions = card.sessions.length === 0 || (sessions.length > 0 && structuredCount === 0);
 

@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChatEvent, ChatEventSeed } from "@kanban/ipc-schema";
 import { ChatStore } from "./chat-store";
+import type { StructuredSessionView } from "./session-view";
 
 /** 构造 ChatEvent 字面量（seq 递增），作为独立于实现的输入源 */
 function ev(seq: number, e: ChatEventSeed): ChatEvent {
@@ -12,6 +13,13 @@ function makeStore() {
   const store = new ChatStore();
   store.registerSession({ sessionId: "s-1", cli: "fake", title: "演示会话", permMode: "auto" });
   return store;
+}
+
+/** 取结构化会话视图（收窄断言：本套事件归并/草稿用例均为结构化会话） */
+function structured(store: ChatStore, id: string): StructuredSessionView {
+  const s = store.getSession(id);
+  if (!s || s.kind !== "structured") throw new Error(`会话 ${id} 非结构化视图`);
+  return s;
 }
 
 describe("chat-store 恢复会话登记（#7 重启恢复）", () => {
@@ -33,7 +41,7 @@ describe("chat-store 恢复会话登记（#7 重启恢复）", () => {
       dirIdentity: "worktree",
       worktreeName: "poc7",
     });
-    const s = store.getSession("s-old")!;
+    const s = structured(store, "s-old");
     expect(s.status).toBe("disconnected");
     expect(s).toMatchObject({ cli: "claude", title: "新会话 · Claude", projectId: "p-1", permMode: "ask" });
     expect(s.model, "DB 无 model 列：恢复会话模型为空（chip 显示层派生默认名，issue #77）").toBeUndefined();
@@ -65,7 +73,7 @@ describe("chat-store 事件归并", () => {
     store.applyEvent(ev(1, { type: "message_delta", itemId: "m-1", partId: "0", delta: "你" }));
     store.applyEvent(ev(2, { type: "message_delta", itemId: "m-1", partId: "0", delta: "好" }));
     store.applyEvent(ev(3, { type: "message_delta", itemId: "m-1", partId: "0", delta: "，世界" }));
-    const s = store.getSession("s-1")!;
+    const s = structured(store, "s-1");
     expect(s.items).toHaveLength(1);
     expect(s.items[0]).toMatchObject({ kind: "assistant", itemId: "m-1", text: "你好，世界", streaming: true });
   });
@@ -74,7 +82,7 @@ describe("chat-store 事件归并", () => {
     const store = makeStore();
     store.applyEvent(ev(1, { type: "message_delta", itemId: "m-1", partId: "0", delta: "第一段" }));
     store.applyEvent(ev(2, { type: "message_delta", itemId: "m-2", partId: "0", delta: "第二段" }));
-    const s = store.getSession("s-1")!;
+    const s = structured(store, "s-1");
     expect(s.items.map((i) => (i.kind === "assistant" ? i.text : i.kind))).toEqual(["第一段", "第二段"]);
   });
 
@@ -82,7 +90,7 @@ describe("chat-store 事件归并", () => {
     const store = makeStore();
     store.applyEvent(ev(1, { type: "message_delta", itemId: "m-1", partId: "0", delta: "hi" }));
     store.applyEvent(ev(2, { type: "turn_completed" }));
-    expect((store.getSession("s-1")!.items[0] as { streaming: boolean }).streaming).toBe(false);
+    expect((structured(store, "s-1").items[0] as { streaming: boolean }).streaming).toBe(false);
   });
 
   it("工具生命周期：started(running) → update(输出追加) → completed(终态+时长+输出追加)", () => {
@@ -90,7 +98,7 @@ describe("chat-store 事件归并", () => {
     store.applyEvent(ev(1, { type: "tool_started", itemId: "tl-1", tool: "Bash", argsSummary: "pnpm test" }));
     store.applyEvent(ev(2, { type: "tool_update", itemId: "tl-1", outputDelta: " ✓ 1 passed\n" }));
     store.applyEvent(ev(3, { type: "tool_completed", itemId: "tl-1", status: "completed", durationMs: 3600, output: "Tests 13 passed" }));
-    const tool = store.getSession("s-1")!.items[0];
+    const tool = structured(store, "s-1").items[0];
     expect(tool).toMatchObject({
       kind: "tool",
       tool: "Bash",
@@ -112,9 +120,9 @@ describe("chat-store 事件归并", () => {
         suggestions: [{ kind: "addRules", label: "允许规则", detail: "Edit(src/**)" }],
       }),
     );
-    expect(store.getSession("s-1")!.pendingApproval).toMatchObject({ requestId: "ap-1", command: "Edit x.ts" });
+    expect(structured(store, "s-1").pendingApproval).toMatchObject({ requestId: "ap-1", command: "Edit x.ts" });
     store.applyEvent(ev(3, { type: "approval_expired", requestId: "ap-1", reason: "timed_out" }));
-    expect(store.getSession("s-1")!.pendingApproval).toBeNull();
+    expect(structured(store, "s-1").pendingApproval).toBeNull();
     // 新 turn 清残留审批（原型 L230）；中断置取消标记
     store.applyEvent(
       ev(4, {
@@ -126,26 +134,26 @@ describe("chat-store 事件归并", () => {
       }),
     );
     store.applyEvent(ev(5, { type: "turn_interrupted", reason: "user" }));
-    const s = store.getSession("s-1")!;
+    const s = structured(store, "s-1");
     expect(s.pendingApproval).toBeNull();
     expect(s.lastTurnInterrupted).toBe(true);
     store.applyEvent(ev(6, { type: "turn_started", turnId: "t-2" }));
-    expect(store.getSession("s-1")!.lastTurnInterrupted).toBe(false);
+    expect(structured(store, "s-1").lastTurnInterrupted).toBe(false);
   });
 
   it("session_error 记录错误；下一 turn_started 清除", () => {
     const store = makeStore();
     store.applyEvent(ev(1, { type: "session_error", code: "CLI_EXIT", message: "进程退出" }));
-    expect(store.getSession("s-1")!.lastError).toEqual({ code: "CLI_EXIT", message: "进程退出" });
+    expect(structured(store, "s-1").lastError).toEqual({ code: "CLI_EXIT", message: "进程退出" });
     store.applyEvent(ev(2, { type: "turn_started", turnId: "t-9" }));
-    expect(store.getSession("s-1")!.lastError).toBeNull();
+    expect(structured(store, "s-1").lastError).toBeNull();
   });
 
   it("用户消息为 renderer 本地回显（ChatEvent 无 user 成员）；未知会话事件自动建占位会话", () => {
     const store = new ChatStore();
     store.registerSession({ sessionId: "s-1", cli: "fake", title: "A", permMode: "auto" });
     store.appendUserMessage("s-1", "帮我拆类型");
-    expect(store.getSession("s-1")!.items[0]).toMatchObject({ kind: "user", text: "帮我拆类型" });
+    expect(structured(store, "s-1").items[0]).toMatchObject({ kind: "user", text: "帮我拆类型" });
     store.applyEvent(
       ({ ...ev(1, { type: "session_status", status: "running" }), sessionId: "s-ghost" }) as ChatEvent,
     );
@@ -215,8 +223,8 @@ describe("chat-store 断开会话恢复（#9：readHistory 快照 + 实时增量
     restored.applySnapshot("s-1", fullLog.slice(0, k));
     for (const e of fullLog.slice(k)) restored.applyEvent(e);
 
-    const a = whole.getSession("s-1")!;
-    const b = restored.getSession("s-1")!;
+    const a = structured(whole, "s-1");
+    const b = structured(restored, "s-1");
     expect(b.items).toEqual(a.items); // 条目级终态相等（同一合并键归并，快照/实时无分叉）
     expect(b.items).toHaveLength(3); // m-1 + 工具卡 + m-2（两条 delta 合并为一条）
   });
@@ -224,10 +232,10 @@ describe("chat-store 断开会话恢复（#9：readHistory 快照 + 实时增量
   it("applySnapshot 跳过状态类事件：断开态不被历史 session_status 冒充（resume 后由实时流驱动）", () => {
     const store = makeRestored();
     store.applySnapshot("s-1", fullLog); // 日志末尾有 session_status(idle)
-    expect(store.getSession("s-1")!.status).toBe("disconnected");
+    expect(structured(store, "s-1").status).toBe("disconnected");
     // resume 成功：实时 session_status(idle) 到达后转正常态
     store.applyEvent(ev(12, { type: "session_status", status: "idle" }));
-    expect(store.getSession("s-1")!.status).toBe("idle");
+    expect(structured(store, "s-1").status).toBe("idle");
   });
 
   it("applySnapshot 跳过 session_error/session_exit（#41 钉住）：历史错误不随快照重建复活", () => {
@@ -239,8 +247,8 @@ describe("chat-store 断开会话恢复（#9：readHistory 快照 + 实时增量
       ev(4, { type: "turn_completed" }),
     ]);
     // 快照中的错误/退出事件不冒充当前错误（实时错误经事件流到达；resume 后状态由实时 session_status 驱动）
-    expect(store.getSession("s-1")!.lastError).toBeNull();
-    expect(store.getSession("s-1")!.items).toHaveLength(0); // turn_started/completed 不产条目
+    expect(structured(store, "s-1").lastError).toBeNull();
+    expect(structured(store, "s-1").items).toHaveLength(0); // turn_started/completed 不产条目
   });
 });
 
@@ -269,11 +277,11 @@ describe("chat-store 恢复引导三态（#42：banner 状态机 idle/resuming/f
 
   it("登记即待恢复（idle）；markResuming → resuming；markResumeFailed → failed（附 IPC 错误码与消息）", () => {
     const store = makeDisconnected();
-    expect(store.getSession("s-1")!.resumeState).toEqual({ phase: "idle" });
+    expect(structured(store, "s-1").resumeState).toEqual({ phase: "idle" });
     store.markResuming("s-1");
-    expect(store.getSession("s-1")!.resumeState).toEqual({ phase: "resuming" });
+    expect(structured(store, "s-1").resumeState).toEqual({ phase: "resuming" });
     store.markResumeFailed("s-1", "E_SESSION_NOT_FOUND", "原生历史文件不可读");
-    expect(store.getSession("s-1")!.resumeState).toEqual({
+    expect(structured(store, "s-1").resumeState).toEqual({
       phase: "failed",
       code: "E_SESSION_NOT_FOUND",
       message: "原生历史文件不可读",
@@ -286,11 +294,11 @@ describe("chat-store 恢复引导三态（#42：banner 状态机 idle/resuming/f
     store.markResumeFailed("s-1", "E_INTERNAL", "x");
     store.markResuming("s-1"); // 失败后重试
     store.applyEvent(ev(1, { type: "session_status", status: "idle" })); // resume 成功的实时回流
-    expect(store.getSession("s-1")!.resumeState).toEqual({ phase: "idle" });
-    expect(store.getSession("s-1")!.status).toBe("idle");
+    expect(structured(store, "s-1").resumeState).toEqual({ phase: "idle" });
+    expect(structured(store, "s-1").status).toBe("idle");
     // 生命周期继续（再断开）：引导条重新从待恢复开始，不残留旧失败态
     store.applyEvent(ev(2, { type: "session_status", status: "disconnected" }));
-    expect(store.getSession("s-1")!.resumeState).toEqual({ phase: "idle" });
+    expect(structured(store, "s-1").resumeState).toEqual({ phase: "idle" });
   });
 
   it("未登记会话 markResuming/markResumeFailed 安全无操作", () => {
@@ -311,7 +319,7 @@ describe("chat-store CLI 异常退出终态化（#13/spec H：不崩溃、不自
     // CLI 进程死亡：session_exit + disconnected（三 Adapter 的死亡链顺序）
     store.applyEvent(ev(5, { type: "session_exit", exitCode: 1, reason: "codex app-server 已退出" }));
     store.applyEvent(ev(6, { type: "session_status", status: "disconnected" }));
-    const s = store.getSession("s-1")!;
+    const s = structured(store, "s-1");
     expect(s.items.find((i) => i.kind === "assistant")!.streaming).toBe(false); // 不宣称运行中
     expect(s.items.find((i) => i.kind === "tool")).toMatchObject({ status: "interrupted" }); // 中断中的工具不自动继续
     expect(s.pendingApproval).toBeNull();
@@ -325,7 +333,7 @@ describe("chat-store CLI 异常退出终态化（#13/spec H：不崩溃、不自
     store.applyEvent(ev(1, { type: "turn_started", turnId: "t1" }));
     store.applyEvent(ev(2, { type: "tool_started", itemId: "tl1", tool: "commandExecution", argsSummary: "x" }));
     store.applyEvent(ev(3, { type: "session_status", status: "disconnected" }));
-    const s = store.getSession("s-1")!;
+    const s = structured(store, "s-1");
     expect(s.items.find((i) => i.kind === "tool")).toMatchObject({ status: "interrupted" });
     expect(s.lastError).toBeNull();
   });
@@ -335,9 +343,9 @@ describe("chat-store 会话内错误清除（#46）", () => {
   it("clearError：清除会话 lastError（错误卡「知道了」动作数据源）", () => {
     const store = makeStore();
     store.setError("s-1", "E_INTERNAL", "x");
-    expect(store.getSession("s-1")!.lastError).not.toBeNull();
+    expect(structured(store, "s-1").lastError).not.toBeNull();
     store.clearError("s-1");
-    expect(store.getSession("s-1")!.lastError).toBeNull();
+    expect(structured(store, "s-1").lastError).toBeNull();
   });
 });
 

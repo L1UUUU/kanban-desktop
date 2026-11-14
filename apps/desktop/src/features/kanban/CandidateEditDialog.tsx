@@ -94,7 +94,7 @@ export function CandidateEditDialog({ candidate, mode, sessions = [], onClose, o
             ? candidate.sourceSessionIds
                 .map((id) => {
                   const s = sessions.find((x) => x.sessionId === id);
-                  return s ? `${sessionCliLabel(s.cli)} · ${shortId(id)}` : shortId(id);
+                  return s ? `${s.kind === "pty" ? "PTY" : sessionCliLabel(s.cli)} · ${shortId(id)}` : shortId(id);
                 })
                 .join("、")
             : "（未记录）"}

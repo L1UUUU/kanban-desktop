@@ -1,7 +1,7 @@
 // 用途：侧栏 —— 项目区（注册引导/项目行切换/悬浮「＋」CLI 新建菜单）+ 结构化会话与 PTY 终端两组会话行（CLI 色点/目录徽标/状态徽标/需求徽标/PTY 停止按钮，按当前项目过滤）+ 底部运行信息（原型一致项 1/2/3/6；PTY 实体 #12；REQ 徽标 #20；hover 归档 #58；hover 删除+二次确认 #62；分组标题语义澄清 #87；#94 结构化行 hover 铅笔行内重命名）
 import { Fragment, useRef, useState, type ReactNode } from "react";
 import type { AppInfo, CliKind, ProjectRow } from "@kanban/ipc-schema";
-import type { SessionView } from "../features/chat/chat-store";
+import type { PtySessionView, SessionView, StructuredSessionView } from "../features/chat/chat-store";
 import { StatusBadge } from "../features/chat/components/StatusBadge";
 import { CLI_DOT_CLS, NEW_MENU_CLIS } from "../lib/cli-catalog";
 import { CLI_NOT_INSTALLED_HINT, isCliUnavailable, useCliInstallStatus } from "../lib/use-cli-status";
@@ -145,9 +145,9 @@ export function Sidebar({
   const scopedSessions = sessions.filter((s) =>
     currentProjectId ? s.projectId === currentProjectId : s.projectId === null,
   );
-  // 两组并列：结构化会话 / PTY 终端（cli=pty，spec I-1）
-  const structured = scopedSessions.filter((s) => s.cli !== "pty");
-  const ptySessions = scopedSessions.filter((s) => s.cli === "pty");
+  // 两组并列：结构化会话 / PTY 终端（判别联合按 kind 分组，spec I-1）
+  const structured = scopedSessions.filter((s): s is StructuredSessionView => s.kind === "structured");
+  const ptySessions = scopedSessions.filter((s): s is PtySessionView => s.kind === "pty");
 
   return (
     <aside className="relative flex flex-col overflow-y-auto border-r border-border bg-card py-2.5">

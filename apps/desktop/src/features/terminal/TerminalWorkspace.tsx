@@ -1,5 +1,5 @@
 // 用途：PTY 会话中央面板 —— 活跃终端渲染 TerminalPanel + 顶栏（cwd 与「⏹ 停止终端」= 用户显式终止唯一入口）；#60 草稿态：提示行 + 可交互 xterm（首输入触发创建，失败保留缓冲）；草稿与正式会话共用同一挂载树（draft→live 转换不卸载 TerminalPanel，输入焦点不丢字）；从未挂载过的断开会话（重启恢复）显示断开占位
-import type { SessionView } from "../chat/session-view";
+import type { PtySessionView } from "../chat/session-view";
 import type { TerminalDraftSnapshot } from "./terminal-draft";
 import { TerminalPanel } from "./TerminalPanel";
 import type { TerminalManager } from "./TerminalManager";
@@ -10,8 +10,8 @@ export function TerminalWorkspace({
   manager,
   onKill,
 }: {
-  /** 活跃 PTY 会话（草稿打开时可为 null） */
-  session: SessionView | null;
+  /** 活跃 PTY 会话（草稿打开时可为 null；arch C6：本面板只接收 PTY 终端行） */
+  session: PtySessionView | null;
   /** #60：PTY 终端草稿（存在时优先呈现：草稿提示 + 可交互面板，无停止按钮） */
   draft?: TerminalDraftSnapshot | null;
   manager: TerminalManager;

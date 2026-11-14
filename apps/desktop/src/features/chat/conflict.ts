@@ -15,11 +15,12 @@ export function normalizeCwdKey(cwd: string): string {
  */
 export function detectMainRepoConflict(sessions: SessionView[], activeId: string | null): string[] | null {
   const current = sessions.find((s) => s.sessionId === activeId);
-  if (!current || current.cli === "pty" || current.dirIdentity !== "main" || !current.cwd) return null;
+  // PTY 行不计入（判别联合 kind 收窄）
+  if (!current || current.kind !== "structured" || current.dirIdentity !== "main" || !current.cwd) return null;
   const key = normalizeCwdKey(current.cwd);
   const group = sessions.filter(
     (s) =>
-      s.cli !== "pty" &&
+      s.kind === "structured" &&
       s.dirIdentity === "main" &&
       !!s.cwd &&
       normalizeCwdKey(s.cwd) === key &&

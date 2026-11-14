@@ -1,6 +1,6 @@
 // 用途：聊天工作区 —— useChatController + useProjects 接线侧栏与中央区（transport 可注入：生产 window.api，测试 FakeAdapter 直连；活跃会话为 PTY 时中央渲染终端面板；#59/#60 起「＋」/卡片建会话只开草稿（结构化首条消息、PTY 首输入才创建）；#18 起中央区在聊天/看板视图间切换，本组件常挂 → 会话与 CLI 生命周期与视图切换无关；issue #71 起草稿互斥/cwd 解析/项目提示内聚于 openSessionDraft，终端草稿机制由会话控制器承载）
 import { useCallback, useEffect, type ReactNode } from "react";
-import type { CliKind, RequirementCardRow } from "@kanban/ipc-schema";
+import type { RequirementCardRow } from "@kanban/ipc-schema";
 import { Sidebar } from "../../components/Sidebar";
 import type { ProjectsController } from "../projects/use-projects";
 import type { ChatTransport } from "../../lib/kanban-api";
@@ -10,7 +10,7 @@ import { usePanelSize, useViewportSize } from "../../lib/use-panel-size";
 import { ChatPane } from "./ChatPane";
 import { DraftPane } from "./components/DraftPane";
 import { detectMainRepoConflict } from "./conflict";
-import { resolveSessionCwd, useChatController, type ChatController } from "./use-chat";
+import { resolveSessionCwd, useChatController, type ChatController, type SessionDraftCli } from "./use-chat";
 import { KanbanWorkspace } from "../kanban/KanbanWorkspace";
 import type { KanbanController } from "../kanban/use-kanban";
 import { TerminalWorkspace } from "../terminal/TerminalWorkspace";
@@ -57,7 +57,7 @@ export function ChatWorkspace({
   const projectList = projects.projects;
   const demoCwdValue = demoCwd ?? null;
   const resolveCwd = useCallback(
-    (projectId: string | null, cli: CliKind | "pty") => resolveSessionCwd(projectList, projectId, cli, demoCwdValue),
+    (projectId: string | null, cli: SessionDraftCli) => resolveSessionCwd(projectList, projectId, cli, demoCwdValue),
     [projectList, demoCwdValue],
   );
   const setNotice = projects.setNotice;
@@ -86,12 +86,12 @@ export function ChatWorkspace({
   const conflictTitles = detectMainRepoConflict(controller.sessions, controller.activeId);
 
   // #20/#59 卡片建会话：打开草稿（cwd 解析/互斥/提示内聚于 openSessionDraft；需求关联随首条消息落到新会话）
-  const createSessionForCard = (cli: CliKind | "pty", card: RequirementCardRow): void => {
+  const createSessionForCard = (cli: SessionDraftCli, card: RequirementCardRow): void => {
     if (!card.projectId) {
       projects.setNotice("新建失败：需求未归属项目");
       return;
     }
-    const r = controller.openSessionDraft({ projectId: card.projectId, cli, requirementId: card.id });
+    const r = controller.openSessionDraft({ ...cli, projectId: card.projectId, requirementId: card.id });
     if (r.ok) onSetView?.("chat"); // 草稿在中央区：从看板/记忆等视图发起时带回
   };
 
@@ -125,11 +125,11 @@ export function ChatWorkspace({
         onCreateSession={(projectId, cli) => {
           // #59：点「＋」只打开草稿（不 invoke、不落库、侧栏无新行）；cwd 解析/项目不存在提示/
           // 互斥替换内聚于 openSessionDraft（项目查不到不回退任何路径——真实 CLI 拒绝并提示，Fake 回落演示 cwd）
-          void controller.openSessionDraft({ projectId, cli });
+          void controller.openSessionDraft({ kind: "structured", projectId, cli });
         }}
         onCreatePtySession={(projectId) => {
           // #60：点「＋」只开终端草稿——首输入才创建（不落库、不进侧栏、不起进程）
-          void controller.openSessionDraft({ projectId, cli: "pty" });
+          void controller.openSessionDraft({ kind: "pty", projectId });
         }}
         onKillTerminal={controller.terminals.kill}
         onArchiveSession={(sessionId) => void controller.archiveSession(sessionId)}
@@ -208,11 +208,11 @@ export function ChatWorkspace({
             }}
           />
         )
-      ) : active && active.cli === "pty" ? (
+      ) : active && active.kind === "pty" ? (
         <TerminalWorkspace session={active} manager={controller.terminals.manager} onKill={controller.terminals.kill} />
       ) : (
         <ChatPane
-          session={controller.activeSession}
+          session={active}
           models={controller.models}
           commands={controller.commands}
           version={controller.version}
@@ -229,7 +229,7 @@ export function ChatWorkspace({
             onDismissError: controller.clearError,
             // 认证失效卡「打开 PTY 终端」：在会话 cwd 打开终端草稿（登录指引命令在终端内运行；#60 首输入才创建）
             onOpenPtyTerminal: (sessionId) => {
-              void controller.openSessionDraft({ projectId: null, cli: "pty", fromSessionId: sessionId });
+              void controller.openSessionDraft({ kind: "pty", projectId: null, fromSessionId: sessionId });
             },
           }}
         />

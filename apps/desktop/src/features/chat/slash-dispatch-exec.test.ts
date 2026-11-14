@@ -21,6 +21,13 @@ function makeTransport(results: Partial<Record<string, IpcResult>> = {}): ChatTr
   };
 }
 
+/** 取结构化会话视图（收窄断言：本套派发用例登记的均为结构化会话） */
+function structured(store: ChatStore, id: string) {
+  const s = store.getSession(id);
+  if (!s || s.kind !== "structured") throw new Error(`会话 ${id} 非结构化视图`);
+  return s;
+}
+
 /** 指定命令目录的命令源（fetch 立即成功；等待非 loading 态） */
 async function makeReadySource(cli: CliKind, cwd: string, commands: CommandEntry[]): Promise<ComposerCommandSource> {
   const source = new ComposerCommandSource(async (req) => ({ ok: true, commands: req.cli === cli ? commands : [] }));
@@ -72,7 +79,7 @@ describe("dispatchSessionSend（会话态发送编排）", () => {
     const transport = makeTransport();
     const env: SlashDispatchEnv = { store, transport, commands: new ComposerCommandSource(async () => ({ ok: true, commands: [] })) };
     expect(await dispatchSessionSend(env, "s1", "/plan 拆分")).toBe(true);
-    const s = store.getSession("s1")!;
+    const s = structured(store, "s1");
     expect(s.items.at(-1)).toMatchObject({ kind: "user", text: "/plan 拆分" });
     expect(transport.calls).toEqual([{ channel: "session:send", sessionId: "s1", text: "/plan 拆分" }]);
   });
@@ -82,7 +89,7 @@ describe("dispatchSessionSend（会话态发送编排）", () => {
     expect(await dispatchSessionSend(t.env, "s1", "/commit 修登录 bug")).toBe(true);
     expect(t.transport.calls[0]).toMatchObject({ channel: "composer:expandCommand", cwd: "C:\\proj", sourcePath: "C:\\prompts\\commit.md", args: "修登录 bug" });
     expect(t.transport.calls[1]).toEqual({ channel: "session:send", sessionId: "s1", text: "展开正文：修登录 bug" });
-    expect(t.store.getSession("s1")!.items.at(-1)).toMatchObject({ kind: "user", text: "展开正文：修登录 bug" });
+    expect(structured(t.store, "s1").items.at(-1)).toMatchObject({ kind: "user", text: "展开正文：修登录 bug" });
   });
 
   it("codex 展开失败（文件不可读）→ 会话错误卡 setError，不发送；返回 false（输入保留）", async () => {
@@ -92,15 +99,15 @@ describe("dispatchSessionSend（会话态发送编排）", () => {
     const env = { ...t.env, transport: failing };
     expect(await dispatchSessionSend(env, "s1", "/commit x")).toBe(false);
     expect(failing.calls.map((c) => c.channel)).toEqual(["composer:expandCommand"]); // 未再发 session:send
-    expect(t.store.getSession("s1")!.lastError).toMatchObject({ code: "E_INTERNAL", message: "斜杠命令文件不可读" });
-    expect(t.store.getSession("s1")!.items.some((i) => i.kind === "user")).toBe(false); // 未乐观追加
+    expect(structured(t.store, "s1").lastError).toMatchObject({ code: "E_INTERNAL", message: "斜杠命令文件不可读" });
+    expect(structured(t.store, "s1").items.some((i) => i.kind === "user")).toBe(false); // 未乐观追加
   });
 
   it("codex 目录不可用 → fail-closed 错误卡（E_INTERNAL），不发送", async () => {
     const t = await makeHarness(null); // 命令源从未 ready（idle）
     expect(await dispatchSessionSend(t.env, "s1", "/commit x")).toBe(false);
     expect(t.transport.calls).toEqual([]);
-    expect(t.store.getSession("s1")!.lastError?.code).toBe("E_INTERNAL");
+    expect(structured(t.store, "s1").lastError?.code).toBe("E_INTERNAL");
   });
 });
 

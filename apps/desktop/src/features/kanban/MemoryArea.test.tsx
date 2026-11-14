@@ -170,7 +170,7 @@ afterEach(cleanup);
 describe("需求经验区 · 提取按钮与进度（原型一致项 3）", () => {
   it("零 structured 关联会话：按钮禁用 + tooltip 说明，点击不触发 IPC；有 structured 会话时可点击并触发 memory:extract", async () => {
     const fake = makeFake();
-    mountArea(fake, { sessions: [{ sessionId: "s-pty-1", cli: "pty", title: "pwsh" }], card: { ...CARD, sessions: ["s-pty-1"] } });
+    mountArea(fake, { sessions: [{ sessionId: "s-pty-1", kind: "pty", title: "pwsh" }], card: { ...CARD, sessions: ["s-pty-1"] } });
     await waitFor(() => expect(screen.getByTestId("memory-extract-button")).toBeTruthy());
 
     const btn = screen.getByTestId("memory-extract-button") as HTMLButtonElement;
@@ -182,7 +182,7 @@ describe("需求经验区 · 提取按钮与进度（原型一致项 3）", () =
     // 有 structured 会话（换需求卡片数据重挂）→ 可点击并触发 extract
     cleanup();
     const fake2 = makeFake();
-    mountArea(fake2, { sessions: [{ sessionId: "s-struct-1", cli: "claude", title: "实现会话" }] });
+    mountArea(fake2, { sessions: [{ sessionId: "s-struct-1", kind: "structured", cli: "claude", title: "实现会话" }] });
     await waitFor(() => expect(screen.getByTestId("memory-extract-button")).toBeTruthy());
     expect((screen.getByTestId("memory-extract-button") as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(screen.getByTestId("memory-extract-button"));
@@ -463,7 +463,7 @@ describe("需求经验区 · 候选列表（原型一致项 6/7）", () => {
 
   it("编辑弹层：claim/scope 可编辑、溯源区只读（来源会话/证据摘录/批次/编号），保存标注已编辑；取消关闭不落 IPC", async () => {
     const fake = makeFake(pendingSeed());
-    mountArea(fake, { sessions: [{ sessionId: "s-struct-1", cli: "claude", title: "实现会话" }] });
+    mountArea(fake, { sessions: [{ sessionId: "s-struct-1", kind: "structured", cli: "claude", title: "实现会话" }] });
     const card = await waitFor(() => screen.getByTestId("memory-candidate"));
     fireEvent.click(within(card).getByTestId("memory-edit-candidate"));
     const dialog = screen.getByTestId("memory-edit-dialog");

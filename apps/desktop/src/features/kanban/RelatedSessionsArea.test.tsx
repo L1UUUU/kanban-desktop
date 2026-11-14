@@ -27,7 +27,7 @@ const openDbs: Array<{ close(): void }> = [];
 /** #59 草稿创建会话：打开草稿并发送首条消息（原 createSession 直建的草稿语义等价物；text 可携带剧本关键词） */
 async function createViaDraft(ctl: () => ChatController, cli: CliKind, opts?: { projectId?: string | null }, text = "默认演示"): Promise<void> {
   // issue #71 S4：经 openSessionDraft 单入口（cwd 由 projectId 解析），updateDraft 为收窄动作；#77 单一就绪态：待目录就绪自动选中模型后提交
-  const r = ctl().openSessionDraft({ projectId: opts?.projectId ?? null, cli });
+  const r = ctl().openSessionDraft({ kind: "structured", projectId: opts?.projectId ?? null, cli });
   if (!r.ok) throw new Error(`草稿打开失败：${r.reason}`);
   ctl().updateDraft({ input: text });
   await waitFor(() => {
@@ -269,7 +269,7 @@ describe("详情面板关联区（#20；原型一致项 4 关联区）", () => {
       await createViaDraft(t.ctl, "opencode", { projectId });
     });
     await waitFor(() => expect(sidebarRow("默认演示")).toBeTruthy()); // #94：标题=首条派生
-    const s = t.ctl().sessions.find((x) => x.cli === "opencode");
+    const s = t.ctl().sessions.find((x) => x.kind === "structured" && x.cli === "opencode");
     if (!s) throw new Error("OpenCode 会话未登记");
     return s.sessionId;
   }
@@ -279,7 +279,7 @@ describe("详情面板关联区（#20；原型一致项 4 关联区）", () => {
     fireEvent.click(screen.getByTitle("新建会话（选择 CLI）"));
     fireEvent.click(screen.getByRole("button", { name: /PTY 终端/ }));
     await typeDraftFirstInput();
-    const s = t.ctl().sessions.find((x) => x.cli === "pty");
+    const s = t.ctl().sessions.find((x) => x.kind === "pty");
     if (!s) throw new Error("PTY 会话未登记");
     return s.sessionId;
   }
@@ -477,10 +477,10 @@ describe("「＋新建会话」菜单未装 CLI 灰置（#80：与侧栏菜单�
     expect(onCreateSession).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByTestId("new-session-item-codex"));
-    expect(onCreateSession).toHaveBeenCalledWith("codex", card);
+    expect(onCreateSession).toHaveBeenCalledWith({ kind: "structured", cli: "codex" }, card);
     fireEvent.click(screen.getByTestId("new-session-menu")); // 重开（菜单在上一点击后已关）
     fireEvent.click(screen.getByTestId("new-session-item-pty"));
-    expect(onCreateSession).toHaveBeenCalledWith("pty", card);
+    expect(onCreateSession).toHaveBeenCalledWith({ kind: "pty" }, card);
   });
 
   it("无 window.api（jsdom 降级）：菜单项全部可选不灰置", async () => {
@@ -496,13 +496,14 @@ describe("「＋新建会话」菜单未装 CLI 灰置（#80：与侧栏菜单�
     expect(claudeItem.disabled).toBe(false);
     expect(claudeItem.textContent).not.toContain("未安装");
     fireEvent.click(claudeItem);
-    expect(onCreateSession).toHaveBeenCalledWith("claude", card);
+    expect(onCreateSession).toHaveBeenCalledWith({ kind: "structured", cli: "claude" }, card);
   });
 });
 
 describe("link 拒绝原因直达呈现（三类，#20）", () => {
   /** 最小 SessionView fixture（轻量组件直挂，mock actions） */
   const fakeSession = (sessionId: string, projectId: string | null): SessionView => ({
+    kind: "structured",
     sessionId,
     cli: "codex",
     title: `会话 ${sessionId}`,

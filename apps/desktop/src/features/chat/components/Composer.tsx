@@ -1,7 +1,7 @@
 // 用途：composer 输入区 —— 统一容器聚焦高亮、权限档位 chip（三档带说明）+ 模型 combobox（真实目录/恢复会话派生显示）、发送 ↔ 停止态切换（原型一致项 6/7；文案硬约束；#59 起权限/模型控件与草稿面板共享 ComposerControls；#85 起上缘可拖拽调高（与 DraftPane 共享同一持久化偏好）；#90 输入框带斜杠补全菜单）
 import { useState } from "react";
-import type { CliKind, PermMode } from "@kanban/ipc-schema";
-import type { SessionView } from "../chat-store";
+import type { PermMode } from "@kanban/ipc-schema";
+import type { StructuredSessionView } from "../chat-store";
 import type { ModelCatalog } from "../model-catalog";
 import type { ComposerCommandSource } from "../composer-command-source";
 import { useComposerPanelHeight } from "../../../lib/use-panel-size";
@@ -23,7 +23,8 @@ export function Composer({
   commands,
   actions,
 }: {
-  session: SessionView;
+  /** 结构化会话视图（arch C6：PTY 会话不经本组件——TerminalWorkspace 渲染，cli 恒为 CliKind） */
+  session: StructuredSessionView;
   models: ModelCatalog;
   /** 斜杠命令源（issue #90）：补全菜单数据（会话 cli/cwd 键控） */
   commands: ComposerCommandSource;
@@ -58,7 +59,7 @@ export function Composer({
           value={text}
           onChange={setText}
           commands={commands}
-          cli={session.cli as CliKind}
+          cli={session.cli}
           cwd={session.cwd}
           disabled={running}
           style={{ height: Math.round(composer.size) }}
@@ -67,8 +68,8 @@ export function Composer({
         <div className="mt-2 flex items-center gap-2">
           {/* 权限档位 chip + 下拉菜单（三档带说明） */}
           <PermChip value={session.permMode} onChange={actions.onPermChange} />
-          {/* 模型 combobox：真实目录数据源；已建会话模型为空（恢复会话）时仅派生显示默认名，不写 store（中途切换走 session:setModel，#79）；PTY 会话不经本组件（TerminalWorkspace 渲染），cli 收窄为 CliKind */}
-          <ModelCombobox cli={session.cli as CliKind} cwd={session.cwd} value={session.model} onChange={actions.onModelChange} catalog={models} disabled={busy} />
+          {/* 模型 combobox：真实目录数据源；已建会话模型为空（恢复会话）时仅派生显示默认名，不写 store（中途切换走 session:setModel，#79） */}
+          <ModelCombobox cli={session.cli} cwd={session.cwd} value={session.model} onChange={actions.onModelChange} catalog={models} disabled={busy} />
           <span className="flex-1" />
           {running ? (
             <button

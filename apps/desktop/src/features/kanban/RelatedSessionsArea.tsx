@@ -1,9 +1,10 @@
 // 用途：详情面板「关联会话」区（#20，原型一致项 4 关联区）—— 关联会话列表（CLI 色点 + 活动状态徽标 + 跳转 + 解除，US18 分离：活动状态只在会话行显示）、「＋新建会话」四 CLI 菜单（PTY 项标注「无 skill 信号」；session:create/terminal:create+requirementId 原子关联）、关联已有会话选择器（仅当前项目未关联会话，含 PTY）+ link 拒绝原因直达呈现；挂点 data-testid="detail-sessions" 保持稳定（#19 约定），无动作上下文时保持占位形态
 import { useState } from "react";
-import type { CliKind, RequirementCardRow } from "@kanban/ipc-schema";
+import type { RequirementCardRow } from "@kanban/ipc-schema";
 import { CLI_DOT_CLS, NEW_MENU_CLIS } from "../../lib/cli-catalog";
 import { CLI_NOT_INSTALLED_HINT, isCliUnavailable, useCliInstallStatus } from "../../lib/use-cli-status";
 import type { SessionView } from "../chat/chat-store";
+import type { SessionDraftCli } from "../chat/use-chat";
 import { StatusBadge } from "../chat/components/StatusBadge";
 
 /** 关联区动作面（ChatWorkspace 接线：kanban:link/unlink + 跳转 + 建会话，全部经 IPC） */
@@ -14,8 +15,8 @@ export interface RelatedSessionActions {
   onLinkExisting(sessionId: string, requirementId: string): Promise<string | null>;
   /** 跳转会话：切回聊天视图并选中该会话（S2-14） */
   onJumpToSession(sessionId: string): void;
-  /** ＋新建会话（三 CLI + PTY 终端；创建即自动关联本需求，S2-11） */
-  onCreateSession(cli: CliKind | "pty", card: RequirementCardRow): void;
+  /** ＋新建会话（三 CLI + PTY 终端；创建即自动关联本需求，S2-11）—— CLI 判别联合（arch C6） */
+  onCreateSession(cli: SessionDraftCli, card: RequirementCardRow): void;
 }
 
 export interface RelatedSessionsAreaProps {
@@ -29,9 +30,9 @@ export interface RelatedSessionsAreaProps {
   actions?: RelatedSessionActions;
 }
 
-/** 会话行需求徽标展示名：CLI 类型后缀区分 PTY 终端 */
+/** 会话行需求徽标展示名：CLI 类型后缀区分 PTY 终端（判别联合 kind 收窄） */
 function optionLabel(s: SessionView): string {
-  return s.cli === "pty" ? `${s.title} · PTY` : s.title;
+  return s.kind === "pty" ? `${s.title} · PTY` : s.title;
 }
 
 export function RelatedSessionsArea({ card, sessions = [], sessionToReq = {}, actions }: RelatedSessionsAreaProps) {
@@ -79,7 +80,7 @@ export function RelatedSessionsArea({ card, sessions = [], sessionToReq = {}, ac
             >
               <span
                 aria-hidden
-                className={`h-2 w-2 flex-none rounded-full ${s ? (CLI_DOT_CLS[s.cli] ?? "bg-accent2") : "bg-fg-faint"}`}
+                className={`h-2 w-2 flex-none rounded-full ${s ? (s.kind === "pty" ? "bg-pty" : (CLI_DOT_CLS[s.cli] ?? "bg-accent2")) : "bg-fg-faint"}`}
               />
               <span className="min-w-0 flex-1 truncate" title={sessionId}>
                 {s?.title ?? sessionId}
@@ -134,7 +135,7 @@ export function RelatedSessionsArea({ card, sessions = [], sessionToReq = {}, ac
                   className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs enabled:hover:bg-card disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={() => {
                     setMenuOpen(false);
-                    actions.onCreateSession(cli, card);
+                    actions.onCreateSession({ kind: "structured", cli }, card);
                   }}
                 >
                   <span aria-hidden className={`inline-block h-2 w-2 flex-none rounded-full ${CLI_DOT_CLS[cli]}`} />
@@ -149,7 +150,7 @@ export function RelatedSessionsArea({ card, sessions = [], sessionToReq = {}, ac
               className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs hover:bg-card"
               onClick={() => {
                 setMenuOpen(false);
-                actions.onCreateSession("pty", card);
+                actions.onCreateSession({ kind: "pty" }, card);
               }}
             >
               <span aria-hidden className="inline-block h-2 w-2 flex-none rounded-full bg-pty" />

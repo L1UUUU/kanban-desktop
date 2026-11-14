@@ -18,17 +18,21 @@ const termLog = createScopedLogger("terminal");
 /** 中央区草稿判别联合（issue #71 S4）：全局任一时刻至多一个，两类互相替换（openSessionDraft 单源） */
 export type SessionDraft = { kind: "structured"; data: DraftSession } | { kind: "pty"; data: TerminalDraftSnapshot };
 
-/** openSessionDraft 入参（cwd 解析内聚：fromSessionId 给定取该会话 cwd，否则经 deps.resolveCwd 按项目解析） */
-export interface OpenSessionDraftInput {
+/** 草稿打开的 CLI 判别（arch C6）：结构化携带 CliKind；PTY 终端无 CLI 概念。cwd 解析签名与「＋新建会话」动作共用此形状 */
+export type SessionDraftCli = { kind: "structured"; cli: CliKind } | { kind: "pty" };
+
+/** openSessionDraft 入参公共面（cwd 解析内聚：fromSessionId 给定取该会话 cwd，否则经 deps.resolveCwd 按项目解析） */
+interface OpenSessionDraftBase {
   projectId: string | null;
-  /** 结构化 CLI 或 "pty"（PTY 终端草稿） */
-  cli: CliKind | "pty";
   requirementId?: string;
-  /** PTY 专属：启动命令（缺省交互 shell） */
-  command?: TerminalCommand;
   /** 认证失效卡「打开 PTY 终端」：cwd 取该会话（替代调用方手查会话 cwd） */
   fromSessionId?: string;
 }
+
+/** openSessionDraft 入参判别联合：结构化 CLI 或 PTY 终端（PTY 专属启动命令只在本分支） */
+export type OpenSessionDraftInput =
+  | ({ kind: "structured"; cli: CliKind } & OpenSessionDraftBase)
+  | ({ kind: "pty"; command?: TerminalCommand } & OpenSessionDraftBase);
 
 export type OpenDraftResult =
   | { ok: true; replaced: "structured" | "pty" | null }
@@ -99,7 +103,7 @@ export interface ChatController extends ChatControllerActions, SessionRegistry {
 export interface ChatControllerDeps {
   demoCwd: string | null;
   /** cwd 解析（项目 canonicalPath / Fake 演示回落；返回 null=项目不存在拒绝新建） */
-  resolveCwd(projectId: string | null, cli: CliKind | "pty"): string | null;
+  resolveCwd(projectId: string | null, cli: SessionDraftCli): string | null;
   /** 项目不存在等新建拒绝提示（单源：3 份手抄归 1） */
   onNotice(message: string): void;
 }
@@ -108,10 +112,10 @@ export interface ChatControllerDeps {
  * 「＋」新建的 cwd 解析：项目在列表 → canonicalPath；查不到（DB 重置后残留 id、无项目 null 等）不回退任何路径——
  * 真实 CLI/PTY 返回 null 由调用方提示「项目不存在」并拒绝新建，仅 Fake 回落注入的演示 cwd
  */
-export function resolveSessionCwd(projects: ProjectRow[], projectId: string | null, cli: CliKind | "pty", demoCwd: string | null): string | null {
+export function resolveSessionCwd(projects: ProjectRow[], projectId: string | null, cli: SessionDraftCli, demoCwd: string | null): string | null {
   const canonical = projects.find((p) => p.id === projectId)?.canonicalPath;
   if (canonical) return canonical;
-  return cli === "fake" ? demoCwd : null;
+  return cli.kind === "structured" && cli.cli === "fake" ? demoCwd : null;
 }
 
 /** ChatEvent 判别（SkillObservation 无 type 判别字段） */
@@ -125,7 +129,7 @@ export interface SessionDraftEnv {
   drafts: TerminalDraftController;
   manager: TerminalManager;
   /** cwd 解析（项目 canonicalPath / Fake 演示回落；返回 null=项目不存在拒绝新建） */
-  resolveCwd(projectId: string | null, cli: CliKind | "pty"): string | null;
+  resolveCwd(projectId: string | null, cli: SessionDraftCli): string | null;
   /** 项目不存在等新建拒绝提示（单源） */
   onNotice(message: string): void;
 }
@@ -152,7 +156,7 @@ export function openSessionDraftAction(env: SessionDraftEnv, input: OpenSessionD
     cwd = s?.cwd ?? null;
     projectId = s?.projectId ?? null;
   } else {
-    cwd = resolveCwd(input.projectId, input.cli);
+    cwd = resolveCwd(input.projectId, input);
   }
   if (!cwd) {
     onNotice("新建失败：项目不存在或已失效，请刷新项目列表后重试");
@@ -162,7 +166,7 @@ export function openSessionDraftAction(env: SessionDraftEnv, input: OpenSessionD
   const structured = store.getSnapshot().draft;
   const pty = drafts.getSnapshot();
   const replaced: "structured" | "pty" | null = structured ? "structured" : pty ? "pty" : null;
-  if (input.cli === "pty") {
+  if (input.kind === "pty") {
     if (structured) store.discardDraft();
     // pty→pty：释放旧草稿的 xterm 实例（在途创建不取消，迟到成功仍登记）
     if (pty) manager.dispose(pty.terminalId);
@@ -178,13 +182,14 @@ export function openSessionDraftAction(env: SessionDraftEnv, input: OpenSessionD
     if (pty) discardPty(env);
     // 模型继承当前 composer 选定值：优先当前草稿（被替换的同类），其次当前激活会话（权限档位不继承，草稿内自选）
     const s = store.getSnapshot();
-    const inheritFrom = structured ?? (s.activeId ? store.getSession(s.activeId) : undefined);
+    const activeSession = s.activeId ? store.getSession(s.activeId) : undefined;
+    const inheritModel = structured?.model ?? (activeSession?.kind === "structured" ? activeSession.model : undefined);
     store.openDraft({
       cli: input.cli,
       cwd,
       projectId,
       requirementId: input.requirementId,
-      model: inheritFrom?.model,
+      model: inheritModel,
       replacedHint: replaced !== null,
     });
   }
@@ -295,7 +300,9 @@ export async function resumeChain(store: ChatStore, transport: ChatTransport, se
  * 成功以响应实际模型回写并标注「下一轮起生效」（下一 turn_started 自动清除）；失败回滚为切换前值并按会话内既有错误形态展示。
  */
 export async function setModelChain(store: ChatStore, transport: ChatTransport, sessionId: string, model: string): Promise<boolean> {
-  const prev = store.getSession(sessionId)?.model;
+  const session = store.getSession(sessionId);
+  // 模型为结构化会话专属（PTY 无模型概念）；prev=undefined 与旧值语义一致
+  const prev = session?.kind === "structured" ? session.model : undefined;
   if (prev === model) return true; // 幂等：同值不下发
   store.updateSession(sessionId, { model }); // 乐观更新：chip 立即显示新模型
   const r = await transport.invoke({ channel: "session:setModel", sessionId, model });
@@ -502,7 +509,9 @@ export function useChatController(transport: ChatTransport | null, deps: ChatCon
       },
       resolveApproval: (decision) => {
         const id = activeId();
-        const pending = id ? store.getSession(id)?.pendingApproval : null;
+        const active = id ? store.getSession(id) : undefined;
+        // 审批卡仅结构化会话产生（PTY 行无 composer/审批面）；kind 收窄
+        const pending = active?.kind === "structured" ? active.pendingApproval : null;
         if (!id || !pending || !transport) return;
         store.clearApproval(id); // 决定即时生效：卡片立即消失（后续输出经事件流差异呈现）
         report(

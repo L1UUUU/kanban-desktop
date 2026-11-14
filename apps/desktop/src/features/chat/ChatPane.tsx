@@ -1,7 +1,7 @@
 // 用途：中央聊天区 —— 会话级 banner 栈（冲突条 spec I-4 / 同名 skill 条 #21 / 恢复引导条 #42，自上而下）+ 消息流 + 审批卡 + 取消/错误卡（#46 ErrorBanner 五卡）+ composer（flex 列：banner + 1fr 消息 + auto composer；无会话时降级占位）
 import { useEffect, useRef } from "react";
 import type { ApprovalDecision } from "@kanban/ipc-schema";
-import type { SessionView } from "./chat-store";
+import type { StructuredSessionView } from "./chat-store";
 import type { ModelCatalog } from "./model-catalog";
 import type { ComposerCommandSource } from "./composer-command-source";
 import { ApprovalCard } from "./components/ApprovalCard";
@@ -32,7 +32,8 @@ export function ChatPane({
   configPath = null,
   actions,
 }: {
-  session: SessionView | null;
+  /** 结构化会话视图（arch C6：PTY 活跃会话由 TerminalWorkspace 渲染，本组件不接收） */
+  session: StructuredSessionView | null;
   /** 模型目录控制器（issue #77）：composer 挂载预取与 combobox 数据源 */
   models: ModelCatalog;
   /** 斜杠命令源（issue #90）：composer 补全菜单数据 */
