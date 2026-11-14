@@ -1,9 +1,9 @@
-// 用途：session-lifecycle 密封测试（issue #70 C2，A 类）—— 归档/取消归档/删除三编排的顺序与幂等/中止语义、SessionProcesses seam 分派（真 SQLite tmp 直连 store + fake procs + 固定时钟）；#60×#62 墓碑复活语义经 remove+重插钉住
+// 用途：session-lifecycle 密封测试（issue #70 C2，A 类）—— 归档/取消归档/删除三编排的顺序与幂等/中止语义、SessionProcesses seam 分派（真 SQLite tmp 直连 store + fake procs + 固定时钟）；#60×#62 墓碑复活语义经 remove+重插钉住；arch C12 起 create 侧编排直测（成功路径/失败回滚走「终止+删行」尾部/标题派生条件）
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { AdoptSessionInput } from "@kanban/cli-host";
+import { AdapterError, type AdoptSessionInput, type CreateSessionInput } from "@kanban/cli-host";
 import { openDatabase, type SqliteDb } from "./db";
 import { SessionStore, type SessionRecord } from "./session-store";
 import { createSessionLifecycle, type SessionProcesses } from "./session-lifecycle";
@@ -46,11 +46,54 @@ function makeRecord(partial: Partial<SessionRecord> = {}): SessionRecord {
   };
 }
 
-/** 记录型 fake procs：interrupt/terminate/adopt/disposeAll/killAll 全记录，可注入失败与 adopt 不支持 */
-function makeProcs(fails: { interrupt?: boolean; terminate?: boolean; adopt?: boolean; unsupportedAdopt?: boolean } = {}) {
+/** 记录型 fake procs：create/send/spawn/write/interrupt/terminate/adopt/disposeAll/killAll 全记录，
+ *  可注入失败（createSession 首即败 / sendTurn 前 N 次败或抛普通异常 / spawn 前 N 次败 / interrupt/terminate/adopt 败）与 adopt 不支持 */
+function makeProcs(
+  fails: {
+    interrupt?: boolean;
+    terminate?: boolean;
+    adopt?: boolean;
+    unsupportedAdopt?: boolean;
+    create?: boolean;
+    sendFirst?: number;
+    sendPlainError?: boolean;
+    spawnFirst?: number;
+  } = {},
+) {
   const calls: string[] = [];
   const adopted: AdoptSessionInput[] = [];
+  const createdInputs: CreateSessionInput[] = [];
+  const sentTurns: Array<{ sessionId: string; text: string }> = [];
+  let createSeq = 0;
+  let sendCalls = 0;
+  let spawnCalls = 0;
   const procs: SessionProcesses = {
+    createSession: async (input) => {
+      calls.push(`create:${input.cli}`);
+      createdInputs.push(input);
+      createSeq += 1;
+      if (fails.create) throw new AdapterError("E_SPAWN_NOT_FOUND", "未找到 CLI 可执行文件（注入）");
+      return { sessionId: `s-${createSeq}`, nativeSessionId: `native-${createSeq}`, model: input.model };
+    },
+    sendTurn: async (input) => {
+      sendCalls += 1;
+      calls.push(`send:${input.sessionId}`);
+      if (sendCalls <= (fails.sendFirst ?? 0)) {
+        if (fails.sendPlainError) throw new Error("boom（注入）");
+        throw new AdapterError("E_INTERNAL", "发送失败（注入）");
+      }
+      sentTurns.push(input);
+    },
+    spawnTerminal: (terminalId, req) => {
+      spawnCalls += 1;
+      calls.push(`spawn:${terminalId}:${req.cols}x${req.rows}${req.command ? `:cmd=${req.command.exe}` : ""}`);
+      if (spawnCalls <= (fails.spawnFirst ?? 0)) return { ok: false, message: "启动失败：spawn boom（注入）" };
+      return { ok: true, label: "pwsh", shell: "pwsh.exe", cwd: req.cwd };
+    },
+    writeTerminal: (terminalId, data) => {
+      calls.push(`write:${terminalId}:${data}`);
+      return { ok: true };
+    },
     interrupt: async (id) => {
       calls.push(`interrupt:${id}`);
       if (fails.interrupt) throw new Error("中断失败（注入）");
@@ -78,7 +121,7 @@ function makeProcs(fails: { interrupt?: boolean; terminate?: boolean; adopt?: bo
       calls.push("kill-all");
     },
   };
-  return { procs, calls, adopted };
+  return { procs, calls, adopted, createdInputs, sentTurns };
 }
 
 /** 日志收集（best-effort warn 断言面） */
@@ -236,6 +279,144 @@ describe("remove 删除编排（#62 spec #57 D 节）", () => {
     expect(sessions.shouldDropEvents("tty-1")).toBe(true);
     sessions.insert(makeRecord({ id: "tty-1", kind: "pty", cli: "pty", nativeSessionId: null, permMode: null })); // 同 id 重试重建
     expect(sessions.shouldDropEvents("tty-1")).toBe(false); // 重建后事件照常
+  });
+});
+
+describe("createStructuredSession 创建编排（arch C12，#59/#94 / ADR 0003 决策 2）", () => {
+  it("无 firstMessage：createSession 入参透传 → 显式草稿名落库 default → 不发消息；返回 sessionId/title/model 回报", async () => {
+    const { sessions, createdInputs, sentTurns, lifecycle } = makeLifecycle();
+    const r = await lifecycle.createStructuredSession({ cli: "claude", cwd: "C:\\repo", projectId: "p-1", title: "草稿名", model: "m-pro", permMode: "ask" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("unreachable");
+    expect(r.sessionId).toBe("s-1");
+    expect(r.title).toBe("草稿名");
+    expect(r.model).toBe("m-pro");
+    expect(createdInputs).toEqual([{ cwd: "C:\\repo", model: "m-pro", permMode: "ask", cli: "claude" }]);
+    expect(sentTurns).toEqual([]); // 无首条消息不发送
+    expect(sessions.get("s-1")).toMatchObject({
+      kind: "structured", cli: "claude", title: "草稿名", titleSource: "default",
+      nativeSessionId: "native-1", projectId: "p-1", permMode: "ask", status: "idle",
+    });
+  });
+
+  it("无显式 title 无 firstMessage：默认占位名「新会话 · CLI」落库（defaultSessionTitle 单源）", async () => {
+    const { sessions, lifecycle } = makeLifecycle();
+    const r = await lifecycle.createStructuredSession({ cli: "fake", cwd: "C:\\repo" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("unreachable");
+    expect(r.title).toBe("新会话 · Fake");
+    expect(sessions.get("s-1")).toMatchObject({ title: "新会话 · Fake", titleSource: "default", permMode: "auto" }); // permMode 缺省 auto
+  });
+
+  it("firstMessage 成功：标题随行原子派生（去/压空白）落 derived，原文原样送达 sendTurn", async () => {
+    const { sessions, sentTurns, lifecycle } = makeLifecycle();
+    const r = await lifecycle.createStructuredSession({ cli: "fake", cwd: "C:\\repo", firstMessage: "  调研\tVite 构建\n配置  " });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("unreachable");
+    expect(r.title).toBe("调研 Vite 构建 配置");
+    expect(sentTurns).toEqual([{ sessionId: "s-1", text: "  调研\tVite 构建\n配置  " }]); // 派生只作用于标题，消息原文不变形
+    expect(sessions.get("s-1")).toMatchObject({ title: "调研 Vite 构建 配置", titleSource: "derived" });
+  });
+
+  it("firstMessage 纯空白：派生为空回退默认标题（default，不落空标题）", async () => {
+    const { sessions, lifecycle } = makeLifecycle();
+    const r = await lifecycle.createStructuredSession({ cli: "fake", cwd: "C:\\repo", firstMessage: "   " });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("unreachable");
+    expect(r.title).toBe("新会话 · Fake");
+    expect(sessions.get("s-1")).toMatchObject({ title: "新会话 · Fake", titleSource: "default" });
+  });
+
+  it("firstMessage + 显式 title：派生仍优先（请求 title 仅为草稿占位名，非用户意图命名）", async () => {
+    const { sessions, lifecycle } = makeLifecycle();
+    const r = await lifecycle.createStructuredSession({ cli: "fake", cwd: "C:\\repo", title: "新会话 · Fake", firstMessage: "首条意图消息" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("unreachable");
+    expect(r.title).toBe("首条意图消息");
+    expect(sessions.get("s-1")).toMatchObject({ title: "首条意图消息", titleSource: "derived" });
+  });
+
+  it("sendTurn 失败：经「终止+删行」尾部回滚——受控终止（不 interrupt）→ 行删除 → 错误形状含 rolledBackSessionId", async () => {
+    const { sessions, calls, logs, lifecycle } = makeLifecycle({ sendFirst: 1 });
+    const r = await lifecycle.createStructuredSession({ cli: "claude", cwd: "C:\\repo", firstMessage: "首条" });
+    expect(r).toMatchObject({ ok: false, error: { code: "E_INTERNAL", message: "发送失败（注入）", rolledBackSessionId: "s-1" } });
+    expect(sessions.list()).toEqual([]); // 行已删（重启不被恢复，不留「来自未发出消息」的标题）
+    expect(calls).toContain("terminate:s-1:structured"); // 受控终止已调（与 remove 同一尾部）
+    expect(calls).not.toContain("interrupt:s-1"); // 回滚不 interrupt——首条 turn 提交即失败，无活动 turn
+    expect(logs.entries.some((e) => e.level === "error" && e.message.includes("已回滚会话记录（E_INTERNAL）"))).toBe(true);
+  });
+
+  it("非 AdapterError 的发送异常：E_INTERNAL 兜底且同样回滚", async () => {
+    const { sessions, lifecycle } = makeLifecycle({ sendFirst: 1, sendPlainError: true });
+    const r = await lifecycle.createStructuredSession({ cli: "claude", cwd: "C:\\repo", firstMessage: "x" });
+    expect(r).toMatchObject({ ok: false, error: { code: "E_INTERNAL", message: "boom（注入）", rolledBackSessionId: "s-1" } });
+    expect(sessions.list()).toEqual([]);
+  });
+
+  it("回滚中终止失败 best-effort 放行：行仍删除（进程已死不挡回滚）", async () => {
+    const { sessions, logs, lifecycle } = makeLifecycle({ sendFirst: 1, terminate: true });
+    const r = await lifecycle.createStructuredSession({ cli: "claude", cwd: "C:\\repo", firstMessage: "首条" });
+    expect(r.ok).toBe(false);
+    expect(sessions.list()).toEqual([]); // 删行不被终止失败阻断
+    expect(logs.entries.some((e) => e.level === "warn" && e.message.includes("受控终止未成功（放行）"))).toBe(true);
+  });
+
+  it("createSession 失败：原样上抛（无落库、无终止副作用）", async () => {
+    const { sessions, calls, lifecycle } = makeLifecycle({ create: true });
+    await expect(lifecycle.createStructuredSession({ cli: "claude", cwd: "C:\\repo", firstMessage: "首条" })).rejects.toMatchObject({ code: "E_SPAWN_NOT_FOUND" });
+    expect(sessions.list()).toEqual([]);
+    expect(calls.filter((c) => c.startsWith("terminate"))).toEqual([]); // 创建失败在落库前，无需回滚
+  });
+});
+
+describe("createTerminalSession PTY 终端创建编排（arch C12，#60 / ADR 0003 PTY 豁免）", () => {
+  it("成功：占位落库（kind=pty/默认标题缺省）→ spawn（cols/rows 缺省 80x30）→ 标题回写「终端 · label」；无 firstInput 不重放", async () => {
+    const { sessions, calls, lifecycle } = makeLifecycle();
+    const r = await lifecycle.createTerminalSession({ terminalId: "tty-1", cwd: "C:\\repo", projectId: "p-1" });
+    expect(r).toEqual({ ok: true, sessionId: "tty-1", title: "终端 · pwsh" });
+    expect(calls).toEqual(["spawn:tty-1:80x30"]);
+    expect(sessions.get("tty-1")).toMatchObject({
+      kind: "pty", cli: "pty", title: "终端 · pwsh", titleSource: "default", // PTY 永不进标题状态机（豁免）
+      nativeSessionId: null, projectId: "p-1", permMode: null, status: "idle",
+    });
+  });
+
+  it("显式草稿名保留 + cols/rows 透传 + firstInput 重放（中文/多字符不丢失，spawn 成功后才写）", async () => {
+    const { sessions, calls, lifecycle } = makeLifecycle();
+    const r = await lifecycle.createTerminalSession({ terminalId: "tty-1", cwd: "C:\\repo", title: "我的终端", cols: 120, rows: 40, firstInput: "中文abc\r" });
+    expect(r).toEqual({ ok: true, sessionId: "tty-1", title: "我的终端" });
+    expect(calls).toEqual(["spawn:tty-1:120x40", "write:tty-1:中文abc\r"]);
+    expect(sessions.get("tty-1")).toMatchObject({ title: "我的终端" }); // 显式名不回写
+  });
+
+  it("id 与既有会话行冲突：E_SESSION_EXISTS（消息含 id），既有行未动、不启动进程", async () => {
+    const { sessions, calls, lifecycle } = makeLifecycle();
+    sessions.insert(makeRecord({ id: "tty-1", kind: "pty", cli: "pty", nativeSessionId: null, permMode: null }));
+    const r = await lifecycle.createTerminalSession({ terminalId: "tty-1", cwd: "C:\\repo" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe("E_SESSION_EXISTS");
+      expect(r.error.message).toContain("tty-1");
+    }
+    expect(calls).toEqual([]); // 不 spawn
+    expect(sessions.get("tty-1")).toMatchObject({ title: "调研" }); // 既有行原样
+  });
+
+  it("spawn 失败：经「终止+删行」尾部回滚占位行（宿主 kill 幂等 no-op），错误透传 spawned.message", async () => {
+    const { sessions, calls, lifecycle } = makeLifecycle({ spawnFirst: 1 });
+    const r = await lifecycle.createTerminalSession({ terminalId: "tty-1", cwd: "C:\\repo" });
+    expect(r).toMatchObject({ ok: false, error: { code: "E_INTERNAL", message: "启动失败：spawn boom（注入）" } });
+    expect(sessions.list()).toEqual([]); // 占位行回删：默认列表与重启均无该会话
+    expect(calls).toEqual(["spawn:tty-1:80x30", "terminate:tty-1:pty"]); // 与 remove 同一尾部
+  });
+
+  it("spawn 失败回滚后同 id 重试：重建即活会话（墓碑复活经 create 口钉住）", async () => {
+    const { sessions, lifecycle } = makeLifecycle({ spawnFirst: 1 });
+    const r1 = await lifecycle.createTerminalSession({ terminalId: "tty-1", cwd: "C:\\repo" });
+    expect(r1.ok).toBe(false);
+    const r2 = await lifecycle.createTerminalSession({ terminalId: "tty-1", cwd: "C:\\repo" });
+    expect(r2).toEqual({ ok: true, sessionId: "tty-1", title: "终端 · pwsh" });
+    expect(sessions.get("tty-1")).toMatchObject({ title: "终端 · pwsh", status: "idle" }); // 重建即活，迟到守卫不再命中
   });
 });
 

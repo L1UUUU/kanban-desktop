@@ -1,20 +1,18 @@
-// 用途：session 子通道路由表 —— session:list/archivedList/archive/unarchive/delete/create/send/interrupt/setModel/resolveApproval/readHistory/resume/rename 十三个 handler（#72 C1 Step2 自 ipc.ts route switch 原样迁入；归档/取消归档/删除编排主体在 session-lifecycle，#70 C2 唯一写者；#94 起标题派生挂 create/send 两 IPC + rename 手动主权，ADR 0003）
+// 用途：session 子通道路由表 —— session:list/archivedList/archive/unarchive/delete/create/send/interrupt/setModel/resolveApproval/readHistory/resume/rename 十三个 handler（#72 C1 Step2 自 ipc.ts route switch 原样迁入；归档/取消归档/删除编排主体在 session-lifecycle，#70 C2 唯一写者；#94 起标题派生挂 create/send 两 IPC + rename 手动主权，ADR 0003；arch C12 起 create 编排主体亦在 session-lifecycle，handler 只做解请求→调编排→组响应）
 import { homedir } from "node:os";
-import { defaultSessionTitle, type IpcRequest, type IpcResult, type SessionRow } from "@kanban/ipc-schema";
-import { AdapterError, detectSkillConflicts, resolveUserClaudeDir } from "@kanban/cli-host";
-import { detectDirIdentity } from "../git-identity";
+import type { IpcRequest, IpcResult, SessionRow } from "@kanban/ipc-schema";
+import { detectSkillConflicts, resolveUserClaudeDir } from "@kanban/cli-host";
 import type { IpcDeps } from "../ipc";
-import { guiEvent, linkAfterCreate, processAndEmit, TRACKER_CLI_BY_APP } from "./helpers";
-import { isSessionBusy } from "../session-store";
+import { dirIdentityFields, guiEvent, linkAfterCreate, processAndEmit, TRACKER_CLI_BY_APP } from "./helpers";
+import { isSessionBusy, type SessionRecord } from "../session-store";
 import { deriveTitle } from "../title-derive";
 import type { SubChannelHandlers } from "./table";
 
 /** session:* 请求子集 */
 export type SessionRequest = Extract<IpcRequest, { channel: `session:${string}` }>;
 
-/** DB 记录 → wire 行（cwd 存在时附带目录身份判定） */
-function toSessionRow(rec: ReturnType<IpcDeps["sessions"]["list"]>[number]): SessionRow {
-  const identity = rec.cwd ? detectDirIdentity(rec.cwd) : { kind: "none" as const };
+/** DB 记录 → wire 行（目录身份经 dirIdentityFields 单点投影，arch C12） */
+function toSessionRow(rec: SessionRecord): SessionRow {
   return {
     id: rec.id,
     kind: rec.kind,
@@ -29,8 +27,7 @@ function toSessionRow(rec: ReturnType<IpcDeps["sessions"]["list"]>[number]): Ses
     lastActiveAt: rec.lastActiveAt,
     createdAt: rec.createdAt ?? null,
     archivedAt: rec.archivedAt,
-    dirIdentity: identity.kind,
-    worktreeName: identity.kind === "worktree" ? identity.name : null,
+    ...dirIdentityFields(rec.cwd),
   };
 }
 
@@ -87,71 +84,31 @@ export const sessionHandlers: SubChannelHandlers<SessionRequest, IpcResult, IpcD
     return { ok: true };
   },
   "session:create": async (req, deps) => {
-    const { sessionId, nativeSessionId, model } = await deps.adapter.createSession({
+    // arch C12：创建编排主体在 session-lifecycle（原生创建→标题随行原子派生落库→firstMessage 原子发送→失败回滚，
+    // #59/#94 / ADR 0003 决策 2 逐条保持）；此处只组响应——关联落链（#17）与 claude 同名 skill 检测（#21）属 tracker/检测面，留在路由层
+    const r = await deps.lifecycle.createStructuredSession({
+      cli: req.cli,
       cwd: req.cwd,
+      projectId: req.projectId,
+      title: req.title,
       model: req.model,
       permMode: req.permMode,
-      cli: req.cli,
+      firstMessage: req.firstMessage,
     });
-    // #94 / ADR 0003 决策 2：firstMessage 携带时标题随行原子派生（insert 前算好，发送失败回滚整行天然一致；
-    // 请求显式 title 仅为 renderer 显式草稿名（boot 演示），非用户意图命名，派生优先提供可辨识性；
-    // 默认占位名经 defaultSessionTitle 单源构造（arch C8：与 renderer 草稿提示行同源）；
-    // 派生为空（纯空白消息）回退默认标题，不落空标题
-    let title = req.title ?? defaultSessionTitle(req.cli);
-    let titleSource: "default" | "derived" = "default";
-    if (req.firstMessage !== undefined) {
-      const derived = deriveTitle(req.firstMessage);
-      if (derived) {
-        title = derived;
-        titleSource = "derived";
-      }
-    }
-    const identity = detectDirIdentity(req.cwd);
-    // 会话落库（重启恢复依据；真实 Adapter 返回 native id 一并回填，Fake 无 native id 为 null；status 缺省 idle——新建恒 idle 决策在 store，#70）
-    deps.sessions.insert({
-      id: sessionId,
-      kind: "structured",
-      cli: req.cli,
-      nativeSessionId: nativeSessionId ?? null,
-      projectId: req.projectId ?? null,
-      title,
-      titleSource,
-      cwd: req.cwd,
-      permMode: req.permMode ?? "auto",
-      lastActiveAt: null,
-      archivedAt: null,
-    });
-    // #59（spec #57）：草稿首条消息 —— 创建+发送原子化：发送失败受控终止并回滚删除已插记录（不留空会话），错误直达调用方
-    if (req.firstMessage !== undefined) {
-      try {
-        await deps.adapter.sendTurn({ sessionId, text: req.firstMessage });
-      } catch (err) {
-        const code = err instanceof AdapterError ? err.code : "E_INTERNAL";
-        const message = err instanceof Error ? err.message : String(err);
-        await deps.adapter.dispose({ sessionId }).catch((disposeErr: unknown) => {
-          // 终止失败（进程已死等）不阻断回滚，仅留痕
-          deps.log?.("error", "session:create", `首条消息发送失败后的受控终止未成功：${disposeErr instanceof Error ? disposeErr.message : String(disposeErr)}`);
-        });
-        deps.sessions.delete(sessionId);
-        deps.log?.("error", "session:create", `首条消息发送失败，已回滚会话记录（${code}）：${message}`);
-        // 附带回滚会话 id：渲染端撤销事件先至的占位会话行（不留空会话的渲染端闭环）
-        return { ok: false, error: { code, message, rolledBackSessionId: sessionId } };
-      }
-    }
+    if (!r.ok) return { ok: false, error: r.error };
     // #17（spec #15 C 节）：可选 requirementId —— 创建成功后由 Main 原子落 link 事件（避免 renderer 两步编排竞态）；
     // 会话须与需求同项目，业务拒绝是合法结果不走错误码，原因直达调用方
     const linkedResult = req.requirementId
-      ? linkAfterCreate(deps, sessionId, req.requirementId, req.projectId ?? null, TRACKER_CLI_BY_APP[req.cli])
+      ? linkAfterCreate(deps, r.sessionId, req.requirementId, req.projectId ?? null, TRACKER_CLI_BY_APP[req.cli])
       : undefined;
     return {
       ok: true,
-      sessionId,
+      sessionId: r.sessionId,
       cli: req.cli,
-      title,
+      title: r.title,
       // issue #76（spec #75）：会话实际采用的 model（codex=探测结果、opencode=显式或 /config 默认、fake/claude 透传；供调用方回显）
-      ...(model !== undefined && model !== null ? { model } : {}),
-      dirIdentity: identity.kind,
-      worktreeName: identity.kind === "worktree" ? identity.name : null,
+      ...(r.model !== undefined && r.model !== null ? { model: r.model } : {}),
+      ...dirIdentityFields(req.cwd),
       ...linkedResult, // 无 requirementId 时为 undefined，展开为空（响应不含 linked/reason 字段，保持既有形状）
       // #21（spec #15 E 节）：仅 Claude 创建时扫描一次（不做运行时/发送时检测；Codex/OpenCode 不检测）；检测失败安全降级为空数组（纯函数内兜底）
       ...(req.cli === "claude"

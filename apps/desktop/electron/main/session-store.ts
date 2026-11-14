@@ -50,7 +50,8 @@ export class SessionStore {
   constructor(private readonly db: SqliteDb) {}
 
   /** 新会话入库（id 为应用侧 uuid，由 Main 从 adapter.createSession 拿到后传入；新建恒未归档恒 idle（status 缺省值）；createdAt 可省略走 DB 默认当前时刻；
-   *  #62×#60：同 id 重插入（PTY 草稿 spawn 失败回删占位行后重试复用同 id）清除删除墓碑——重建即活会话 */
+   *  #62×#60：同 id 重插入（PTY 草稿 spawn 失败回删占位行后重试复用同 id）清除删除墓碑——重建即活会话；
+   *  arch C12 唯一写者口径：main 生产调用方仅 session-lifecycle create 编排（ipc 路由不再直插），测试夹具播种仍直用 */
   insert(rec: SessionRecord): void {
     this.deletedIds.delete(rec.id);
     this.db
@@ -126,7 +127,8 @@ export class SessionStore {
   }
 
   /** 删除（#58/#62）：移除整行（含 native_session_id；#62 删除编排经 IPC 调用）并记内存墓碑；幂等——无行即 no-op；
-   *  #59 复用：session:create+firstMessage 发送失败回滚（回滚后重试生成全新 sessionId，不撞墓碑）；#60 复用：PTY spawn 失败回删占位行 */
+   *  #59 复用：session:create+firstMessage 发送失败回滚（回滚后重试生成全新 sessionId，不撞墓碑）；#60 复用：PTY spawn 失败回删占位行；
+   *  arch C12 唯一写者口径：main 生产调用方仅 session-lifecycle「终止+删行」尾部（remove 与 create 失败回滚），测试直用保留 */
   delete(id: string): void {
     this.db.prepare("DELETE FROM sessions WHERE id = ?").run(id);
     this.deletedIds.add(id);

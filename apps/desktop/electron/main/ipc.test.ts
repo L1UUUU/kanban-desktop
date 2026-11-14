@@ -491,21 +491,24 @@ describe("terminal 通道（#12：terminalApi × terminalId 参数化）", () =>
     const ptyState = makePtyHost();
     const adapter = new FakeAdapter({ clock });
     const sessions = new SessionStore(db);
+    // arch C12：create 编排经 lifecycle 的 SessionProcesses 分派到 PTY 宿主——失败注入须对齐生产装配
+    //（index.ts 中 deps.pty 与 lifecycle 的 procs 是同一 ptyHost 实例），不能只覆盖 deps.pty 一侧
+    const pty: PtyHost = opts?.failSpawn
+      ? {
+          ...ptyState.host,
+          spawn: () => ({ ok: false, message: "启动失败：spawn boom" }),
+        }
+      : ptyState.host;
     const deps: IpcDeps = {
       adapter,
       engine: new TrackerEngine(db),
       projects: new ProjectStore(db),
       sessions,
-      lifecycle: createSessionLifecycle({ sessions, procs: createAdapterSessionProcesses(adapter, ptyState.host) }),
+      lifecycle: createSessionLifecycle({ sessions, procs: createAdapterSessionProcesses(adapter, pty) }),
       pickDirectory: async () => projDir,
       getCurrentProjectId: () => null,
       setCurrentProjectId: () => undefined,
-      pty: opts?.failSpawn
-        ? {
-            ...ptyState.host,
-            spawn: () => ({ ok: false, message: "启动失败：spawn boom" }),
-          }
-        : ptyState.host,
+      pty,
     };
     return { deps, ptyState, projDir, handle: (raw: unknown) => handleIpc(deps, raw) };
   }

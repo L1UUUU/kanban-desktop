@@ -1,6 +1,15 @@
-// 用途：kanban:ipc 子通道 handler 跨 feature 共享辅助 —— CLI 口径映射 / GUI 事件工厂 / 事件流落库与推送 / 创建后原子关联（#72 C1 Step2 自 ipc.ts 原样迁入；会话编排主体在 session-lifecycle，#70 C2）
+// 用途：kanban:ipc 子通道 handler 跨 feature 共享辅助 —— CLI 口径映射 / GUI 事件工厂 / 事件流落库与推送 / 创建后原子关联 / 会话行目录身份投影（#72 C1 Step2 自 ipc.ts 原样迁入；会话编排主体在 session-lifecycle，#70 C2；arch C12 起目录身份 wire 形状单点在此）
 import { type Cli, type NormalizedEvent, type TrackerChange } from "@kanban/tracker";
+import type { SessionRow } from "@kanban/ipc-schema";
 import type { IpcDeps } from "../ipc";
+import { detectDirIdentity } from "../git-identity";
+
+/** 会话行目录身份投影（arch C12 wire 形状单点）：cwd → { dirIdentity, worktreeName }——session:list 行投影与
+ *  session:create / terminal:create 响应共用同一形状知识；逐行判定语义保持，不做判定缓存 */
+export function dirIdentityFields(cwd: string | null): Pick<SessionRow, "dirIdentity" | "worktreeName"> {
+  const identity = cwd ? detectDirIdentity(cwd) : { kind: "none" as const };
+  return { dirIdentity: identity.kind, worktreeName: identity.kind === "worktree" ? identity.name : null };
+}
 
 /** 应用侧 cli 名（sessions 表：fake/codex/claude/opencode/pty）→ tracker CLIS（claude-code/codex/opencode/pty）；
  *  fake 演示链路的观察信号由 FakeAdapter 以 claude-code 口径上报，故同映射到 claude-code；
