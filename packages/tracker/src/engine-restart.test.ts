@@ -93,7 +93,7 @@ describe("重启恢复（poc-4 verify-restart 7 项演进）", () => {
 describe("重启恢复（新增契约断言）", () => {
   it("需求投影表（requirements 表）与事件重放态一致 —— 持久化无分叉", () => {
     // requirements 表按事件流 upsert 落库；restore 按事件重放。两者必须一致，否则持久化分叉
-    const rows = eng.store.listRequirements(); // 含上一用例新建并已 persistAll 落库的 REQ-002
+    const rows = eng.store.listRequirements(); // 含上一用例新建并已 saveProjection 落库的 REQ-002
     const snap = eng.snapshot();
     expect(rows.map((r) => r.id).sort()).toEqual(snap.map((r) => r.id).sort());
     for (const r of snap) {
