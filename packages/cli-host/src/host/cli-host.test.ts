@@ -150,7 +150,7 @@ describe("CliHost runOnce 命令（C5 演进，#29；kind 改名 runOnce，issue
 
 /** 最小桩 adapter（可选面全部缺席——能力声明全 false，arch C13 同步；聚合方对 listChildPids 按空集处理）；arch D2 起目录面经 forCli 即自身 */
 class BaseStubAdapter implements CliAdapter, CliDirectory {
-  readonly capabilities = { approval: false, interrupt: false, resume: false, readHistory: false, skillSignal: false, adoptSession: false, runOnce: false, listChildPids: false };
+  readonly capabilities = { approval: false, interrupt: false, resume: false, readHistory: false, skillSignal: false, adoptSession: false, runOnce: false, listChildPids: false, summarizeTitle: false };
   private n = 0;
   private readonly handlers = new Set<(event: AdapterEvent) => void>();
   forCli(): CliDirectory {

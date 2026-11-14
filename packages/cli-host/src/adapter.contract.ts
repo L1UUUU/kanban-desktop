@@ -73,10 +73,11 @@ export interface ContractOptions {
   /** listCommands（#89）条数下限：缺省 1；Fake 恒空集（ADR 0004 零内置命令，契约套件传 0 放宽为纯形状校验）；真实 CLI 命令集随机器安装目录/版本不定同样传 0 */
   listCommands?: { atLeast?: number };
   /**
-   * summarizeTitle（#95）断言口径：缺省 "exact"（Fake 精确固定值）；真实 CLI 传 "loose"（非空单行短标题——摘要真实生成）；
-   * opencode 传 "null"（无一次性摘要能力，降级保留 fallback）。三口径共用「会话上下文零污染」不变量断言。
+   * summarizeTitle（#95）断言口径：缺省 "exact"（Fake 精确固定值）；真实 CLI 传 "loose"（非空单行短标题——摘要真实生成）。
+   * arch D3 起能力缺席口径由能力面推导：capabilities.summarizeTitle=false（opencode）恒按 null 断言，不再手工传 "null"。
+   * 各口径共用「会话上下文零污染」不变量断言。
    */
-  summarizeTitle?: "exact" | "loose" | "null";
+  summarizeTitle?: "exact" | "loose";
 }
 
 export function defineAdapterContractTests(
@@ -394,8 +395,9 @@ export function defineAdapterContractTests(
     const transcriptBefore = await adapter.readTranscript(sessionId);
     const title = await adapter.summarizeTitle(sessionId);
     const mode = opts?.summarizeTitle ?? "exact";
-    if (mode === "null") {
-      expect(title).toBeNull(); // opencode：prompt API 需会话上下文，降级保留 fallback 派生标题
+    if (!adapter.capabilities.summarizeTitle) {
+      // arch D3：能力面推导——无一次性摘要能力（opencode：prompt API 需会话上下文），降级保留 fallback 派生标题
+      expect(title).toBeNull();
     } else if (mode === "exact") {
       expect(title).toBe(FAKE_SUMMARIZED_TITLE); // Fake 固定值（整机 e2e 同值断言）
     } else {

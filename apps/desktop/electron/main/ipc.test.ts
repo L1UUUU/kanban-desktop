@@ -208,7 +208,7 @@ describe("Main 入站强制校验", () => {
 
     // 抛非 AdapterError 的 adapter → E_INTERNAL 兜底（arch C13：可选面缺席如实声明，本测试只驱动 session:send）
     const boom = {
-      capabilities: { approval: true, interrupt: true, resume: true, readHistory: true, skillSignal: true, adoptSession: false, runOnce: false, listChildPids: false },
+      capabilities: { approval: true, interrupt: true, resume: true, readHistory: true, skillSignal: true, adoptSession: false, runOnce: false, listChildPids: false, summarizeTitle: false },
       createSession: async () => ({ sessionId: "s-boom" }),
       sendTurn: async () => {
         throw new Error("boom");

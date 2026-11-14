@@ -77,6 +77,7 @@ const CODEX_CAPABILITIES: AdapterCapabilities = {
   adoptSession: true,
   runOnce: false,
   listChildPids: true,
+  summarizeTitle: true, // arch D3：codex exec 一次性摘要进程（#95）
 };
 
 /** model/list 分页保护上限（nextCursor 续拉；防异常游标死循环，issue #76） */

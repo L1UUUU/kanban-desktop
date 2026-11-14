@@ -38,6 +38,7 @@ describe("FakeAdapter 专属场景", () => {
       adoptSession: true,
       runOnce: false,
       listChildPids: true,
+      summarizeTitle: true,
     });
   });
 

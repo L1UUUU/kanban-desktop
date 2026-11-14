@@ -65,8 +65,8 @@ function insertSession(db: SqliteDb, id: string, projectId: string | null): void
 
 // ========== #95 / ADR 0003 决策 2 摘要段：首轮 idle 后一次性异步摘要触发 ==========
 describe("T2 摘要触发矩阵（#95）", () => {
-  /** 摘要链路专用 wiring：可控 summarize 替身 + session:event 推送收集 + 触发调用记录 */
-  function makeTitleWiring(summarize?: (sessionId: string) => Promise<string | null>) {
+  /** 摘要链路专用 wiring：可控 summarize 替身 + session:event 推送收集 + 触发调用记录（summarizeCapable=false 模拟无摘要能力面，arch D3） */
+  function makeTitleWiring(summarize?: (sessionId: string) => Promise<string | null>, summarizeCapable = true) {
     const db = openDatabase(":memory:");
     openDbs.push(db);
     const sessions = new SessionStore(db);
@@ -80,6 +80,7 @@ describe("T2 摘要触发矩阵（#95）", () => {
       engine,
       send: (e) => forwarded.push(e),
       adapter: {
+        capabilities: { summarizeTitle: summarizeCapable },
         summarizeTitle:
           summarize ??
           ((id) => {
@@ -175,6 +176,22 @@ describe("T2 摘要触发矩阵（#95）", () => {
     await flush();
     expect(w.calls).toEqual(["s-null"]);
     expect(w.sessions.get("s-null")).toMatchObject({ titleSource: "derived" });
+    expect(w.pushed).toEqual([]);
+  });
+
+  it("arch D3 能力位门控：capabilities.summarizeTitle=false 的面直接跳过尝试（零调用、零写入、无推送）", async () => {
+    const w = makeTitleWiring(
+      (id) => {
+        w.calls.push(id);
+        return Promise.resolve("不应产出");
+      },
+      false,
+    );
+    insertStructured(w.sessions, "s-nocap", "derived");
+    w.handler(idle("s-nocap"));
+    await flush();
+    expect(w.calls).toEqual([]); // 能力位先行：不白付摘要调用
+    expect(w.sessions.get("s-nocap")).toMatchObject({ titleSource: "derived" }); // fallback 派生标题不动
     expect(w.pushed).toEqual([]);
   });
 

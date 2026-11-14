@@ -74,6 +74,7 @@ const FAKE_CAPABILITIES: AdapterCapabilities = {
   adoptSession: true,
   runOnce: false,
   listChildPids: true,
+  summarizeTitle: true, // arch D3：Fake 固定值摘要（FAKE_SUMMARIZED_TITLE，整机 e2e 断言锚点）
 };
 
 /** Fake 摘要标题固定值（#95 / ADR 0003 决策 3）：整机 e2e 断言侧栏标题翻转；契约套默认精确断言值 */

@@ -1,4 +1,4 @@
-// 用途：C1 Adapter 统一契约（spec B 冻结）—— 会话级方法面 + capabilities + 带错误码的异常；实现侧（Fake/三 CLI）与宿主（CliHost/Main 路由）共同依赖；可选面含 runOnce/cancelRunOnce 与 listChildPids（issue #73 托管附加能力并入）；arch C13 起可选方法的缺席判定单源 = capabilities 同键布尔（方法本体保持 TS 可选）；arch D2 起目录级四命令（createSession/listModels/listCommands/adoptSession）自带 CLI 维度，拆出到 CliDirectory（cli 经 forCli 句柄参数承载，input 不含 cli 字段），CliAdapter 收成会话级方法面
+// 用途：C1 Adapter 统一契约（spec B 冻结）—— 会话级方法面 + capabilities + 带错误码的异常；实现侧（Fake/三 CLI）与宿主（CliHost/Main 路由）共同依赖；可选面含 runOnce/cancelRunOnce 与 listChildPids（issue #73 托管附加能力并入）；arch C13 起可选方法的缺席判定单源 = capabilities 同键布尔（方法本体保持 TS 可选）；arch D2 起目录级四命令（createSession/listModels/listCommands/adoptSession）自带 CLI 维度，拆出到 CliDirectory（cli 经 forCli 句柄参数承载，input 不含 cli 字段），CliAdapter 收成会话级方法面；arch D3 起 summarizeTitle 能力位入面（缺席判定单源，方法保持必选 + null 语义不变）
 import type {
   ApprovalDecision,
   ApprovalSuggestion,
@@ -17,7 +17,9 @@ import type { RunOnceInput, RunOnceResult } from "./host/run-once";
  * arch C13：可选方法（adoptSession / runOnce+cancelRunOnce / listChildPids）是否可用的判定单源收进本面——
  * 声明 true ⇒ 同名（runOnce 门控 runOnce/cancelRunOnce 两个同门方法）方法必在场可调用；false ⇒ 调用方按各自业务降级，
  * 不再对方法做 `?.` 存在性探测散判定。能力与方法在场的同步由实现方保证（adapter.contract 契约断言钉住）。
- * summarizeTitle 不在此面：必选方法 + null 返回语义（ADR 0003 决策 3，null = 该会话无可摘要而非无能力）。
+ * arch D3：summarizeTitle 能力位入本面——false ⇒ 该 CLI 无一次性摘要能力（opencode prompt API 需会话上下文），
+ * 调用方直接跳过不逐会话白付往返；方法本体保持必选（false 的实现恒返回 null 作防御兜底），null 语义不变
+ * （ADR 0003 决策 3：有能力的 CLI 返回 null = 该会话无可摘要素材，而非无能力）。
  */
 export interface AdapterCapabilities {
   approval: boolean;
@@ -31,6 +33,8 @@ export interface AdapterCapabilities {
   runOnce: boolean;
   /** 活跃子进程上报（listChildPids）：false ⇒ 方法缺席，聚合方按空集处理 */
   listChildPids: boolean;
+  /** 一次性标题摘要（#95 / ADR 0003 决策 3）：false ⇒ 无该能力（opencode），调用方按能力位跳过尝试；true ⇒ 方法可调用，无素材时返回 null */
+  summarizeTitle: boolean;
 }
 
 /** createSession 输入（arch D2 起 cli 维度经 forCli 句柄承载，input 不含 cli 字段；cwd 必填；model/permMode 由 Adapter 映射到各 CLI 原生机制） */
@@ -191,8 +195,10 @@ export interface CliAdapter {
   setModel(input: SetModelInput): Promise<{ model: string }>;
   /**
    * 一次性标题摘要（#95 / ADR 0003 决策 3）：spawn 独立一次性进程（喂截断的最近对话文本、会话当前模型、
-   * 超时独立设定），不进会话事件流、不污染会话上下文；返回单行标题文本，null = 无素材或该 CLI 无摘要能力
-   * （opencode prompt API 需会话上下文，恒 null 降级保留 fallback）。失败/超时抛 AdapterError（调用方静默不重试）。
+   * 超时独立设定），不进会话事件流、不污染会话上下文；返回单行标题文本，有能力的 CLI null = 无素材
+   * （决策 3 语义不变）。能力缺席判定单源 = capabilities.summarizeTitle（arch D3）：false 的实现
+   * （opencode prompt API 需会话上下文）恒 null 作防御兜底，调用方按能力位跳过不白付往返。
+   * 失败/超时抛 AdapterError（调用方静默不重试）。
    */
   summarizeTitle(sessionId: string): Promise<string | null>;
   /** 订阅归一化事件流（ChatEvent ∪ SkillObservation），返回退订函数 */

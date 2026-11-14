@@ -1,5 +1,5 @@
 // 用途：Adapter 事件流接线（#9；#16 起在 SkillObservation 分支注入会话项目，#17 起把 tracker 变更经 sendChange 推送 renderer，#53 起诊断走统一日志，#70 起 ChatEvent 落库/迟到守卫经 store.applyEvent 一次收口，#95 起首轮 idle 触发一次性异步标题摘要并经 session:event 轻通道推送）—— 出站 zod 校验 + 会话落库 + SkillObservation 进 TrackerEngine（stage_events 幂等落库 + 状态机驱动）+ 转发 renderer；从 index.ts 提取为可单测的纯接线
-import type { CliAdapter } from "@kanban/cli-host";
+import type { AdapterCapabilities, CliAdapter } from "@kanban/cli-host";
 import { adapterEventSchema, type AdapterEvent, type ChatEvent, type SessionEventWire } from "@kanban/ipc-schema";
 import type { TrackerChange, TrackerEngine } from "@kanban/tracker";
 import type { LogFn } from "./logger";
@@ -12,8 +12,8 @@ export interface AdapterEventDeps {
   send(event: AdapterEvent): void;
   /** #17：tracker 变更推送（webContents.send("tracker:event")；可选，缺省不推送供旧接线/测试） */
   sendChange?(change: TrackerChange): void;
-  /** #95 / ADR 0003 摘要触发面（窄注入：CliAdapter 满足本面；可选，缺省不触发供旧接线/测试） */
-  adapter?: Pick<CliAdapter, "summarizeTitle">;
+  /** #95 / ADR 0003 摘要触发面（窄注入：CliAdapter 满足本面；可选，缺省不触发供旧接线/测试）；arch D3 起含能力位——capabilities.summarizeTitle=false 直接跳过尝试 */
+  adapter?: Pick<CliAdapter, "summarizeTitle"> & { readonly capabilities: Pick<AdapterCapabilities, "summarizeTitle"> };
   /** #95：session:event 轻通道推送（摘要标题完成通知，schema 见 sessionEventSchema；可选，缺省写库不推送） */
   sendSessionEvent?(event: SessionEventWire): void;
   /** #53（spec #52 I 节）：诊断日志 —— 出站契约丢弃与 tracker 处理失败记 error；缺省 no-op 供旧测试（console 迁移至统一日志） */
@@ -57,10 +57,13 @@ export function createAdapterEventHandler(deps: AdapterEventDeps): (event: Adapt
    * #95 / ADR 0003 决策 2 摘要触发：idle 事件 + kind='structured' + title_source='derived' + 本进程未尝试 →
    * 异步一次性摘要（不阻塞事件泵）；返回非 null 经 store.applySummarizedTitle 门控写入（manual/已删行/竞态零命中），
    * 生效才经 session:event 推送；失败/超时/null 静默不重试（attemptedSummary 在调用前登记，含失败）。
+   * arch D3：能力位先行——注入面 capabilities.summarizeTitle=false（opencode 形态）直接跳过，
+   * 不逐会话白付往返后丢弃 null；有能力的面 attemptedSummary 登记行为不变。
    */
   function maybeSummarize(event: ChatEvent): void {
     const summarizer = deps.adapter;
     if (!summarizer || event.type !== "session_status" || event.status !== "idle") return;
+    if (!summarizer.capabilities.summarizeTitle) return;
     if (attemptedSummary.has(event.sessionId)) return;
     const row = deps.sessions.get(event.sessionId);
     if (!row || row.kind !== "structured" || row.titleSource !== "derived") return;
@@ -69,7 +72,7 @@ export function createAdapterEventHandler(deps: AdapterEventDeps): (event: Adapt
       .summarizeTitle(event.sessionId)
       .then((raw) => {
         const title = raw?.trim();
-        if (!title) return; // null/空串：CLI 无摘要能力（opencode）或产出为空，降级保留 fallback
+        if (!title) return; // null/空串：该会话无摘要素材或产出为空（无能力面已在能力位跳过），降级保留 fallback
         if (!deps.sessions.applySummarizedTitle(event.sessionId, title)) return; // 门控拒绝：竞态下已 manual/已删行
         deps.sendSessionEvent?.({ type: "title", sessionId: event.sessionId, title });
       })

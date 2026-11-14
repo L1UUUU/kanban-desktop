@@ -11,7 +11,7 @@ import { readCommandSnapshot, readMessageSnapshot } from "./opencode/snapshot";
 import { isAuthFailureStatus, isAuthFailureText, isProtocolDisconnectText } from "./session-error";
 import { requireLiveSessionEntry, requireSessionEntry, TurnKernel, type KernelApproval, type TurnState, type TurnTerminalStatus } from "./turn-kernel";
 
-/** 全能力（approval/interrupt/resume/readHistory 实证于 poc-3 + 1.15.7 探针；skillSignal=command 路由 self_reported）；runOnce 为托管形态能力（worker RunOnceRunner），adapter 单元恒 false（arch C13） */
+/** 全能力（approval/interrupt/resume/readHistory 实证于 poc-3 + 1.15.7 探针；skillSignal=command 路由 self_reported）；runOnce 为托管形态能力（worker RunOnceRunner），adapter 单元恒 false（arch C13）；summarizeTitle 缺席（arch D3：prompt API 需会话上下文，恒 null 降级保留 fallback） */
 const OPENCODE_CAPABILITIES: AdapterCapabilities = {
   approval: true,
   interrupt: true,
@@ -21,6 +21,7 @@ const OPENCODE_CAPABILITIES: AdapterCapabilities = {
   adoptSession: true,
   runOnce: false,
   listChildPids: true,
+  summarizeTitle: false,
 };
 
 /** magpie 网关模型 ID 含斜杠：按第一个斜杠切 provider，余下合并为 model（poc-3 §10.1） */

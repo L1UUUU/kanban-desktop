@@ -104,6 +104,7 @@ export class CliHostClient implements CliAdapter {
   /**
    * 托管形态静态能力面（arch C13）：可选面经 wire 恒可达——worker 内 router 所辖 Fake/三 CLI adapter 全实现
    * adoptSession/listChildPids（能力并集 true），runOnce/cancelRunOnce 由 worker CliHost 的 RunOnceRunner 提供。
+   * summarizeTitle 并集 true（fake/codex/claude 有能力；opencode 缺席由 worker 内 router 按所属 adapter 能力位短路，arch D3）。
    * wire 侧不往返能力查询，main 消费点按本声明统一门控降级。
    */
   readonly capabilities: AdapterCapabilities = {
@@ -115,6 +116,7 @@ export class CliHostClient implements CliAdapter {
     adoptSession: true,
     runOnce: true,
     listChildPids: true,
+    summarizeTitle: true,
   };
   private proc: UtilityProcessLike;
   private nextId = 1;

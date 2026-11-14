@@ -214,7 +214,7 @@ describe.skipIf(!E2E)("OpenCodeAdapter 真实集成（env-gated）", () => {
       // #89：真实 server 的自定义命令集随机器/版本不定（用户级 command 目录非本套 fixture）→ 放宽为纯形状校验
       listCommands: { atLeast: 0 },
       firstAssistantText: null,
-      summarizeTitle: "null", // #95：opencode 一次性摘要降级 null（prompt API 需会话上下文）
+      // summarizeTitle 缺席口径不传（arch D3）：契约套按 capabilities.summarizeTitle=false 推导恒 null
       suggestionsRequired: true,
       deny: { contains: [], notContains: [], verify: async () => { expect(existsSync(f1)).toBe(false); } },
       once: { outputContains: [], verify: async () => { expect(existsSync(f1)).toBe(true); } },

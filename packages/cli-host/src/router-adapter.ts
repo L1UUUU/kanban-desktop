@@ -6,7 +6,7 @@ import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type Cl
 /** Router 构造工厂：cli → adapter（不支持该 CLI 时抛 AdapterError） */
 export type AdapterFactory = (cli: string) => CliAdapter;
 
-/** 能力并集（UI 门面视角；单会话能力以各 adapter 为准）。arch C13：可选面 adoptSession/runOnce/listChildPids 一并并集——adapter 单元 runOnce 恒 false（托管形态能力），并集结果即「进程内回退无 runOnce」的声明 */
+/** 能力并集（UI 门面视角；单会话能力以各 adapter 为准）。arch C13：可选面 adoptSession/runOnce/listChildPids 一并并集——adapter 单元 runOnce 恒 false（托管形态能力），并集结果即「进程内回退无 runOnce」的声明；arch D3：summarizeTitle 同并集（opencode 缺席，单会话跳过见 summarizeTitle 路由） */
 function mergeCapabilities(adapters: Iterable<CliAdapter>): AdapterCapabilities {
   const all = [...adapters];
   return {
@@ -18,6 +18,7 @@ function mergeCapabilities(adapters: Iterable<CliAdapter>): AdapterCapabilities 
     adoptSession: all.some((a) => a.capabilities.adoptSession),
     runOnce: all.some((a) => a.capabilities.runOnce),
     listChildPids: all.some((a) => a.capabilities.listChildPids),
+    summarizeTitle: all.some((a) => a.capabilities.summarizeTitle),
   };
 }
 
@@ -84,9 +85,11 @@ export class AdapterRouter implements CliAdapter {
     return this.route(input.sessionId).setModel(input);
   }
 
-  /** 一次性标题摘要（#95 / ADR 0003）：按 sessionId 路由到所属 Adapter */
+  /** 一次性标题摘要（#95 / ADR 0003）：按 sessionId 路由到所属 Adapter；arch D3 能力位先行——所属 CLI 无摘要能力（opencode）直接返回 null，不白付 adapter 调用（null 语义不变） */
   async summarizeTitle(sessionId: string): Promise<string | null> {
-    return this.route(sessionId).summarizeTitle(sessionId);
+    const adapter = this.route(sessionId);
+    if (!adapter.capabilities.summarizeTitle) return null;
+    return adapter.summarizeTitle(sessionId);
   }
 
   async resolveApproval(input: ResolveApprovalInput): Promise<void> {

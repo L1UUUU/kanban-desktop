@@ -71,6 +71,7 @@ const CLAUDE_CAPABILITIES: AdapterCapabilities = {
   adoptSession: true,
   runOnce: false,
   listChildPids: true,
+  summarizeTitle: true, // arch D3：claude -p 一次性摘要进程（#95）
 };
 
 /** 待决审批：挂起 wire 响应直到用户决定（onControlRequest 挂起 Promise 模式，#8 同款）；KernelApproval 基类之外携带 addRules 规则建议 */

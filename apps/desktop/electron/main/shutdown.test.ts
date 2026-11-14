@@ -14,7 +14,7 @@ function makeFakeAdapter(hooks: { onInterrupt?: (id: string) => void; failInterr
   const adopted: Array<AdoptSessionInput & { cli?: string }> = [];
   const adapter: CliAdapter = {
     // arch C13：能力声明与可选方法在场同步（本桩实现 adoptSession，无 listChildPids/runOnce）
-    capabilities: { approval: true, interrupt: true, resume: true, readHistory: true, skillSignal: false, adoptSession: true, runOnce: false, listChildPids: false },
+    capabilities: { approval: true, interrupt: true, resume: true, readHistory: true, skillSignal: false, adoptSession: true, runOnce: false, listChildPids: false, summarizeTitle: false },
     forCli: (cli) => ({
       createSession: async () => {
         throw new Error("测试不使用");
@@ -225,7 +225,7 @@ describe("重开恢复编排（#13；#70 起经 session-lifecycle.adoptRestored�
     ]);
     const noAdopt: CliAdapter = {
       // arch C13：可选面全缺席——能力声明全 false（adopt 缺席走 reject 降级路径）；arch D2 起目录面挂 forCli 句柄（adoptSession 缺席）
-      capabilities: { approval: true, interrupt: true, resume: true, readHistory: true, skillSignal: false, adoptSession: false, runOnce: false, listChildPids: false },
+      capabilities: { approval: true, interrupt: true, resume: true, readHistory: true, skillSignal: false, adoptSession: false, runOnce: false, listChildPids: false, summarizeTitle: false },
       forCli: () => ({
         createSession: async () => {
           throw new Error("unused");

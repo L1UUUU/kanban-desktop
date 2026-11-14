@@ -16,7 +16,7 @@ vi.mock("./desktop-adapters", () => ({
 /** 最小 CliAdapter 替身（构造期能力探测足够；会话命令不被本测试驱动；arch D2 起目录面挂在 forCli 句柄） */
 function makeStubAdapter(): CliAdapter {
   return {
-    capabilities: { approval: false, interrupt: false, resume: false, readHistory: false, skillSignal: false, adoptSession: false, runOnce: false, listChildPids: false },
+    capabilities: { approval: false, interrupt: false, resume: false, readHistory: false, skillSignal: false, adoptSession: false, runOnce: false, listChildPids: false, summarizeTitle: false },
     forCli: () => ({
       createSession: async () => ({ sessionId: "stub", nativeSessionId: null }),
       listModels: async () => [],
