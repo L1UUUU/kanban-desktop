@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import type { AdapterEvent, ChatEvent, TranscriptEvent } from "@kanban/ipc-schema";
 import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CliDirectory, type DisposeInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
+import { REAL_CLI_KINDS } from "./exe-registry";
 
 /** Router 构造工厂：cli → adapter（不支持该 CLI 时抛 AdapterError） */
 export type AdapterFactory = (cli: string) => CliAdapter;
@@ -31,9 +32,9 @@ export class AdapterRouter implements CliAdapter {
   readonly capabilities: AdapterCapabilities;
 
   constructor(private readonly factory: AdapterFactory) {
-    // 预热常见 CLI 拿能力并集（fake/codex/claude/opencode）
+    // 预热常见 CLI 拿能力并集（fake + 注册表真实 CLI，名单单源 = CLI_REGISTRY，arch D5）
     const probes: CliAdapter[] = [];
-    for (const cli of ["fake", "codex", "claude", "opencode"]) {
+    for (const cli of ["fake", ...REAL_CLI_KINDS]) {
       try {
         probes.push(factory(cli));
       } catch {

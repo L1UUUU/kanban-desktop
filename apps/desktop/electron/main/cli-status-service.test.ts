@@ -92,7 +92,7 @@ describe("真实探测装配 createRealCliProbes（#80：解析链注入可测�
   it("装/未装两态：解析链返回路径=已装，抛 ExeNotFoundError=未装；config 手动覆盖逐 cli 透传给解析链", () => {
     const { resolvers, received } = makeResolvers({ codex: "ok", claude: "missing", opencode: "ok" });
     const probes = createRealCliProbes(
-      { codexExe: "C:\\cfg\\codex.exe", claudeExe: null, opencodeExe: undefined },
+      { cliExe: { codex: "C:\\cfg\\codex.exe", claude: null, opencode: null } },
       {},
       resolvers,
     );

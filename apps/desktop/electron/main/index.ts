@@ -406,11 +406,7 @@ app.whenReady().then(async () => {
   const cliStatus = createCliStatusService(
     process.env.KANBAN_TEST_CLI_STATUS_JSON
       ? createSeededCliProbes(process.env.KANBAN_TEST_CLI_STATUS_JSON, (m) => logger.child("cli-status").log("warn", m))
-      : createRealCliProbes({
-          codexExe: appConfig.cliExe.codex,
-          claudeExe: appConfig.cliExe.claude,
-          opencodeExe: appConfig.cliExe.opencode,
-        }),
+      : createRealCliProbes({ cliExe: appConfig.cliExe }),
   );
   ipcMain.handle(IPC_CHANNELS.cliStatus.name, (_event, raw: unknown) =>
     handleCliStatusIpc({ cliStatus, isShuttingDown: () => shutdown.isShuttingDown(), log: logger.log }, raw),

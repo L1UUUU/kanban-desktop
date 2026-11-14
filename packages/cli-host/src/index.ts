@@ -9,6 +9,8 @@ export { parseFrontmatter } from "./frontmatter";
 export { listClaudeSkillCommands } from "./claude/skill-commands";
 export { listCodexPromptCommands, expandCodexPromptCommand } from "./codex/prompt-commands";
 export { VirtualClock, SystemClock, type FakeClock } from "./clock";
+// arch D5：CLI 名单/解析链/Fake 回切开关单源注册表（status 探测、router 预热、desktop 工厂开关遍历派生）+ 按注册表解析入口
+export { CLI_REGISTRY, REAL_CLI_KINDS, EXE_CHAINS, resolveCliExe, type CliExeEntry } from "./exe-registry";
 export { CodexAdapter, type CodexAdapterOptions, type CodexRpcClientLike } from "./codex-adapter";
 export { resolveCodexExe, readCodexVersion, listCodexExeCandidates } from "./codex/exe";
 export { CodexRpcClient, RpcError } from "./codex/rpc";

@@ -14,7 +14,7 @@ import {
   resolveExeChain,
   type ExeChainSpec,
 } from "./exe-chain";
-import { EXE_CHAINS } from "./exe-registry";
+import { CLI_REGISTRY, EXE_CHAINS } from "./exe-registry";
 
 // 临时目录统一登记清理
 const tmpRoots: string[] = [];
@@ -240,6 +240,14 @@ describe("EXE_CHAINS（注册表一致性）", () => {
       expect(spec.cli).toBe(key);
       expect(spec.envVar).toMatch(/^KANBAN_[A-Z]+_BIN$/);
       expect(spec.steps.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("disableEnv 开关名与 cli 名单源对齐（arch D5：desktop-adapters 回切与 cli:status 旁路共用同一元数据）", () => {
+    expect(Object.keys(CLI_REGISTRY)).toEqual(["claude", "codex", "opencode"]);
+    for (const [key, entry] of Object.entries(CLI_REGISTRY)) {
+      expect(entry.disableEnv).toBe(`KANBAN_DISABLE_${key.toUpperCase()}`);
+      expect(entry.chain).toBe(EXE_CHAINS[key]); // 视图自注册表派生而非另抄
     }
   });
 });

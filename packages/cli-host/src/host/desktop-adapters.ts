@@ -7,6 +7,7 @@ import { CodexAdapter } from "../codex-adapter";
 import { FakeAdapter } from "../fake-adapter";
 import { OpenCodeAdapter } from "../opencode-adapter";
 import { createDefaultModelResolver } from "../codex/model-probe";
+import { CLI_REGISTRY } from "../exe-registry";
 
 export interface DesktopAdapterFactoryOptions {
   /** config cliExe.codex 手动覆盖（缺省探测链） */
@@ -21,11 +22,14 @@ export interface DesktopAdapterFactoryOptions {
   log?: (kind: LogKind, detail: string) => void;
 }
 
-/** 按需构造：codex/claude/opencode 真实 Adapter（env KANBAN_DISABLE_CODEX/KANBAN_DISABLE_CLAUDE/KANBAN_DISABLE_OPENCODE=1 时回落 Fake 演示模式）；fake 恒可用 */
+/** 按需构造：codex/claude/opencode 真实 Adapter（env KANBAN_DISABLE_*（开关名单源 = CLI_REGISTRY 元数据，arch D5）=1 时回落 Fake 演示模式）；fake 恒可用 */
 export function createDesktopAdapterFactory(options: DesktopAdapterFactoryOptions = {}): (cli: string) => CliAdapter {
-  const disableCodex = process.env.KANBAN_DISABLE_CODEX === "1";
-  const disableClaude = process.env.KANBAN_DISABLE_CLAUDE === "1";
-  const disableOpencode = process.env.KANBAN_DISABLE_OPENCODE === "1";
+  // Fake 回切开关快照（工厂创建时逐注册表条目判定；与 cli:status 旁路同一开关语义）
+  const fakeFallback = new Set(
+    Object.entries(CLI_REGISTRY)
+      .filter(([, entry]) => process.env[entry.disableEnv] === "1")
+      .map(([cli]) => cli),
+  );
   // #42 e2e 支撑：Fake 的 resume 注入开关（延迟观察「恢复中」态 / 前 N 次失败驱动重试态）；env 逐级继承到 worker，生产不设即关闭
   const fakeResumeDelayMs = envInt("KANBAN_FAKE_RESUME_DELAY_MS");
   const fakeFailResumeFirst = envInt("KANBAN_FAKE_RESUME_FAIL_FIRST");
@@ -49,7 +53,7 @@ export function createDesktopAdapterFactory(options: DesktopAdapterFactoryOption
     });
   return (cli: string): CliAdapter => {
     if (cli === "codex") {
-      if (disableCodex) return makeFake();
+      if (fakeFallback.has("codex")) return makeFake();
       return new CodexAdapter({
         exe: options.codexExe ?? null,
         effort: process.env.KANBAN_CODEX_EFFORT,
@@ -58,11 +62,11 @@ export function createDesktopAdapterFactory(options: DesktopAdapterFactoryOption
       });
     }
     if (cli === "claude") {
-      if (disableClaude) return makeFake();
+      if (fakeFallback.has("claude")) return makeFake();
       return new ClaudeAdapter({ exe: options.claudeExe ?? null, log: options.log });
     }
     if (cli === "opencode") {
-      if (disableOpencode) return makeFake();
+      if (fakeFallback.has("opencode")) return makeFake();
       return new OpenCodeAdapter({
         exe: options.opencodeExe ?? null,
         registryPath: options.cacheDir ? path.join(options.cacheDir, "opencode-servers.json") : undefined,
