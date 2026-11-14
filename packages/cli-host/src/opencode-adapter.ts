@@ -7,6 +7,7 @@ import { AdapterError, type AdapterCapabilities, type CliAdapter, type CreateSes
 import { mapSpawnFailure } from "./exe-chain";
 import type { OpenCodeSseEvent, OpenCodeServerClientLike } from "./opencode/client";
 import { OpenCodeServerHost, type OpenCodeServerHostLike, type OpenCodeServerHostOptions } from "./opencode/server-host";
+import { readCommandSnapshot, readMessageSnapshot } from "./opencode/snapshot";
 import { isAuthFailureStatus, isAuthFailureText, isProtocolDisconnectText } from "./session-error";
 
 /** 全能力（approval/interrupt/resume/readHistory 实证于 poc-3 + 1.15.7 探针；skillSignal=command 路由 self_reported） */
@@ -217,15 +218,10 @@ export class OpenCodeAdapter implements CliAdapter {
       throw mapSpawnFailure(e);
     }
     try {
-      const r = await client.api("GET", "/command");
-      if (!r.ok) throw new Error(`HTTP ${r.status} ${r.text.slice(0, 160)}`);
-      const items = Array.isArray((r.json as { items?: unknown[] } | null)?.items)
-        ? (r.json as { items: Array<Record<string, unknown> | null> }).items
-        : Array.isArray(r.json)
-          ? (r.json as Array<Record<string, unknown> | null>)
-          : [];
+      const snap = await readCommandSnapshot(client);
+      if (!snap.ok) throw snap.error;
       const commands: CommandEntry[] = [];
-      for (const c of items) {
+      for (const c of snap.items) {
         const name = typeof c?.name === "string" ? c.name : "";
         if (!name) continue;
         commands.push({
@@ -347,18 +343,11 @@ export class OpenCodeAdapter implements CliAdapter {
       this.attachServer(s, client);
       s.dead = false;
     }
-    let items: Array<{ info?: Record<string, unknown>; parts?: unknown[] }>;
-    try {
-      const r = await s.client!.api("GET", `/session/${s.nativeId}/message?limit=500`);
-      if (!r.ok) throw new Error(`HTTP ${r.status} ${r.text.slice(0, 160)}`);
-      const json = r.json as { items?: Array<{ info?: Record<string, unknown>; parts?: unknown[] }> } | null;
-      items = json?.items ?? (Array.isArray(r.json) ? (r.json as Array<{ info?: Record<string, unknown>; parts?: unknown[] }>) : []);
-    } catch (e) {
-      // 读失败不冒充完整（spec #27「缺失会话明确列出」）：报错由提取管线记为缺失
-      throw new AdapterError("E_INTERNAL", `读取 OpenCode 原生历史失败：${e instanceof Error ? e.message : String(e)}`);
-    }
+    const snap = await readMessageSnapshot(s.client!, s.nativeId);
+    // 读失败不冒充完整（spec #27「缺失会话明确列出」）：报错由提取管线记为缺失
+    if (!snap.ok) throw new AdapterError("E_INTERNAL", `读取 OpenCode 原生历史失败：${snap.error.message}`);
     const out: TranscriptEvent[] = [];
-    for (const it of items) {
+    for (const it of snap.items) {
       const info = it.info ?? {};
       const parts = Array.isArray(it.parts) ? (it.parts as Array<Record<string, unknown>>) : [];
       if (info.role === "user") {
@@ -706,13 +695,11 @@ export class OpenCodeAdapter implements CliAdapter {
     }
     let key = "";
     try {
-      const r = await s.client!.api("GET", `/session/${s.nativeId}/message?limit=500`);
-      if (!r.ok) return;
-      const json = r.json as { items?: unknown[] } | null;
-      const items = json?.items ?? (Array.isArray(r.json) ? r.json : []);
+      const snap = await readMessageSnapshot(s.client!, s.nativeId);
+      if (!snap.ok) return;
       // 内容指纹：消息/部件 id + 工具状态 + 文本与输出长度（时间戳类字段不参与，避免永远「有变化」）
       key = JSON.stringify(
-        (items as Array<{ info?: Record<string, unknown>; parts?: unknown[] }>).map((it) => [
+        snap.items.map((it) => [
           String(it.info?.id ?? ""),
           (it.parts ?? []).map((p) => {
             const part = p as Record<string, unknown>;
@@ -789,13 +776,9 @@ export class OpenCodeAdapter implements CliAdapter {
     if (!this.commandCache.has(client)) {
       const names = new Set<string>();
       try {
-        const r = await client.api("GET", "/command");
-        const items = Array.isArray((r.json as { items?: unknown[] } | null)?.items)
-          ? (r.json as { items: Record<string, unknown>[] }).items
-          : Array.isArray(r.json)
-            ? (r.json as Record<string, unknown>[])
-            : [];
-        for (const c of items) if (typeof c.name === "string" && c.name) names.add(c.name);
+        // 不判 snap.ok：HTTP 非 2xx 也消费已解析名单（读取器 items 恒解析），失败按未命中处理
+        const snap = await readCommandSnapshot(client);
+        for (const c of snap.items) if (typeof c?.name === "string" && c.name) names.add(c.name);
       } catch {
         /* 读取失败按未命中处理 */
       }
@@ -875,12 +858,10 @@ export class OpenCodeAdapter implements CliAdapter {
     if ((openIds.size > 0 || s.turnHadApproval) && !s.interruptRequested && s.client && !s.client.dead && !s.dead) {
       s.finishPending = true;
       try {
-        const r = await s.client.api("GET", `/session/${s.nativeId}/message?limit=500`);
-        if (r.ok) {
-          const json = r.json as { items?: Array<{ parts?: unknown[] }> } | null;
-          const items = json?.items ?? (Array.isArray(r.json) ? (r.json as Array<{ parts?: unknown[] }>) : []);
+        const snap = await readMessageSnapshot(s.client, s.nativeId);
+        if (snap.ok) {
           const seen = new Set<string>();
-          for (const it of items) {
+          for (const it of snap.items) {
             for (const p of Array.isArray(it.parts) ? (it.parts as Array<Record<string, unknown>>) : []) {
               if (p.type !== "tool") continue;
               const pid = String(p.id ?? "");
@@ -970,15 +951,8 @@ export class OpenCodeAdapter implements CliAdapter {
 
   /** GET /session/{id}/message → 与实时流同键去重后补入事件日志（快照+增量无缝拼接，不变量 4） */
   private async backfillFromNative(s: SessionState): Promise<void> {
-    let items: Array<{ info?: Record<string, unknown>; parts?: unknown[] }>;
-    try {
-      const r = await s.client!.api("GET", `/session/${s.nativeId}/message?limit=500`);
-      if (!r.ok) return;
-      const json = r.json as { items?: Array<{ info?: Record<string, unknown>; parts?: unknown[] }> } | null;
-      items = json?.items ?? (Array.isArray(r.json) ? (r.json as Array<{ info?: Record<string, unknown>; parts?: unknown[] }>) : []);
-    } catch {
-      return; // 瞬时不可达：本轮跳过（下次 readHistory 重试）
-    }
+    const snap = await readMessageSnapshot(s.client!, s.nativeId);
+    if (!snap.ok) return; // 读取失败/瞬时不可达：本轮跳过（下次 readHistory 重试）
     const existing = new Set<string>();
     for (const e of s.log) {
       if (e.type === "message_delta" || e.type === "message_completed") existing.add(`msg:${e.itemId}:${e.partId}`);
@@ -987,7 +961,7 @@ export class OpenCodeAdapter implements CliAdapter {
     }
     // 按 parentID 分组 assistant 消息（工具轮+总结轮同 parent = 同一 turn）
     const groups = new Map<string, Array<{ info: Record<string, unknown>; parts: unknown[] }>>();
-    for (const it of items) {
+    for (const it of snap.items) {
       const info = it.info ?? {};
       if (info.role !== "assistant") continue;
       const parent = typeof info.parentID === "string" && info.parentID ? info.parentID : String(info.id ?? "");
