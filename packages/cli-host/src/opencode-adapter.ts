@@ -1,4 +1,4 @@
-// 用途：OpenCodeAdapter —— C1 契约的真实 OpenCode 实现：HTTP+SSE 直连（poc-3 client 演进）、server-per-project（经 OpenCodeServerHost）、审批轮询 GET /permission + SSE replied 兜底、/command 路由 self_reported SkillObservation、abort 归类已取消、按 native session id 跨重启恢复 + readTranscript message API 双视角（#28）+ listModels providers 摊平（#76）
+// 用途：OpenCodeAdapter —— C1 契约的真实 OpenCode 实现：HTTP+SSE 直连（poc-3 client 演进）、server-per-project（经 OpenCodeServerHost）、审批轮询 GET /permission + SSE replied 兜底、/command 路由 self_reported SkillObservation、abort 归类已取消、按 native session id 跨重启恢复 + readTranscript message API 双视角（#28）+ listModels providers 摊平（#76）；arch C1 起回合状态机（排队/终态/幂等中断/emit/死亡收尾）为 turn-kernel 消费方，本文件保留 wire 层（HTTP+SSE 解析）与审批应答形状
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,6 +9,7 @@ import type { OpenCodeSseEvent, OpenCodeServerClientLike } from "./opencode/clie
 import { OpenCodeServerHost, type OpenCodeServerHostLike, type OpenCodeServerHostOptions } from "./opencode/server-host";
 import { readCommandSnapshot, readMessageSnapshot } from "./opencode/snapshot";
 import { isAuthFailureStatus, isAuthFailureText, isProtocolDisconnectText } from "./session-error";
+import { requireLiveSessionEntry, requireSessionEntry, TurnKernel, type KernelApproval, type TurnState, type TurnTerminalStatus } from "./turn-kernel";
 
 /** 全能力（approval/interrupt/resume/readHistory 实证于 poc-3 + 1.15.7 探针；skillSignal=command 路由 self_reported）；runOnce 为托管形态能力（worker RunOnceRunner），adapter 单元恒 false（arch C13） */
 const OPENCODE_CAPABILITIES: AdapterCapabilities = {
@@ -51,12 +52,8 @@ export interface OpenCodeAdapterOptions extends Omit<OpenCodeServerHostOptions, 
   log?: (kind: LogKind, detail: string) => void;
 }
 
-/** 待决审批：轮询/SSE asked 发现；POST 响应终结 */
-interface PendingApproval {
-  requestId: string;
-  itemId: string;
-  decided: boolean;
-}
+/** 待决审批：轮询/SSE asked 发现；POST 响应终结（KernelApproval 基类即全量字段——opencode 审批无挂起 wire 应答） */
+interface PendingApproval extends KernelApproval {}
 
 interface ToolTrack {
   tool: string;
@@ -65,17 +62,13 @@ interface ToolTrack {
   terminal: boolean;
 }
 
-interface SessionState {
-  sessionId: string;
+/** 会话状态：TurnState 回合字段（内核单源持有）+ opencode wire 层专属字段 */
+interface SessionState extends TurnState<PendingApproval> {
   nativeId: string;
   cwd: string;
   model?: string;
   permMode?: PermMode;
-  seq: number;
-  log: ChatEvent[];
   status: SessionStatus;
-  turnActive: boolean;
-  interruptRequested: boolean;
   /** 本 turn 出现过审批（审批必然伴随工具执行：idle 对账触发条件之一，覆盖工具帧全丢形态） */
   turnHadApproval: boolean;
   /** idle 终结对账进行中（防重入：对账期间再到的 idle 不重复收尾） */
@@ -85,8 +78,6 @@ interface SessionState {
   /** 卡死探测记忆（连续两次 /message 快照零变化 → 判定 turn 已终结） */
   stuckProbe: { key: string; at: number } | null;
   lastTurnError: { name: string; message: string } | null;
-  queue: string[];
-  pendingApprovals: Map<string, PendingApproval>;
   expiredApprovals: Set<string>;
   /** deny 决定的工具 part（error 终态映射 denied） */
   deniedToolIds: Set<string>;
@@ -122,6 +113,12 @@ export class OpenCodeAdapter implements CliAdapter {
   /** server 客户端级缓存：command 名单 / 默认模型完整串（GET /config 的 model；issue #76 起 resolveModelWire 与 listModels isDefault 比对共用） */
   private readonly commandCache = new Map<OpenCodeServerClientLike, Set<string>>();
   private readonly defaultModelCache = new Map<OpenCodeServerClientLike, string | null>();
+  /** 回合内核（arch C1）：emit/排队/终态/幂等中断/死亡收尾单源 */
+  private readonly kernel = new TurnKernel<PendingApproval>({
+    broadcast: (ev) => {
+      for (const h of this.handlers) h(ev);
+    },
+  });
 
   constructor(options: OpenCodeAdapterOptions = {}) {
     this.log = options.log ?? (() => {});
@@ -270,11 +267,8 @@ export class OpenCodeAdapter implements CliAdapter {
 
   async sendTurn(input: SendTurnInput): Promise<void> {
     const s = this.requireLiveSession(input.sessionId);
-    // 不变量 6：忙态（turn 进行中/审批待决）排队
-    if (s.turnActive || s.pendingApprovals.size > 0) {
-      s.queue.push(input.text);
-      return;
-    }
+    // 不变量 6：忙态（turn 进行中/审批待决）排队（内核单源判定）
+    if (this.kernel.enqueueIfBusy(s, input.text)) return;
     // /command 路由："/" 开头且命中已知 command → command API + self_reported 观察；未命中按普通 prompt（spec B）
     const command = input.text.startsWith("/") ? await this.matchCommand(s, input.text) : null;
     await this.startTurn(s, input.text, command);
@@ -282,10 +276,8 @@ export class OpenCodeAdapter implements CliAdapter {
 
   async interruptTurn(sessionId: string): Promise<void> {
     const s = this.requireLiveSession(sessionId);
-    // 幂等：无活动 turn 时 no-op
-    if (!s.turnActive && s.pendingApprovals.size === 0) return;
-    if (s.interruptRequested) return;
-    s.interruptRequested = true;
+    // 幂等闸门（内核单源）：无活动 turn 或已请求过为 no-op
+    if (!this.kernel.requestInterrupt(s)) return;
     // 待决审批先拒绝（否则 server 停在等应答，interrupt 语义不完整）；工具 part 将以 error 终态 → denied
     for (const entry of s.pendingApprovals.values()) {
       entry.decided = true;
@@ -379,10 +371,8 @@ export class OpenCodeAdapter implements CliAdapter {
   async resume(sessionId: string): Promise<void> {
     const s = this.requireSession(sessionId);
     if (s.client && !s.client.dead && !s.dead) {
-      // 进程内存活：复位活动残留（与 Codex/Claude 同语义）
-      s.turnActive = false;
-      s.queue.length = 0;
-      s.interruptRequested = false;
+      // 进程内存活：复位活动残留（与 Codex/Claude 同语义；回合态复位走内核单源）
+      this.kernel.resetForResume(s);
       this.emit(s, { type: "session_status", status: "idle" });
       return;
     }
@@ -391,8 +381,7 @@ export class OpenCodeAdapter implements CliAdapter {
       const client = await this.acquireServer(s, s.sessionId);
       this.attachServer(s, client);
       s.dead = false;
-      s.turnActive = false;
-      s.queue.length = 0;
+      this.kernel.resetForResume(s);
       this.emit(s, { type: "session_status", status: "idle" });
     } catch (e) {
       throw new AdapterError("E_INTERNAL", `恢复 OpenCode 会话失败：${e instanceof Error ? e.message : String(e)}`);
@@ -803,8 +792,7 @@ export class OpenCodeAdapter implements CliAdapter {
   }
 
   private async startTurn(s: SessionState, text: string, command: string | null): Promise<void> {
-    s.turnActive = true;
-    s.interruptRequested = false;
+    this.kernel.beginTurn(s);
     s.turnHadApproval = false;
     s.stuckProbe = null; // 上一 turn 的探测记忆不复用
     s.lastTurnError = null;
@@ -845,11 +833,13 @@ export class OpenCodeAdapter implements CliAdapter {
       });
       if (!r.ok) throw new Error(`HTTP ${r.status} ${r.text.slice(0, 160)}`);
     } catch (e) {
-      // 提交失败：turn 回滚空闲并明确报错（不进入事件流重放）；#41 认证/断连/内部归类
-      s.turnActive = false;
+      // 提交失败：turn 回滚空闲并明确报错（不进入事件流重放；内核 failed 分支同款收尾）；#41 认证/断连/内部归类
       const msg = e instanceof Error ? e.message : String(e);
-      this.emit(s, { type: "session_error", code: classifyTransportFailure(msg), message: msg });
-      this.emit(s, { type: "session_status", status: "idle" });
+      this.kernel.finishTurn(s, "failed", {
+        onResidue: () => {
+          this.emit(s, { type: "session_error", code: classifyTransportFailure(msg), message: msg });
+        },
+      });
       throw new AdapterError("E_INTERNAL", `turn 提交失败：${msg}`);
     }
   }
@@ -895,59 +885,50 @@ export class OpenCodeAdapter implements CliAdapter {
     }
   }
 
-  /** turn 终态统一收尾（session.idle 触发）：interrupted/failed/completed 分类 + 残留收口 + 队列策略 */
+  /** turn 终态统一收尾（内核单源终态机）：中断/失败分类在先（interruptRequested 与 abort 错误名），残留收口（消息终结/审批过期/非终态工具）经 onResidue 注入，completed 续发排队 */
   private finishTurn(s: SessionState, forced?: "failed"): void {
-    s.turnActive = false;
     const aborted = s.interruptRequested || /abort/i.test(s.lastTurnError?.name ?? "");
-    // 残留消息终结（多消息 turn 的最后一条）
-    const active = s.activeMessageId;
-    if (active && s.itemIdsWithDeltas.has(active) && !s.completedItems.has(active)) {
-      s.completedItems.add(active);
-      this.emit(s, { type: "message_completed", itemId: active, partId: s.lastPartId.get(active) ?? "0" });
-    }
-    s.activeMessageId = null;
-    // 残留审批：过期收口（正常流先于终态解决）
-    for (const entry of s.pendingApprovals.values()) {
-      if (!entry.decided) this.emit(s, { type: "approval_expired", requestId: entry.requestId, reason: "turn_ended" });
-    }
-    s.pendingApprovals.clear();
-    if (aborted) {
-      // 中断中的工具不宣称仍在运行（spec H）：非终态工具 → interrupted
-      this.closeOpenTools(s);
-      s.queue.length = 0;
-      this.emit(s, { type: "turn_interrupted", reason: "user" });
-      this.emit(s, { type: "session_status", status: "interrupted" });
-      return;
-    }
-    if (forced === "failed" || s.lastTurnError) {
-      if (s.lastTurnError) {
-        // #41 枚举映射：provider 认证类文本 → AUTH_EXPIRED，其余 INTERNAL（session.error 真实形状见 auth-samples.md）
-        const msg = `${s.lastTurnError.name}: ${s.lastTurnError.message}`;
-        this.emit(s, { type: "session_error", code: isAuthFailureText(msg) ? "AUTH_EXPIRED" : "INTERNAL", message: msg });
-      }
-      this.closeOpenTools(s); // 失败 turn 的非终态工具同样收口（对账未愈/无终态帧时不留运行中卡片）
-      s.queue.length = 0; // 明确报错不重放（spec H）
-      this.emit(s, { type: "session_status", status: "idle" });
-      return;
-    }
-    this.emit(s, { type: "turn_completed" });
-    this.emit(s, { type: "session_status", status: "idle" });
-    const next = s.queue.shift();
-    if (next) void this.startTurn(s, next, null).catch(() => {});
+    const terminal: TurnTerminalStatus = aborted ? "interrupted" : forced === "failed" || s.lastTurnError ? "failed" : "completed";
+    this.kernel.finishTurn(s, terminal, {
+      onResidue: (st, status) => {
+        // 残留消息终结（多消息 turn 的最后一条）
+        const active = s.activeMessageId;
+        if (active && s.itemIdsWithDeltas.has(active) && !s.completedItems.has(active)) {
+          s.completedItems.add(active);
+          this.emit(s, { type: "message_completed", itemId: active, partId: s.lastPartId.get(active) ?? "0" });
+        }
+        s.activeMessageId = null;
+        // 残留审批：过期收口（正常流先于终态解决；opencode 审批残留形状 = approval_expired 事件）
+        for (const entry of st.pendingApprovals.values()) {
+          if (!entry.decided) this.emit(s, { type: "approval_expired", requestId: entry.requestId, reason: "turn_ended" });
+        }
+        if (status !== "completed") {
+          // 失败 turn 的错误随终态报出（#41 枚举映射：provider 认证类文本 → AUTH_EXPIRED，其余 INTERNAL）
+          if (status === "failed" && s.lastTurnError) {
+            const msg = `${s.lastTurnError.name}: ${s.lastTurnError.message}`;
+            this.emit(s, { type: "session_error", code: isAuthFailureText(msg) ? "AUTH_EXPIRED" : "INTERNAL", message: msg });
+          }
+          // 中断/失败 turn 的非终态工具不宣称仍在运行（spec H）
+          this.closeOpenTools(s);
+        }
+      },
+      sendQueuedTurn: (next) => {
+        void this.startTurn(s, next, null).catch(() => {});
+      },
+    });
   }
 
-  /** server 死亡：本会话明确报错不重放；状态保留供 resume（原生历史落盘无损） */
+  /** server 死亡：本会话明确报错不重放；状态保留供 resume（原生历史落盘无损；收尾单源在内核，审批残留经 approval_expired 事件收口） */
   private handleServerDeath(s: SessionState, err: Error): void {
     if (s.dead) return;
     s.dead = true;
-    s.queue.length = 0;
-    s.turnActive = false;
-    for (const entry of s.pendingApprovals.values()) {
-      if (!entry.decided) this.emit(s, { type: "approval_expired", requestId: entry.requestId, reason: "session_dead" });
-    }
-    s.pendingApprovals.clear();
-    this.emit(s, { type: "session_exit", exitCode: 1, reason: err.message });
-    this.emit(s, { type: "session_status", status: "disconnected" });
+    this.kernel.handleDeath(s, {
+      exitCode: 1,
+      reason: err.message,
+      onApprovalResidue: (entry) => {
+        if (!entry.decided) this.emit(s, { type: "approval_expired", requestId: entry.requestId, reason: "session_dead" });
+      },
+    });
   }
 
   /* ---------------- 内部：原生历史回填 ---------------- */
@@ -1037,13 +1018,10 @@ export class OpenCodeAdapter implements CliAdapter {
 
   /* ---------------- 内部：事件与工具 ---------------- */
 
-  /** ChatEvent 唯一出口：seq 单调 + at + 广播；SkillObservation 直发订阅者不入日志 */
+  /** ChatEvent 出口（内核单源：seq 单调 + at + 写日志 + 广播；SkillObservation 直发订阅者不入日志） */
   private emit(s: SessionState, ev: ChatEventSeed, at?: string): void {
-    s.seq += 1;
+    this.kernel.emit(s, ev, at);
     s.lastEventAtMs = Date.now(); // SSE 静默基准：有事件 = turn 活着（卡死探测不触发）
-    const full = { ...ev, sessionId: s.sessionId, seq: s.seq, at: at ?? new Date().toISOString() } as ChatEvent;
-    s.log.push(full);
-    for (const h of this.handlers) h(full);
   }
 
   private emitObservation(s: SessionState, skill: string, evidenceLevel: "self_reported", source: string): void {
@@ -1065,17 +1043,11 @@ export class OpenCodeAdapter implements CliAdapter {
   }
 
   private requireSession(sessionId: string): SessionState {
-    const s = this.sessions.get(sessionId);
-    if (!s) throw new AdapterError("E_SESSION_NOT_FOUND", `会话不存在：${sessionId}`);
-    return s;
+    return requireSessionEntry(this.sessions, sessionId);
   }
 
   private requireLiveSession(sessionId: string): SessionState {
-    const s = this.requireSession(sessionId);
-    if (s.dead || !s.client || s.client.dead) {
-      throw new AdapterError("E_INTERNAL", "OpenCode server 已断开，会话已断开（请读取原生历史恢复或新建会话）");
-    }
-    return s;
+    return requireLiveSessionEntry(this.sessions, sessionId, (s) => s.dead || !s.client || s.client.dead, "OpenCode server 已断开");
   }
 }
 

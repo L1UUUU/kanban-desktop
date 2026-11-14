@@ -1,10 +1,11 @@
-// 用途：FakeAdapter —— C1 契约的脚本化 mock 实现：事件溯源日志（readHistory=重放，天然满足不变量 4）、可注入时钟、演示脚本驱动（原型行为规格）+ readTranscript 双视角剧本（#28，独立于 ChatEvent 日志维护）+ listModels 假模型目录（#76：演示 UI 形态与真实 CLI 一致）+ listCommands（#92 起 cli=codex 模拟真实 codex 目录扫描；其余 CLI 恒空集——ADR 0004：fake 会话无命令源，斜杠菜单空态引导）
+// 用途：FakeAdapter —— C1 契约的脚本化 mock 实现：事件溯源日志（readHistory=重放，天然满足不变量 4）、可注入时钟、演示脚本驱动（原型行为规格）+ readTranscript 双视角剧本（#28，独立于 ChatEvent 日志维护）+ listModels 假模型目录（#76：演示 UI 形态与真实 CLI 一致）+ listCommands（#92 起 cli=codex 模拟真实 codex 目录扫描；其余 CLI 恒空集——ADR 0004：fake 会话无命令源，斜杠菜单空态引导）；arch C1 起回合状态机（排队/终态/幂等中断/emit）为 turn-kernel 消费方，脚本机器作为「发文本回调」的实现
 import { homedir } from "node:os";
 import type { AdapterEvent, ChatEvent, ChatEventSeed, CommandEntry, ModelEntry, PermMode, SessionStatus, SkillObservation, TranscriptEvent } from "@kanban/ipc-schema";
 import { AdapterError, type AdoptSessionInput, type AdapterCapabilities, type CliAdapter, type CreateSessionInput, type DisposeInput, type ListCommandsInput, type ListModelsInput, type ResolveApprovalInput, type SendTurnInput, type SetModelInput } from "./adapter";
 import { SystemClock, type FakeClock } from "./clock";
 import { listCodexPromptCommands } from "./codex/prompt-commands";
 import { pickScript, type ScriptStep } from "./fake-scripts";
+import { requireSessionEntry, TurnKernel, type KernelApproval, type TurnState } from "./turn-kernel";
 
 // 视觉节奏常量（对照原型：流式 ~60ms 出 3 字符、步进间隔给工具卡/消息留呼吸感）
 const STREAM_TICK_MS = 60;
@@ -13,24 +14,21 @@ const STEP_DELAY_MS = 250;
 // 审批决定后的工具终态时长（原型「完成 · 0.8s」）
 const DECIDED_TOOL_DURATION_MS = 800;
 
-interface ApprovalPending {
-  requestId: string;
-  itemId: string;
+/** 待决审批条目：内核审批基类 + fake 脚本机器扩展（onDeny 后续与过期定时器取消句柄） */
+interface ApprovalPending extends KernelApproval {
   step: Extract<ScriptStep, { t: "approval" }>;
   cancelExpire: () => void;
 }
 
-interface SessionState {
-  sessionId: string;
+/** 会话状态：TurnState 回合字段（内核单源持有）+ fake 脚本机器专属驱动字段 */
+interface SessionState extends TurnState<ApprovalPending> {
   cwd: string;
   model?: string;
   permMode?: PermMode;
-  seq: number;
-  log: ChatEvent[];
   /** readTranscript 双视角剧本（#28）：与 ChatEvent 日志分轨维护（GUI 聊天流无 user 条目，提取管线需要 user 视角） */
   transcript: TranscriptEvent[];
   status: SessionStatus;
-  /** 当前 turn 待执行脚本（null=无活动 turn） */
+  /** 当前 turn 待执行脚本（null=无活动 turn；turnActive 与之同进退） */
   script: ScriptStep[] | null;
   ix: number;
   /** 流式中的助手分段 */
@@ -39,11 +37,8 @@ interface SessionState {
   lastToolItemId: string | null;
   /** 仍未终态的工具 itemId（interrupt 时置 interrupted） */
   runningToolItemId: string | null;
-  pendingApproval: ApprovalPending | null;
   /** allow-always 后本会话同类审批自动放行（会话级规则，spec B） */
   skipApprovals: boolean;
-  /** 忙态排队的不变量 6：当前 turn 结束后按序续发 */
-  queue: string[];
 }
 
 export interface FakeAdapterOptions {
@@ -109,6 +104,13 @@ export class FakeAdapter implements CliAdapter {
   private readonly homeDir: string | null;
   private readonly sessions = new Map<string, SessionState>();
   private readonly handlers = new Set<(event: AdapterEvent) => void>();
+  /** 回合内核（arch C1）：emit/排队/终态/幂等中断单源；时间源注入 fake 时钟获得确定性 */
+  private readonly kernel = new TurnKernel<ApprovalPending>({
+    broadcast: (ev) => {
+      for (const h of this.handlers) h(ev);
+    },
+    nowMs: () => this.clock.now(),
+  });
 
   constructor(options: FakeAdapterOptions = {}) {
     this.pickTurnScript = options.pickTurnScript ?? pickScript;
@@ -149,7 +151,9 @@ export class FakeAdapter implements CliAdapter {
       stream: null,
       lastToolItemId: null,
       runningToolItemId: null,
-      pendingApproval: null,
+      turnActive: false,
+      interruptRequested: false,
+      pendingApprovals: new Map(),
       skipApprovals: false,
       queue: [],
     };
@@ -197,22 +201,21 @@ export class FakeAdapter implements CliAdapter {
   async sendTurn(input: SendTurnInput): Promise<void> {
     const s = this.requireSession(input.sessionId);
     // 不变量 1：立即返回「已提交」，内容一律经事件流
-    // 不变量 6：忙态（运行中/流式中/等待审批）排队，当前 turn 结束后续发
-    if (s.script || s.stream || s.pendingApproval) {
-      s.queue.push(input.text);
-      return;
-    }
+    // 不变量 6：忙态（turn 进行中/等待审批）排队，当前 turn 结束后续发（内核单源判定）
+    if (this.kernel.enqueueIfBusy(s, input.text)) return;
     this.startTurn(s, input.text);
   }
 
   async interruptTurn(sessionId: string): Promise<void> {
     const s = this.requireSession(sessionId);
-    // 不变量 6：幂等 —— 无活动 turn 时为 no-op
-    if (!s.script && !s.stream && !s.pendingApproval) return;
-    if (s.pendingApproval) {
-      s.pendingApproval.cancelExpire();
-      s.pendingApproval = null;
-    }
+    // 不变量 6：幂等 —— 无活动 turn 时为 no-op；fake 脚本机器同步收尾（中断即刻终结 turn）
+    if (!this.kernel.requestInterrupt(s)) return;
+    this.kernel.finishTurn(s, "interrupted", { onResidue: () => this.interruptResidue(s) });
+  }
+
+  /** 中断残留收口：取消过期定时器、流式文本补「 …」收尾、运行中工具置 interrupted、丢弃脚本（spec H：不自动继续） */
+  private interruptResidue(s: SessionState): void {
+    for (const entry of s.pendingApprovals.values()) entry.cancelExpire();
     if (s.stream) {
       // 对照原型：流式文本补「 …」收尾后终结该分段
       const st = s.stream;
@@ -225,22 +228,19 @@ export class FakeAdapter implements CliAdapter {
       this.emit(s, { type: "tool_completed", itemId: s.runningToolItemId, status: "interrupted", durationMs: 0, output: "" });
       s.runningToolItemId = null;
     }
-    // 中断丢弃脚本与排队消息（spec H：中断中的工具调用不自动继续、不重放）
     s.script = null;
-    s.queue.length = 0;
-    this.emit(s, { type: "turn_interrupted", reason: "user" });
-    this.emit(s, { type: "session_status", status: "interrupted" });
   }
 
   async resolveApproval(input: ResolveApprovalInput): Promise<void> {
     const s = this.requireSession(input.sessionId);
     // 非法时序：无待决审批或 requestId 不匹配（已决/过期）→ 明确错误码
-    if (!s.pendingApproval || s.pendingApproval.requestId !== input.requestId) {
+    const entry = s.pendingApprovals.get(input.requestId);
+    if (!entry || entry.decided) {
       throw new AdapterError("E_APPROVAL_EXPIRED", `审批请求不存在或已终结：${input.requestId}`);
     }
-    const { itemId, step, cancelExpire } = s.pendingApproval;
+    const { itemId, step, cancelExpire } = entry;
     cancelExpire();
-    s.pendingApproval = null;
+    s.pendingApprovals.delete(input.requestId);
     this.emit(s, { type: "session_status", status: "running" });
     if (input.decision === "deny") {
       // 审批语义不换写：deny → 工具确为未执行（denied 终态）
@@ -281,11 +281,11 @@ export class FakeAdapter implements CliAdapter {
     if (this.resumeCalls <= this.failResumeFirst) {
       throw new AdapterError("E_INTERNAL", `注入的恢复失败（failResumeFirst=${this.failResumeFirst}，FakeAdapter 测试钩子）`);
     }
-    // Fake 复位实现：丢弃残余活动并经事件流通知空闲
+    // Fake 复位实现：丢弃残余活动并经事件流通知空闲（回合态复位走内核，脚本机器字段就地清空）
     s.script = null;
     s.stream = null;
-    s.queue.length = 0;
-    s.pendingApproval = null;
+    s.pendingApprovals.clear();
+    this.kernel.resetForResume(s);
     this.emit(s, { type: "session_status", status: "idle" });
   }
 
@@ -306,7 +306,9 @@ export class FakeAdapter implements CliAdapter {
       stream: null,
       lastToolItemId: null,
       runningToolItemId: null,
-      pendingApproval: null,
+      turnActive: false,
+      interruptRequested: false,
+      pendingApprovals: new Map(),
       skipApprovals: false,
       queue: [],
     };
@@ -338,6 +340,7 @@ export class FakeAdapter implements CliAdapter {
   /* ---------------- 内部：turn 驱动 ---------------- */
 
   private startTurn(s: SessionState, text: string): void {
+    this.kernel.beginTurn(s);
     s.script = this.pickTurnScript(text);
     s.ix = 0;
     s.runningToolItemId = null;
@@ -347,26 +350,27 @@ export class FakeAdapter implements CliAdapter {
     this.scheduleTick(s, 0);
   }
 
+  /** turn 完成收尾（内核 completed 分支）：冲刷流式终文与运行中工具 → turn_completed/idle → 排队续发（不变量 6） */
   private finishTurn(s: SessionState): void {
-    s.script = null;
-    if (s.stream) {
-      const st = s.stream;
-      this.emit(s, { type: "message_delta", itemId: st.itemId, partId: st.partId, delta: st.target.slice(st.pos) });
-      this.emit(s, { type: "message_completed", itemId: st.itemId, partId: st.partId });
-      s.transcript.push({ role: "assistant", text: st.target }); // turnEnd 收尾：终文全部已流出
-      s.stream = null;
-    }
-    if (s.runningToolItemId) {
-      this.emit(s, { type: "tool_completed", itemId: s.runningToolItemId, status: "completed", durationMs: 0, output: "" });
-      s.runningToolItemId = null;
-    }
-    this.emit(s, { type: "turn_completed" });
-    this.emit(s, { type: "session_status", status: "idle" });
-    // 排队续发（不变量 6）
-    if (s.queue.length > 0) {
-      const next = s.queue.shift()!;
-      this.scheduleTick(s, 0, () => this.startTurn(s, next));
-    }
+    this.kernel.finishTurn(s, "completed", {
+      onResidue: () => {
+        s.script = null;
+        if (s.stream) {
+          const st = s.stream;
+          this.emit(s, { type: "message_delta", itemId: st.itemId, partId: st.partId, delta: st.target.slice(st.pos) });
+          this.emit(s, { type: "message_completed", itemId: st.itemId, partId: st.partId });
+          s.transcript.push({ role: "assistant", text: st.target }); // turnEnd 收尾：终文全部已流出
+          s.stream = null;
+        }
+        if (s.runningToolItemId) {
+          this.emit(s, { type: "tool_completed", itemId: s.runningToolItemId, status: "completed", durationMs: 0, output: "" });
+          s.runningToolItemId = null;
+        }
+      },
+      sendQueuedTurn: (next) => {
+        this.scheduleTick(s, 0, () => this.startTurn(s, next));
+      },
+    });
   }
 
   private scheduleTick(s: SessionState, delayMs: number, run?: () => void): void {
@@ -381,7 +385,7 @@ export class FakeAdapter implements CliAdapter {
 
   /** 单次求值：流式分片或解释一步脚本 */
   private tick(s: SessionState): void {
-    if (!s.script || s.pendingApproval) return; // 审批等待：暂停（过期由独立定时器触发）
+    if (!s.script || s.pendingApprovals.size > 0) return; // 审批等待：暂停（过期由独立定时器触发）
     if (s.stream) {
       this.emitStreamChunk(s);
       this.scheduleTick(s, s.stream ? STREAM_TICK_MS : STEP_DELAY_MS);
@@ -460,7 +464,7 @@ export class FakeAdapter implements CliAdapter {
         const cancelExpire = step.expireAfterMs
           ? this.clock.schedule(step.expireAfterMs, () => this.expireApproval(s, requestId))
           : () => undefined;
-        s.pendingApproval = { requestId, itemId, step, cancelExpire };
+        s.pendingApprovals.set(requestId, { requestId, itemId, decided: false, step, cancelExpire });
         return; // 暂停：不续排 tick，等 resolveApproval/过期
       }
       case "skill": {
@@ -485,12 +489,14 @@ export class FakeAdapter implements CliAdapter {
         return;
       }
       case "error": {
-        // 明确报错、不崩溃、不重放：丢弃脚本与队列，状态回空闲，不宣称 turn_completed
-        s.script = null;
-        s.queue.length = 0;
-        s.stream = null;
-        this.emit(s, { type: "session_error", code: step.code, message: step.message });
-        this.emit(s, { type: "session_status", status: "idle" });
+        // 明确报错、不崩溃、不重放：丢弃脚本与队列，状态回空闲，不宣称 turn_completed（内核 failed 分支）
+        this.kernel.finishTurn(s, "failed", {
+          onResidue: () => {
+            s.script = null;
+            s.stream = null;
+            this.emit(s, { type: "session_error", code: step.code, message: step.message });
+          },
+        });
         return;
       }
       case "turnEnd":
@@ -500,9 +506,10 @@ export class FakeAdapter implements CliAdapter {
   }
 
   private expireApproval(s: SessionState, requestId: string): void {
-    if (!s.pendingApproval || s.pendingApproval.requestId !== requestId) return;
-    const { itemId, step } = s.pendingApproval;
-    s.pendingApproval = null;
+    const entry = s.pendingApprovals.get(requestId);
+    if (!entry || entry.decided) return;
+    const { itemId, step } = entry;
+    s.pendingApprovals.delete(requestId);
     // Codex 服务端终态（timed_out）→ 统一 approval_expired 回传（spec B 映射表）
     this.emit(s, { type: "approval_expired", requestId, reason: "timed_out" });
     this.emit(s, { type: "tool_completed", itemId, status: "denied", durationMs: DECIDED_TOOL_DURATION_MS, output: "" });
@@ -533,18 +540,13 @@ export class FakeAdapter implements CliAdapter {
 
   /* ---------------- 内部：事件与工具 ---------------- */
 
-  /** 事件唯一出口：写日志（seq 单调分配）+ 通知订阅者 —— readHistory 与实时流零分叉 */
+  /** 事件出口（内核单源：seq 单调分配 + 写日志 + 广播；时间源为注入时钟） */
   private emit(s: SessionState, ev: ChatEventSeed): void {
-    s.seq += 1;
-    const full = { ...ev, sessionId: s.sessionId, seq: s.seq, at: new Date(this.clock.now()).toISOString() } as ChatEvent;
-    s.log.push(full);
-    for (const h of this.handlers) h(full);
+    this.kernel.emit(s, ev);
   }
 
   private requireSession(sessionId: string): SessionState {
-    const s = this.sessions.get(sessionId);
-    if (!s) throw new AdapterError("E_SESSION_NOT_FOUND", `会话不存在：${sessionId}`);
-    return s;
+    return requireSessionEntry(this.sessions, sessionId);
   }
 }
 

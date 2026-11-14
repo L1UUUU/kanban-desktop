@@ -8,6 +8,7 @@ import type { LogKind, PermMode } from "@kanban/ipc-schema";
 import { ExeResolveCache } from "../exe-chain";
 import { OPENCODE_EXE_CHAIN } from "./exe";
 import { OpenCodeHttpServerClient, type OpenCodeServerClientLike } from "./client";
+import { DEFAULT_STOP_TIMEOUT_MS, stopAndAwaitExit } from "../turn-kernel";
 
 /** Adapter 消费的宿主面（生产 OpenCodeServerHost；测试注入 FakeHost） */
 export interface OpenCodeServerHostLike {
@@ -58,6 +59,8 @@ export interface OpenCodeServerHostOptions {
   xdgRoot?: string;
   /** OPENCODE_CONFIG_CONTENT 追加字段（e2e provider 只读注入等；permission 字段以档位注入为准） */
   extraConfig?: Record<string, unknown>;
+  /** 受控停止（release/shutdown）等待 server 实际退出的兜底上限 ms（缺省 3s；注入缩小使超时分支可密封直测，arch C1） */
+  stopTimeoutMs?: number;
   /** 诊断日志 */
   log?: (kind: LogKind, detail: string) => void;
 }
@@ -159,6 +162,8 @@ export class OpenCodeServerHost implements OpenCodeServerHostLike {
   private readonly portPicker: () => Promise<number>;
   private readonly portRetries: number;
   private readonly startTimeoutMs: number;
+  /** 受控停止等死兜底上限（可注入；arch C1） */
+  private readonly stopTimeoutMs: number;
   private readonly log: (kind: LogKind, detail: string) => void;
   private readonly manualExe: string | null;
   private readonly xdgRoot: string | undefined;
@@ -172,6 +177,7 @@ export class OpenCodeServerHost implements OpenCodeServerHostLike {
     this.portPicker = options.portPicker ?? freePort;
     this.portRetries = options.portRetries ?? 3;
     this.startTimeoutMs = options.startTimeoutMs ?? 30_000;
+    this.stopTimeoutMs = options.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS;
     this.xdgRoot = options.xdgRoot;
     this.extraConfig = options.extraConfig;
     this.log = options.log ?? (() => {});
@@ -209,15 +215,8 @@ export class OpenCodeServerHost implements OpenCodeServerHostLike {
     this.servers.delete(key);
     this.removeRegistry(key);
     if (entry.client.dead) return;
-    // 等真实退出（≤3s 兜底）：保证 release 返回时 session_exit 已入事件流（与 Claude dispose 同语义）
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 3000);
-      entry.client.onDead(() => {
-        clearTimeout(timer);
-        resolve();
-      });
-      entry.client.stop(); // 我方 spawn：kill；接管进程：taskkill 按 pid（数据 turn 级落盘无损，poc-3 §8）
-    });
+    // 等真实退出（兜底上限可注入）：保证 release 返回时 session_exit 已入事件流（与 Claude dispose 同语义）
+    await stopAndAwaitExit(entry.client, this.stopTimeoutMs);
     this.log("server-stop", `cwd=${cwd} port=${entry.port}（最后一个会话已释放）`);
   }
 
@@ -226,7 +225,7 @@ export class OpenCodeServerHost implements OpenCodeServerHostLike {
     this.servers.delete(cwdKey(cwd));
   }
 
-  /** 全局停机：停全部 server 并等待实际退出（≤3s 兜底） */
+  /** 全局停机：停全部 server 并等待实际退出（兜底上限可注入） */
   async shutdown(): Promise<void> {
     const entries = [...this.servers.values()];
     this.log("shutdown", `entries=${entries.map((e) => `${e.cwd}@${e.port} refs=${e.refs.size} dead=${e.client.dead}`).join(" | ") || "(空)"}`);
@@ -235,14 +234,7 @@ export class OpenCodeServerHost implements OpenCodeServerHostLike {
     await Promise.all(
       entries.map(async (entry) => {
         if (entry.client.dead) return;
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, 3000);
-          entry.client.onDead(() => {
-            clearTimeout(timer);
-            resolve();
-          });
-          entry.client.stop();
-        });
+        await stopAndAwaitExit(entry.client, this.stopTimeoutMs);
       }),
     );
   }

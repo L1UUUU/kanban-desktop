@@ -1,4 +1,4 @@
-// 用途：ClaudeAdapter —— C1 契约的真实 Claude 实现：stream-json 行协议直连（每会话一进程，poc-7 client 演进）、stdio 审批（can_use_tool 控制请求）、interrupt 归类已取消、--resume 跨重启恢复、--settings 会话级 hook 注入产生 verified SkillObservation（t0-02 裁决：无 SDK 备选路径）、listModels spawn 临时进程 initialize 握手读 models 数组（#78）、setModel 活进程 set_model 控制请求 + 实际模型名回写会话态（#79）、summarizeTitle 一次性 claude -p 标题摘要（#95）
+// 用途：ClaudeAdapter —— C1 契约的真实 Claude 实现：stream-json 行协议直连（每会话一进程，poc-7 client 演进）、stdio 审批（can_use_tool 控制请求）、interrupt 归类已取消、--resume 跨重启恢复、--settings 会话级 hook 注入产生 verified SkillObservation（t0-02 裁决：无 SDK 备选路径）、listModels spawn 临时进程 initialize 握手读 models 数组（#78）、setModel 活进程 set_model 控制请求 + 实际模型名回写会话态（#79）、summarizeTitle 一次性 claude -p 标题摘要（#95）；arch C1 起回合状态机（排队/终态/幂等中断/emit/死亡收尾）为 turn-kernel 消费方，本文件保留 wire 层（stream-json 解析）与审批应答形状
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -15,6 +15,7 @@ import { findTranscriptFile, parseTranscriptEvents, parseTranscriptItems } from 
 import { resolveUserClaudeDir } from "./skill-conflicts";
 import { isAuthFailureStatus, isAuthFailureText } from "./session-error";
 import { buildSummaryPrompt, DEFAULT_SUMMARIZE_TIMEOUT_MS, runTitleOneShot, toTitleLine } from "./title-summarize";
+import { DEFAULT_STOP_TIMEOUT_MS, requireLiveSessionEntry, requireSessionEntry, stopAndAwaitExit, TurnKernel, type KernelApproval, type TurnState } from "./turn-kernel";
 
 /** 可注入的流客户端面（生产 ClaudeStreamClient；测试 Fake 手动驱动协议消息） */
 export interface ClaudeStreamClientLike {
@@ -47,6 +48,8 @@ export interface ClaudeAdapterOptions {
   clientFactory?: (options: ClaudeStreamOptions) => ClaudeStreamClientLike;
   /** #95：标题摘要一次性进程超时 ms（缺省 60s，独立设定不沿用 run-once 300s） */
   summarizeTimeoutMs?: number;
+  /** 受控终止（dispose）等待进程实际退出的兜底上限 ms（缺省 3s；注入缩小使超时分支可密封直测，arch C1） */
+  stopTimeoutMs?: number;
   /** 诊断日志 */
   log?: (kind: LogKind, detail: string) => void;
 }
@@ -70,29 +73,20 @@ const CLAUDE_CAPABILITIES: AdapterCapabilities = {
   listChildPids: true,
 };
 
-/** 待决审批：挂起 wire 响应直到用户决定（onControlRequest 挂起 Promise 模式，#8 同款） */
-interface PendingApproval {
-  requestId: string;
-  itemId: string;
-  decided: boolean;
+/** 待决审批：挂起 wire 响应直到用户决定（onControlRequest 挂起 Promise 模式，#8 同款）；KernelApproval 基类之外携带 addRules 规则建议 */
+interface PendingApproval extends KernelApproval {
   /** CLI 建议的 addRules 规则（allow-always 原样回传，语义不换写） */
   addRules: Record<string, unknown> | null;
   respond: (wire: unknown) => void;
 }
 
-interface SessionState {
-  sessionId: string;
+/** 会话状态：TurnState 回合字段（内核单源持有）+ claude wire 层专属字段 */
+interface SessionState extends TurnState<PendingApproval> {
   nativeSessionId: string;
   cwd: string;
   model?: string;
   permMode?: PermMode;
-  seq: number;
-  log: ChatEvent[];
   status: SessionStatus;
-  turnActive: boolean;
-  interruptRequested: boolean;
-  queue: string[];
-  pendingApprovals: Map<string, PendingApproval>;
   /** deny 决定的工具 id（tool_result 到达时映射 denied 而非 failed） */
   deniedToolIds: Set<string>;
   /** 文本增量累计（终文自愈依据；键 `${apiMessageId}:${blockIndex}`） */
@@ -118,10 +112,18 @@ export class ClaudeAdapter implements CliAdapter {
   /** #95：config 手动覆盖 exe（summarizeTitle 的 exe 解析复用同链）与摘要一次性超时 */
   private readonly manualExe: string | null;
   private readonly summarizeTimeoutMs: number;
+  /** 受控终止等死兜底上限（可注入；arch C1） */
+  private readonly stopTimeoutMs: number;
   /** exe 解析结果缓存（成功才记忆；实现单源在 exe-chain，arch C4） */
   private readonly exeCache = new ExeResolveCache();
   /** 模型目录缓存（listModels #78：握手成功结果复用，进程生命周期内不重复握手；失败清空可重试） */
   private modelsPromise: Promise<ModelEntry[]> | null = null;
+  /** 回合内核（arch C1）：emit/排队/终态/幂等中断/死亡收尾单源 */
+  private readonly kernel = new TurnKernel<PendingApproval>({
+    broadcast: (ev) => {
+      for (const h of this.handlers) h(ev);
+    },
+  });
 
   constructor(options: ClaudeAdapterOptions = {}) {
     this.log = options.log ?? (() => {});
@@ -130,6 +132,7 @@ export class ClaudeAdapter implements CliAdapter {
     this.userClaudeDir = options.userClaudeDir ?? null;
     this.manualExe = options.exe ?? null;
     this.summarizeTimeoutMs = options.summarizeTimeoutMs ?? DEFAULT_SUMMARIZE_TIMEOUT_MS;
+    this.stopTimeoutMs = options.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS;
     const factory = options.clientFactory;
     if (factory) {
       this.clientFactory = factory;
@@ -223,20 +226,15 @@ export class ClaudeAdapter implements CliAdapter {
 
   async sendTurn(input: SendTurnInput): Promise<void> {
     const s = this.requireLiveSession(input.sessionId);
-    // 不变量 6：忙态（turn 进行中/审批待决）排队
-    if (s.turnActive || s.pendingApprovals.size > 0) {
-      s.queue.push(input.text);
-      return;
-    }
+    // 不变量 6：忙态（turn 进行中/审批待决）排队（内核单源判定）
+    if (this.kernel.enqueueIfBusy(s, input.text)) return;
     this.startTurn(s, input.text);
   }
 
   async interruptTurn(sessionId: string): Promise<void> {
     const s = this.requireLiveSession(sessionId);
-    // 幂等：无活动 turn 时 no-op
-    if (!s.turnActive && s.pendingApprovals.size === 0) return;
-    if (s.interruptRequested) return;
-    s.interruptRequested = true;
+    // 幂等闸门（内核单源）：无活动 turn 或已请求过为 no-op
+    if (!this.kernel.requestInterrupt(s)) return;
     // 待决审批先拒绝（否则 CLI 停在等应答，interrupt 语义不完整）
     for (const entry of s.pendingApprovals.values()) {
       entry.decided = true;
@@ -336,10 +334,8 @@ export class ClaudeAdapter implements CliAdapter {
   async resume(sessionId: string): Promise<void> {
     const s = this.requireSession(sessionId);
     if (s.client && !s.client.dead && !s.dead) {
-      // 进程内存活：复位活动残留（与 Codex 同语义）
-      s.turnActive = false;
-      s.queue.length = 0;
-      s.interruptRequested = false;
+      // 进程内存活：复位活动残留（与 Codex 同语义；内核单源复位）
+      this.kernel.resetForResume(s);
       this.emit(s, { type: "session_status", status: "idle" });
       return;
     }
@@ -349,7 +345,7 @@ export class ClaudeAdapter implements CliAdapter {
       strictAsk: PERM_MAP[s.permMode ?? "auto"].strictAsk,
     });
     try {
-      s.queue.length = 0;
+      this.kernel.resetForResume(s); // 丢弃死亡期残留排队/闸门再续进程
       await this.spawnClient({ owner: s, model: s.model, permMode: s.permMode, settingsPath, sessionArg: ["--resume", s.nativeSessionId] });
       this.emit(s, { type: "session_status", status: "idle" });
     } catch (e) {
@@ -371,17 +367,10 @@ export class ClaudeAdapter implements CliAdapter {
     await Promise.all([...this.sessions.values()].map((s) => this.stopClient(s.client)));
   }
 
-  /** 受控终止单个客户端：等待实际退出（≤3s 兜底），保证 dispose 返回时 session_exit 已入事件流 */
+  /** 受控终止单个客户端：等待实际退出（兜底上限可注入），保证 dispose 返回时 session_exit 已入事件流 */
   private async stopClient(client: ClaudeStreamClientLike | null): Promise<void> {
     if (!client || client.dead) return;
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 3000);
-      client.onDead(() => {
-        clearTimeout(timer);
-        resolve();
-      });
-      client.stop();
-    });
+    await stopAndAwaitExit(client, this.stopTimeoutMs);
   }
 
   subscribe(handler: (event: AdapterEvent) => void): () => void {
@@ -420,7 +409,6 @@ export class ClaudeAdapter implements CliAdapter {
     wire.onMessage((msg) => this.onStreamMessage(s, msg));
     s.client = wire;
     s.dead = false;
-    s.turnActive = false;
   }
 
   private newState(
@@ -645,54 +633,37 @@ export class ClaudeAdapter implements CliAdapter {
   /* ---------------- 内部：turn 驱动与终态 ---------------- */
 
   private startTurn(s: SessionState, text: string): void {
-    s.turnActive = true;
-    s.interruptRequested = false;
+    this.kernel.beginTurn(s);
     this.emit(s, { type: "session_status", status: "running" });
     this.emit(s, { type: "turn_started", turnId: `t-${randomUUID().slice(0, 8)}` });
     s.client?.sendUser(text);
   }
 
-  /** turn 终态统一收尾（interrupted/failed 丢弃排队，completed 续发） */
+  /** turn 终态统一收尾（内核单源终态机）：残留审批强制拒绝（claude wire 应答形状）+ completed 续发排队 */
   private finishTurn(s: SessionState, status: "completed" | "interrupted" | "failed"): void {
-    s.turnActive = false;
-    s.interruptRequested = false;
-    // 防护：终态后残留审批强制拒绝（CLI 进程侧无害；UI 不留挂起卡）
-    for (const entry of s.pendingApprovals.values()) {
-      entry.decided = true;
-      s.deniedToolIds.add(entry.itemId);
-      entry.respond({ behavior: "deny", message: "turn 已结束" });
-    }
-    s.pendingApprovals.clear();
-    if (status === "interrupted") {
-      s.queue.length = 0;
-      this.emit(s, { type: "turn_interrupted", reason: "user" });
-      this.emit(s, { type: "session_status", status: "interrupted" });
-      return;
-    }
-    if (status === "failed") {
-      s.queue.length = 0; // 明确报错不重放（spec H）
-      this.emit(s, { type: "session_status", status: "idle" });
-      return;
-    }
-    this.emit(s, { type: "turn_completed" });
-    this.emit(s, { type: "session_status", status: "idle" });
-    const next = s.queue.shift();
-    if (next) this.startTurn(s, next);
+    this.kernel.finishTurn(s, status, {
+      onResidue: (st) => {
+        // 防护：终态后残留审批强制拒绝（CLI 进程侧无害；UI 不留挂起卡）
+        for (const entry of st.pendingApprovals.values()) {
+          entry.decided = true;
+          s.deniedToolIds.add(entry.itemId);
+          entry.respond({ behavior: "deny", message: "turn 已结束" });
+        }
+      },
+      sendQueuedTurn: (next) => this.startTurn(s, next),
+    });
   }
 
-  /** 进程死亡：明确报错不重放；状态保留供 resume */
+  /** 进程死亡：明确报错不重放；状态保留供 resume（收尾单源在内核，审批残留经 approval_expired 事件收口） */
   private handleProcessDeath(s: SessionState, err: Error): void {
     if (s.dead) return;
     s.dead = true;
-    s.queue.length = 0;
-    s.turnActive = false;
-    for (const entry of s.pendingApprovals.values()) {
-      this.emit(s, { type: "approval_expired", requestId: entry.requestId, reason: "session_dead" });
-    }
-    s.pendingApprovals.clear();
     const exitCode = s.client?.exitInfo?.code;
-    this.emit(s, { type: "session_exit", exitCode: typeof exitCode === "number" ? exitCode : 1, reason: err.message });
-    this.emit(s, { type: "session_status", status: "disconnected" });
+    this.kernel.handleDeath(s, {
+      exitCode: typeof exitCode === "number" ? exitCode : 1,
+      reason: err.message,
+      onApprovalResidue: (entry) => this.emit(s, { type: "approval_expired", requestId: entry.requestId, reason: "session_dead" }),
+    });
   }
 
   /* ---------------- 内部：hook verified 信号与 transcript 回填 ---------------- */
@@ -764,12 +735,9 @@ export class ClaudeAdapter implements CliAdapter {
 
   /* ---------------- 内部：事件与工具 ---------------- */
 
-  /** ChatEvent 唯一出口：seq 单调 + at（可指定 transcript 时间戳）+ 广播；SkillObservation 直发订阅者不入日志 */
+  /** ChatEvent 出口（内核单源：seq 单调 + at 可指定 transcript 时间戳 + 写日志 + 广播；SkillObservation 直发订阅者不入日志） */
   private emit(s: SessionState, ev: ChatEventSeed, at?: string): void {
-    s.seq += 1;
-    const full = { ...ev, sessionId: s.sessionId, seq: s.seq, at: at ?? new Date().toISOString() } as ChatEvent;
-    s.log.push(full);
-    for (const h of this.handlers) h(full);
+    this.kernel.emit(s, ev, at);
   }
 
   private emitObservation(s: SessionState, base: { eventId: string; skill: string; evidenceLevel: "verified" | "self_reported"; source: string; occurredAt: string }): void {
@@ -791,17 +759,11 @@ export class ClaudeAdapter implements CliAdapter {
   }
 
   private requireSession(sessionId: string): SessionState {
-    const s = this.sessions.get(sessionId);
-    if (!s) throw new AdapterError("E_SESSION_NOT_FOUND", `会话不存在：${sessionId}`);
-    return s;
+    return requireSessionEntry(this.sessions, sessionId);
   }
 
   private requireLiveSession(sessionId: string): SessionState {
-    const s = this.requireSession(sessionId);
-    if (s.dead || !s.client || s.client.dead) {
-      throw new AdapterError("E_INTERNAL", "Claude 进程已退出，会话已断开（请读取原生历史恢复或新建会话）");
-    }
-    return s;
+    return requireLiveSessionEntry(this.sessions, sessionId, (s) => s.dead || !s.client || s.client.dead, "Claude 进程已退出");
   }
 }
 

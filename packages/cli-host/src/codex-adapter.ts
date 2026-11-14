@@ -1,4 +1,4 @@
-// 用途：CodexAdapter —— C1 契约的真实 Codex 实现：spawn 直连 vendored codex.exe app-server（JSON-RPC/stdio，单进程多 thread），通知流映射 ChatEvent（poc-1/t0-01 实证 wire 行为）+ readTranscript rollout 落盘双视角（#28）+ listModels 常驻 app-server 目录查询（#76）+ summarizeTitle 一次性 codex exec 标题摘要（#95）
+// 用途：CodexAdapter —— C1 契约的真实 Codex 实现：spawn 直连 vendored codex.exe app-server（JSON-RPC/stdio，单进程多 thread），通知流映射 ChatEvent（poc-1/t0-01 实证 wire 行为）+ readTranscript rollout 落盘双视角（#28）+ listModels 常驻 app-server 目录查询（#76）+ summarizeTitle 一次性 codex exec 标题摘要（#95）；arch C1 起回合状态机（排队/终态/幂等中断/emit/死亡收尾）为 turn-kernel 消费方，本文件保留 wire 层（JSON-RPC 通知解析）与审批应答形状
 import { randomUUID } from "node:crypto";
 import { readFileSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -13,6 +13,7 @@ import { parseRolloutTranscript } from "./codex/rollout";
 import { createDefaultModelResolver, type ModelResolver } from "./codex/model-probe";
 import { isAuthFailureText } from "./session-error";
 import { buildSummaryPrompt, DEFAULT_SUMMARIZE_TIMEOUT_MS, runTitleOneShot, toTitleLine } from "./title-summarize";
+import { DEFAULT_STOP_TIMEOUT_MS, requireLiveSessionEntry, requireSessionEntry, stopAndAwaitExit, TurnKernel, type KernelApproval, type TurnState } from "./turn-kernel";
 
 /** 可注入的 rpc 客户端面（生产 CodexRpcClient；测试 Fake 手动驱动协议消息） */
 export interface CodexRpcClientLike {
@@ -41,6 +42,8 @@ export interface CodexAdapterOptions {
   homeDir?: string | null;
   /** #95：标题摘要一次性进程超时 ms（缺省 60s，独立设定不沿用 run-once 300s） */
   summarizeTimeoutMs?: number;
+  /** 受控终止（dispose）等待 app-server 实际退出的兜底上限 ms（缺省 3s；注入缩小使超时分支可密封直测，arch C1） */
+  stopTimeoutMs?: number;
   /** 诊断日志 */
   log?: (kind: LogKind, detail: string) => void;
 }
@@ -79,33 +82,23 @@ const CODEX_CAPABILITIES: AdapterCapabilities = {
 /** model/list 分页保护上限（nextCursor 续拉；防异常游标死循环，issue #76） */
 const MODEL_LIST_MAX_PAGES = 20;
 
-/** 待决审批：respond 挂起 wire 响应直到用户决定或服务端终决 */
-interface PendingApproval {
-  requestId: string;
-  itemId: string;
-  decided: boolean;
+/** 待决审批：respond 挂起 wire 响应直到用户决定或服务端终决（KernelApproval 基类之外携带 wire 应答函数） */
+interface PendingApproval extends KernelApproval {
   respond: (value: { decision: string }) => void;
 }
 
-interface SessionState {
-  sessionId: string;
+/** 会话状态：TurnState 回合字段（内核单源持有）+ codex wire 层专属字段 */
+interface SessionState extends TurnState<PendingApproval> {
   threadId: string;
   cwd: string;
   model?: string;
   permMode?: PermMode;
-  seq: number;
-  log: ChatEvent[];
   status: SessionStatus;
-  /** 当前 turn 提交中/进行中（busy 判定：排队依据） */
-  turnActive: boolean;
   currentTurnId: string | null;
-  /** 用户已请求中断（幂等 + 提交窗口竞态兜底） */
-  interruptRequested: boolean;
+  /** wire 中断已发送（提交窗口竞态：turn/started 到达后补发一次） */
   interruptSent: boolean;
   /** 本 turn 的 error 通知已发 session_error（防 failed 终态重复报错） */
   turnErrorSent: boolean;
-  queue: string[];
-  pendingApprovals: Map<string, PendingApproval>;
   /** #97：deny 决策已本地合成 tool_completed(denied) 的 itemId（0.167.0 起服务端不再回发 item/completed(declined)，防 0.144 双发） */
   deniedItemIds: Set<string>;
   /** agentMessage delta 累计（终文自愈依据） */
@@ -133,6 +126,14 @@ export class CodexAdapter implements CliAdapter {
   /** #95：config 手动覆盖 exe（summarizeTitle 的 exe 解析复用同链）与摘要一次性超时 */
   private readonly manualExe: string | null;
   private readonly summarizeTimeoutMs: number;
+  /** 受控终止等死兜底上限（可注入；arch C1） */
+  private readonly stopTimeoutMs: number;
+  /** 回合内核（arch C1）：emit/排队/终态/幂等中断/死亡收尾单源 */
+  private readonly kernel = new TurnKernel<PendingApproval>({
+    broadcast: (ev) => {
+      for (const h of this.handlers) h(ev);
+    },
+  });
 
   constructor(options: CodexAdapterOptions = {}) {
     this.effort = options.effort;
@@ -140,6 +141,7 @@ export class CodexAdapter implements CliAdapter {
     this.homeDir = options.homeDir ?? null;
     this.manualExe = options.exe ?? null;
     this.summarizeTimeoutMs = options.summarizeTimeoutMs ?? DEFAULT_SUMMARIZE_TIMEOUT_MS;
+    this.stopTimeoutMs = options.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS;
     this.modelResolver = options.resolveModel ?? createDefaultModelResolver(options);
     const factory = options.clientFactory;
     if (factory) {
@@ -333,20 +335,15 @@ export class CodexAdapter implements CliAdapter {
 
   async sendTurn(input: SendTurnInput): Promise<void> {
     const s = this.requireSession(input.sessionId);
-    // 不变量 6：忙态（turn 进行中/审批待决）排队
-    if (s.turnActive || s.pendingApprovals.size > 0) {
-      s.queue.push(input.text);
-      return;
-    }
+    // 不变量 6：忙态（turn 进行中/审批待决）排队（内核单源判定）
+    if (this.kernel.enqueueIfBusy(s, input.text)) return;
     await this.startTurn(s, input.text);
   }
 
   async interruptTurn(sessionId: string): Promise<void> {
     const s = this.requireSession(sessionId);
-    // 幂等：无活动 turn 时 no-op
-    if (!s.turnActive && s.pendingApprovals.size === 0) return;
-    if (s.interruptSent || s.interruptRequested) return;
-    s.interruptRequested = true;
+    // 幂等闸门（内核单源）：无活动 turn 或已请求过为 no-op
+    if (!this.kernel.requestInterrupt(s)) return;
     // wire 必须带 turnId（t0-01 发现 4）；提交窗口内 turn/started 未到则到达后补发
     if (s.currentTurnId && this.client && !this.client.dead) {
       s.interruptSent = true;
@@ -451,10 +448,9 @@ export class CodexAdapter implements CliAdapter {
       this.emit(s, { type: "session_status", status: "idle" });
       return;
     }
-    // 进程内存活期间状态连续；仅复位活动残留并通知空闲
-    s.turnActive = false;
+    // 进程内存活期间状态连续；仅复位活动残留并通知空闲（回合态复位走内核单源）
     s.currentTurnId = null;
-    s.queue.length = 0;
+    this.kernel.resetForResume(s);
     this.emit(s, { type: "session_status", status: "idle" });
   }
 
@@ -468,17 +464,10 @@ export class CodexAdapter implements CliAdapter {
       }
       return;
     }
-    // 全局：受控终止并等待进程实际退出（onDead 链发 session_exit/disconnected；有限等待防挂）
+    // 全局：受控终止并等待进程实际退出（onDead 链发 session_exit/disconnected；兜底上限可注入）
     const client = this.client;
     if (!client || client.dead) return;
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 3000);
-      client.onDead(() => {
-        clearTimeout(timer);
-        resolve();
-      });
-      client.stop();
-    });
+    await stopAndAwaitExit(client, this.stopTimeoutMs);
   }
 
   subscribe(handler: (event: AdapterEvent) => void): () => void {
@@ -662,8 +651,7 @@ export class CodexAdapter implements CliAdapter {
 
   private async startTurn(s: SessionState, text: string): Promise<void> {
     s.userTexts.push(text); // #95：摘要回退素材（原生 transcript 不可读时）
-    s.turnActive = true;
-    s.interruptRequested = false;
+    this.kernel.beginTurn(s);
     s.interruptSent = false;
     s.turnErrorSent = false;
     this.emit(s, { type: "session_status", status: "running" });
@@ -679,42 +667,32 @@ export class CodexAdapter implements CliAdapter {
     try {
       await this.client!.request("turn/start", params);
     } catch (e) {
-      // 提交失败：turn 回滚到空闲并明确报错（不进入事件流重放）；#41 rpc 401/登录态失效 → AUTH_EXPIRED
-      s.turnActive = false;
+      // 提交失败：turn 回滚到空闲并明确报错（不进入事件流重放；内核 failed 分支同款收尾）；#41 rpc 401/登录态失效 → AUTH_EXPIRED
       s.currentTurnId = null;
       const msg = e instanceof Error ? e.message : String(e);
-      this.emit(s, { type: "session_error", code: isAuthFailureText(msg) ? "AUTH_EXPIRED" : "INTERNAL", message: msg });
-      this.emit(s, { type: "session_status", status: "idle" });
+      this.kernel.finishTurn(s, "failed", {
+        onResidue: () => {
+          this.emit(s, { type: "session_error", code: isAuthFailureText(msg) ? "AUTH_EXPIRED" : "INTERNAL", message: msg });
+        },
+      });
       throw new AdapterError("E_INTERNAL", `turn 提交失败：${msg}`);
     }
   }
 
-  /** turn 终态统一收尾：终态事件 + 状态 + 队列策略（interrupted/failed 丢弃排队，completed 续发） */
+  /** turn 终态统一收尾（内核单源终态机）：残留审批以 cancel 应答收口（codex wire 应答形状）+ completed 续发排队 */
   private finishTurn(s: SessionState, status: string): void {
-    s.turnActive = false;
+    const terminal = status === "interrupted" || status === "failed" ? status : "completed";
     s.currentTurnId = null;
-    s.interruptRequested = false;
     s.interruptSent = false;
-    // 防护：turn 终态后残留审批强制失效（正常流审批先于 turn 终态解决）
-    for (const entry of s.pendingApprovals.values()) {
-      entry.respond({ decision: "cancel" });
-    }
-    s.pendingApprovals.clear();
-    if (status === "interrupted") {
-      s.queue.length = 0;
-      this.emit(s, { type: "turn_interrupted", reason: "user" });
-      this.emit(s, { type: "session_status", status: "interrupted" });
-      return;
-    }
-    if (status === "failed") {
-      s.queue.length = 0; // 明确报错不重放（spec H）
-      this.emit(s, { type: "session_status", status: "idle" });
-      return;
-    }
-    this.emit(s, { type: "turn_completed" });
-    this.emit(s, { type: "session_status", status: "idle" });
-    const next = s.queue.shift();
-    if (next) void this.startTurn(s, next).catch(() => {});
+    this.kernel.finishTurn(s, terminal, {
+      onResidue: (st) => {
+        // 防护：turn 终态后残留审批强制失效（正常流审批先于 turn 终态解决）
+        for (const entry of st.pendingApprovals.values()) entry.respond({ decision: "cancel" });
+      },
+      sendQueuedTurn: (next) => {
+        void this.startTurn(s, next).catch(() => {});
+      },
+    });
   }
 
   /** agentMessage 终文自愈：delta 累计与终文不等时补发缺失部分（无重复无丢失，不变量 3） */
@@ -824,45 +802,35 @@ export class CodexAdapter implements CliAdapter {
     }
   }
 
-  /** 进程死亡：全部会话明确报错（session_exit + disconnected），后续操作拒绝（不重放） */
+  /** 进程死亡：全部会话明确报错（session_exit + disconnected），后续操作拒绝（不重放；收尾单源在内核，审批残留以 wire cancel 收口） */
   private handleProcessDeath(err: Error): void {
     this.log("dead", err.message);
     const exitCode = this.client?.exitInfo?.code ?? 1;
     for (const s of this.sessions.values()) {
       if (s.dead) continue;
       s.dead = true;
-      s.queue.length = 0;
-      for (const entry of s.pendingApprovals.values()) entry.respond({ decision: "cancel" });
-      s.pendingApprovals.clear();
-      this.emit(s, { type: "session_exit", exitCode: typeof exitCode === "number" ? exitCode : 1, reason: err.message });
-      this.emit(s, { type: "session_status", status: "disconnected" });
+      this.kernel.handleDeath(s, {
+        exitCode: typeof exitCode === "number" ? exitCode : 1,
+        reason: err.message,
+        onApprovalResidue: (entry) => entry.respond({ decision: "cancel" }),
+      });
     }
   }
 
   /* ---------------- 内部：事件与工具 ---------------- */
 
-  /** 事件唯一出口：写日志（seq 单调）+ 广播 —— readHistory 与实时流零分叉 */
+  /** 事件出口（内核单源：seq 单调 + 写日志 + 广播）—— readHistory 与实时流零分叉 */
   private emit(s: SessionState, ev: ChatEventSeed): void {
-    s.seq += 1;
-    const full = { ...ev, sessionId: s.sessionId, seq: s.seq, at: new Date().toISOString() } as ChatEvent;
-    s.log.push(full);
-    for (const h of this.handlers) h(full);
+    this.kernel.emit(s, ev);
   }
 
   private requireSession(sessionId: string): SessionState {
-    const s = this.sessions.get(sessionId);
-    if (!s) throw new AdapterError("E_SESSION_NOT_FOUND", `会话不存在：${sessionId}`);
-    if (s.dead) {
-      throw new AdapterError("E_INTERNAL", "Codex 进程已退出，会话已断开（请读取原生历史恢复或新建会话）");
-    }
-    return s;
+    return requireLiveSessionEntry(this.sessions, sessionId, (s) => s.dead, "Codex 进程已退出");
   }
 
   /** 只查存在性（允许 dead）：readHistory/resume 是断开会话的恢复入口（#13） */
   private requireKnownSession(sessionId: string): SessionState {
-    const s = this.sessions.get(sessionId);
-    if (!s) throw new AdapterError("E_SESSION_NOT_FOUND", `会话不存在：${sessionId}`);
-    return s;
+    return requireSessionEntry(this.sessions, sessionId);
   }
 }
 
