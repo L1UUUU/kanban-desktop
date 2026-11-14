@@ -1,6 +1,7 @@
 // 用途：记忆工作区（#34，spec #27 I 节原型一致项 1/2、US19–21；#38 总结编辑弹层接通保存通道）—— 当前项目分区：搜索框（占位文案声明口径）+ 已接受知识列表（claim 正文/适用范围徽标/来源会话数/状态 chip/编辑/复制路径/复制内容）+ 需求总结区（标题/更新时间/查看/编辑/复制路径）+ 无匹配/无项目空态；知识编辑弹层走 memory:editAccepted，总结编辑弹层走 memory:editSummary（I 节第 8 条）；含侧栏底部「记忆」入口按钮（与看板入口同款形态）
 import { useState } from "react";
 import type { MemoryCandidateRow, MemorySummaryRow } from "@kanban/ipc-schema";
+import { Modal } from "../../components/Modal";
 import type { MemoryController } from "./use-memory";
 
 /** 知识有效值：编辑值优先、缺省回原值（与 store 冲突比较基准同口径） */
@@ -186,153 +187,135 @@ export function MemoryWorkspace({ memory, projectName }: { memory: MemoryControl
             ) : null}
           </div>
 
-          {/* 知识编辑弹层（原型一致项 7 同款形态）：claim textarea + 适用范围 input 可编辑，溯源只读 */}
+          {/* 知识编辑弹层（原型一致项 7 同款形态）：claim textarea + 适用范围 input 可编辑，溯源只读；保存中遮罩禁关（busy） */}
           {editing ? (
-            <div
-              data-testid="memory-edit-mask"
-              className="absolute inset-0 z-30 flex items-center justify-center bg-black/60 p-4"
-              onClick={() => (editSaving ? undefined : setEditing(null))}
+            <Modal
+              variant="absolute"
+              closeOnOverlay
+              busy={editSaving}
+              onClose={() => setEditing(null)}
+              maskTestId="memory-edit-mask"
+              dialogTestId="memory-knowledge-dialog"
+              dialogClassName="w-[460px] max-w-full"
             >
-              <div
-                role="dialog"
-                aria-modal="true"
-                data-testid="memory-knowledge-dialog"
-                className="w-[460px] max-w-full rounded-xl border border-border bg-card p-4 shadow-2xl"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <h3 className="mb-3 text-sm font-semibold">编辑知识 {editing.k.displayNo}</h3>
-                <label className="mb-1 block text-[11px] text-muted-foreground" htmlFor="memory-edit-claim">
-                  知识内容（claim）
-                </label>
-                <textarea
-                  id="memory-edit-claim"
-                  data-testid="memory-edit-claim"
-                  aria-label="知识内容（claim）"
-                  rows={3}
-                  className="mb-3 w-full resize-y rounded-lg border border-border bg-muted px-2.5 py-2 text-[13px] outline-none focus:border-primary"
-                  value={editing.claim}
-                  onChange={(e) => setEditing({ ...editing, claim: e.target.value })}
-                />
-                <label className="mb-1 block text-[11px] text-muted-foreground" htmlFor="memory-edit-scope">
-                  适用范围（scope）
-                </label>
-                <input
-                  id="memory-edit-scope"
-                  data-testid="memory-edit-scope"
-                  aria-label="适用范围（scope）"
-                  className="mb-3 w-full rounded-lg border border-border bg-muted px-2.5 py-2 text-[13px] outline-none focus:border-primary"
-                  value={editing.scope}
-                  onChange={(e) => setEditing({ ...editing, scope: e.target.value })}
-                />
-                {/* 溯源信息只读（保证可追溯） */}
-                <div className="mb-3 rounded-lg border border-dashed border-border px-2.5 py-2 text-[11px] leading-relaxed text-fg-faint">
-                  溯源信息（只读，保证可追溯）：
-                  <br />
-                  来源会话：{editing.k.sourceSessionIds.length} 个 · {editing.k.evidence}
-                  <br />
-                  编号：{editing.k.displayNo}
-                </div>
-                {editError ? <p className="mb-2 text-xs text-destructive">保存失败：{editError}</p> : null}
-                <div className="flex justify-end gap-2">
-                  <button
-                    type="button"
-                    data-testid="memory-knowledge-cancel"
-                    className={DIALOG_BTN}
-                    disabled={editSaving}
-                    onClick={() => setEditing(null)}
-                  >
-                    取消
-                  </button>
-                  <button
-                    type="button"
-                    data-testid="memory-knowledge-save"
-                    className={DIALOG_BTN_PRIMARY}
-                    disabled={editSaving || editing.claim.trim() === ""}
-                    onClick={saveEdit}
-                  >
-                    {editSaving ? "保存中…" : "保存"}
-                  </button>
-                </div>
+              <h3 className="mb-3 text-sm font-semibold">编辑知识 {editing.k.displayNo}</h3>
+              <label className="mb-1 block text-[11px] text-muted-foreground" htmlFor="memory-edit-claim">
+                知识内容（claim）
+              </label>
+              <textarea
+                id="memory-edit-claim"
+                data-testid="memory-edit-claim"
+                aria-label="知识内容（claim）"
+                rows={3}
+                className="mb-3 w-full resize-y rounded-lg border border-border bg-muted px-2.5 py-2 text-[13px] outline-none focus:border-primary"
+                value={editing.claim}
+                onChange={(e) => setEditing({ ...editing, claim: e.target.value })}
+              />
+              <label className="mb-1 block text-[11px] text-muted-foreground" htmlFor="memory-edit-scope">
+                适用范围（scope）
+              </label>
+              <input
+                id="memory-edit-scope"
+                data-testid="memory-edit-scope"
+                aria-label="适用范围（scope）"
+                className="mb-3 w-full rounded-lg border border-border bg-muted px-2.5 py-2 text-[13px] outline-none focus:border-primary"
+                value={editing.scope}
+                onChange={(e) => setEditing({ ...editing, scope: e.target.value })}
+              />
+              {/* 溯源信息只读（保证可追溯） */}
+              <div className="mb-3 rounded-lg border border-dashed border-border px-2.5 py-2 text-[11px] leading-relaxed text-fg-faint">
+                溯源信息（只读，保证可追溯）：
+                <br />
+                来源会话：{editing.k.sourceSessionIds.length} 个 · {editing.k.evidence}
+                <br />
+                编号：{editing.k.displayNo}
               </div>
-            </div>
+              {editError ? <p className="mb-2 text-xs text-destructive">保存失败：{editError}</p> : null}
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  data-testid="memory-knowledge-cancel"
+                  className={DIALOG_BTN}
+                  disabled={editSaving}
+                  onClick={() => setEditing(null)}
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  data-testid="memory-knowledge-save"
+                  className={DIALOG_BTN_PRIMARY}
+                  disabled={editSaving || editing.claim.trim() === ""}
+                  onClick={saveEdit}
+                >
+                  {editSaving ? "保存中…" : "保存"}
+                </button>
+              </div>
+            </Modal>
           ) : null}
 
-          {/* 总结查看弹层（只读正文） */}
+          {/* 总结查看弹层（只读正文；遮罩点击即关） */}
           {viewing ? (
-            <div
-              data-testid="memory-view-mask"
-              className="absolute inset-0 z-30 flex items-center justify-center bg-black/60 p-4"
-              onClick={() => setViewing(null)}
+            <Modal
+              variant="absolute"
+              closeOnOverlay
+              onClose={() => setViewing(null)}
+              maskTestId="memory-view-mask"
+              dialogTestId="memory-summary-dialog"
+              dialogClassName="max-h-[80%] w-[560px] max-w-full overflow-y-auto"
             >
-              <div
-                role="dialog"
-                aria-modal="true"
-                data-testid="memory-summary-dialog"
-                className="max-h-[80%] w-[560px] max-w-full overflow-y-auto rounded-xl border border-border bg-card p-4 shadow-2xl"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <h3 className="mb-2 text-sm font-semibold">
-                  需求总结 · {viewing.requirementId} {viewing.title ? `· ${viewing.title}` : ""}
-                </h3>
-                <pre className="mb-3 whitespace-pre-wrap break-words text-[12px] leading-relaxed text-muted-foreground">
-                  {viewing.content ?? "（总结内容不可用）"}
-                </pre>
-                <div className="flex justify-end">
-                  <button type="button" className={DIALOG_BTN} onClick={() => setViewing(null)}>
-                    关闭
-                  </button>
-                </div>
+              <h3 className="mb-2 text-sm font-semibold">
+                需求总结 · {viewing.requirementId} {viewing.title ? `· ${viewing.title}` : ""}
+              </h3>
+              <pre className="mb-3 whitespace-pre-wrap break-words text-[12px] leading-relaxed text-muted-foreground">
+                {viewing.content ?? "（总结内容不可用）"}
+              </pre>
+              <div className="flex justify-end">
+                <button type="button" className={DIALOG_BTN} onClick={() => setViewing(null)}>
+                  关闭
+                </button>
               </div>
-            </div>
+            </Modal>
           ) : null}
 
-          {/* 总结编辑弹层（原型一致项 8：同款弹层形态 textarea；保存走 memory:editSummary 写回并纳入防覆盖基准，#38） */}
+          {/* 总结编辑弹层（原型一致项 8：同款弹层形态 textarea；保存走 memory:editSummary 写回并纳入防覆盖基准，#38；保存中遮罩禁关（busy）） */}
           {editingSummary ? (
-            <div
-              data-testid="memory-summary-edit-mask"
-              className="absolute inset-0 z-30 flex items-center justify-center bg-black/60 p-4"
-              onClick={() => (summarySaving ? undefined : setEditingSummary(null))}
+            <Modal
+              variant="absolute"
+              closeOnOverlay
+              busy={summarySaving}
+              onClose={() => setEditingSummary(null)}
+              maskTestId="memory-summary-edit-mask"
+              dialogTestId="memory-summary-edit-dialog"
+              dialogClassName="max-h-[80%] w-[560px] max-w-full overflow-y-auto"
             >
-              <div
-                role="dialog"
-                aria-modal="true"
-                data-testid="memory-summary-edit-dialog"
-                className="max-h-[80%] w-[560px] max-w-full overflow-y-auto rounded-xl border border-border bg-card p-4 shadow-2xl"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <h3 className="mb-2 text-sm font-semibold">
-                  编辑需求总结 · {editingSummary.s.requirementId} {editingSummary.s.title ? `· ${editingSummary.s.title}` : ""}
-                </h3>
-                <textarea
-                  data-testid="memory-summary-textarea"
-                  aria-label="总结正文"
-                  rows={12}
-                  className="mb-2 w-full resize-y rounded-lg border border-border bg-muted px-2.5 py-2 text-[12px] leading-relaxed outline-none focus:border-primary"
-                  value={editingSummary.text}
-                  onChange={(e) => setEditingSummary({ ...editingSummary, text: e.target.value })}
-                />
-                {summaryError ? <p className="mb-2 text-xs text-destructive">保存失败：{summaryError}</p> : null}
-                <div className="flex justify-end gap-2">
-                  <button
-                    type="button"
-                    className={DIALOG_BTN}
-                    disabled={summarySaving}
-                    onClick={() => setEditingSummary(null)}
-                  >
-                    关闭
-                  </button>
-                  <button
-                    type="button"
-                    data-testid="memory-summary-save"
-                    className={DIALOG_BTN_PRIMARY}
-                    disabled={summarySaving || editingSummary.text.trim() === ""}
-                    onClick={saveSummaryEdit}
-                  >
-                    {summarySaving ? "保存中…" : "保存"}
-                  </button>
-                </div>
+              <h3 className="mb-2 text-sm font-semibold">
+                编辑需求总结 · {editingSummary.s.requirementId} {editingSummary.s.title ? `· ${editingSummary.s.title}` : ""}
+              </h3>
+              <textarea
+                data-testid="memory-summary-textarea"
+                aria-label="总结正文"
+                rows={12}
+                className="mb-2 w-full resize-y rounded-lg border border-border bg-muted px-2.5 py-2 text-[12px] leading-relaxed outline-none focus:border-primary"
+                value={editingSummary.text}
+                onChange={(e) => setEditingSummary({ ...editingSummary, text: e.target.value })}
+              />
+              {summaryError ? <p className="mb-2 text-xs text-destructive">保存失败：{summaryError}</p> : null}
+              <div className="flex justify-end gap-2">
+                <button type="button" className={DIALOG_BTN} disabled={summarySaving} onClick={() => setEditingSummary(null)}>
+                  关闭
+                </button>
+                <button
+                  type="button"
+                  data-testid="memory-summary-save"
+                  className={DIALOG_BTN_PRIMARY}
+                  disabled={summarySaving || editingSummary.text.trim() === ""}
+                  onClick={saveSummaryEdit}
+                >
+                  {summarySaving ? "保存中…" : "保存"}
+                </button>
               </div>
-            </div>
+            </Modal>
           ) : null}
         </>
       )}

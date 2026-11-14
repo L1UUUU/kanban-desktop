@@ -5,6 +5,7 @@ import { copyText } from "../lib/copy-text";
 import { CLI_DOT_CLS, sessionCliLabel } from "../lib/cli-catalog";
 import type { ArchivedSessionsController } from "../features/chat/use-archived-sessions";
 import { DeleteSessionDialog } from "./DeleteSessionDialog";
+import { Modal } from "./Modal";
 
 /** 「打开日志文件」：资源管理器中定位当前启动主日志文件（Main 侧 shell.showItemInFolder 主文件）；jsdom 无桥可选链降级 */
 const openLog = (): void => {
@@ -161,8 +162,16 @@ export function SettingsModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55" data-testid="settings-modal-overlay">
-      <div data-testid="settings-modal" className="flex max-h-[84%] w-[min(560px,88%)] flex-col rounded-[14px] border border-border bg-card shadow-2xl">
+    <>
+      {/* arch D12：遮罩/容器骨架走共享 Modal（fixed 变体，遮罩不响应点击——现状保持，仅经 ✕/完成关闭） */}
+      <Modal
+        variant="fixed"
+        closeOnOverlay={false}
+        onClose={onClose}
+        maskTestId="settings-modal-overlay"
+        dialogTestId="settings-modal"
+        dialogClassName="flex max-h-[84%] w-[min(560px,88%)] flex-col"
+      >
         <div className="flex items-center border-b border-border px-4 py-3 text-sm font-semibold">
           设置
           <button type="button" className="ml-auto px-1 text-fg-faint hover:text-foreground" onClick={onClose} aria-label="关闭设置">
@@ -329,7 +338,7 @@ export function SettingsModal({
             完成
           </button>
         </div>
-      </div>
+      </Modal>
       {/* #63 已归档行删除二次确认：与侧栏同款 DeleteSessionDialog（后渲染的 fixed 遮罩叠于设置面板之上） */}
       {deleteTarget ? (
         <DeleteSessionDialog
@@ -342,6 +351,6 @@ export function SettingsModal({
           }}
         />
       ) : null}
-    </div>
+    </>
   );
 }

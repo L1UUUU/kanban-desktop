@@ -1,6 +1,7 @@
 // 用途：需求详情滑出面板（#19，原型一致项 4/5）—— 看板右侧滑出：标题行内编辑（kanban:rename，事件流保证重启不回退；arch D11 起交互经 useInlineRename 单源）/ uncertain 提示条 +「确认当前阶段」（= setStage 当前阶段）/ 五段阶段修正条（含当前依据展示 skill·CLI·证据等级·时间；manual 显示手动修正）/ 删除需求 + 二次确认弹层；关联会话区为 RelatedSessionsArea 挂点（#20 填充）；需求经验区为 MemoryArea 挂点（#33 填充，挂关联会话区之后）
 import { useState } from "react";
 import type { KanbanStageInput, RequirementCardRow, StageBasisWire } from "@kanban/ipc-schema";
+import { Modal } from "../../components/Modal";
 import { useInlineRename } from "../../lib/use-inline-rename";
 import { KANBAN_COLUMNS, cliLabel, formatDetailBasis } from "./columns";
 import { MemoryArea } from "./MemoryArea";
@@ -67,43 +68,38 @@ export function DetailPanel({
       />
       {/* 删除二次确认弹层（原型一致项 5）：遮罩覆盖整个看板区，点遮罩取消 */}
       {confirmingDelete ? (
-        <div
-          data-testid="delete-confirm-mask"
-          className="absolute inset-0 z-30 flex items-center justify-center bg-black/60 p-4"
-          onClick={() => setConfirmingDelete(false)}
+        <Modal
+          variant="absolute"
+          closeOnOverlay
+          onClose={() => setConfirmingDelete(false)}
+          maskTestId="delete-confirm-mask"
+          dialogTestId="delete-confirm-dialog"
+          dialogClassName="w-[400px] max-w-full"
         >
-          <div
-            role="dialog"
-            aria-modal="true"
-            data-testid="delete-confirm-dialog"
-            className="w-[400px] max-w-full rounded-xl border border-border bg-card p-4 shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="mb-2 text-sm font-semibold">删除需求「{card.title}」？</h3>
-            <p className="mb-3.5 text-xs leading-relaxed text-muted-foreground">
-              仅删除需求卡片与全部会话关联；会话本身、聊天历史与事件日志保留，不受影响。
-              已接受/已编辑的项目知识保留；需求总结与待审候选一并删除。此操作不可撤销。
-            </p>
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                data-testid="cancel-delete-button"
-                className="rounded-md border border-border bg-muted px-3 py-1 text-xs hover:border-primary"
-                onClick={() => setConfirmingDelete(false)}
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                data-testid="confirm-delete-button"
-                className="rounded-md border border-destructive/50 px-3 py-1 text-xs text-destructive hover:bg-destructive/10"
-                onClick={() => actions.onDelete(card.id)}
-              >
-                确认删除
-              </button>
-            </div>
+          <h3 className="mb-2 text-sm font-semibold">删除需求「{card.title}」？</h3>
+          <p className="mb-3.5 text-xs leading-relaxed text-muted-foreground">
+            仅删除需求卡片与全部会话关联；会话本身、聊天历史与事件日志保留，不受影响。
+            已接受/已编辑的项目知识保留；需求总结与待审候选一并删除。此操作不可撤销。
+          </p>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              data-testid="cancel-delete-button"
+              className="rounded-md border border-border bg-muted px-3 py-1 text-xs hover:border-primary"
+              onClick={() => setConfirmingDelete(false)}
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              data-testid="confirm-delete-button"
+              className="rounded-md border border-destructive/50 px-3 py-1 text-xs text-destructive hover:bg-destructive/10"
+              onClick={() => actions.onDelete(card.id)}
+            >
+              确认删除
+            </button>
           </div>
-        </div>
+        </Modal>
       ) : null}
       <aside
         data-testid="detail-panel"
