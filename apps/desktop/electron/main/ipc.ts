@@ -22,7 +22,7 @@ import {
 } from "@kanban/ipc-schema";
 import type { CliAdapter } from "@kanban/cli-host";
 import { TrackerEngine, type TrackerChange } from "@kanban/tracker";
-import type { AppConfig } from "./config";
+import type { AppConfig, LiveConfig } from "./config";
 import type { WorkspaceDiff } from "./git-diff-service";
 import { CommandCatalog } from "./command-catalog";
 import { createChannelHandler, codeEnvelope, reasonEnvelope, type EnvelopeDeps } from "./ipc-envelope";
@@ -33,8 +33,7 @@ import type { SessionLifecycle } from "./session-lifecycle";
 import type { SessionStore } from "./session-store";
 import { allKanbanHandlers, routeByTable } from "./ipc/table";
 
-// kanban:ipc 子通道查表总表与 TRACKER_CLI_BY_APP 的唯一实现处（index.ts / memory-fixture.ts 等既有 import 面经下方 re-export 保持不变）
-export { TRACKER_CLI_BY_APP } from "./ipc/helpers";
+// kanban:ipc 子通道查表总表（arch C10 起 TRACKER_CLI_BY_APP 的消费方经 "./ipc/helpers" 直连，此处不再 re-export）
 
 /** 路由依赖：adapter + PTY 宿主 + 持久化 store + 平台能力（Electron dialog/config 由 index.ts 注入，测试可替换）；isShuttingDown?/log? 经 EnvelopeDeps 注入 */
 export interface IpcDeps extends EnvelopeDeps {
@@ -218,14 +217,12 @@ async function routeCliStatus(req: CliStatusRequest, deps: CliStatusIpcDeps): Pr
   }
 }
 
-// ============ #61 config:ipc 通道（spec #57 配置链路，对齐 diff:ipc 独立单通道先例：读 autoArchive 子集 / 写字段级合并 + 先持久化成功再改内存） ============
+// ============ #61 config:ipc 通道（spec #57 配置链路，对齐 diff:ipc 独立单通道先例：读 autoArchive 子集 / 写经 LiveConfig.set 字段级合并 + 先持久化成功再变异） ============
 
-/** config:ipc 路由依赖：内存配置对象 + 全量持久化（getConfig/persist 由 index.ts 经闭包注入，测试替换 fixture）；isShuttingDown?/log? 经 EnvelopeDeps 注入 */
+/** config:ipc 路由依赖：活配置读写器（config.ts 统一写入口，arch C10；测试注入真实 openLiveConfig + tmp 文件）；isShuttingDown?/log? 经 EnvelopeDeps 注入 */
 export interface ConfigIpcDeps extends EnvelopeDeps {
-  /** 当前内存配置（Main 闭包对象，恒返回同一引用；写盘成功后由 handler 原地更新其 autoArchive 字段，其余字段一律不触碰） */
-  getConfig(): AppConfig;
-  /** 持久化完整配置（生产 = saveConfig 全量写回；抛错即写盘失败，新值不生效） */
-  persist(config: AppConfig): void;
+  /** 活配置（get 恒同一引用 = Main 内存态；set 先持久化成功再原地变异内存对象——写序单点，与项目切换共用） */
+  config: LiveConfig;
   /** #64（spec #57）：配置保存成功后触发一次自动归档扫描（引擎由 index.ts 注入，handler 不直接耦合引擎；缺省不扫描供旧测试）。
    *  在内存配置更新之后调用（扫描读到新值）；应答携带返回的摘要供设置区即时反馈 */
   onAutoArchiveSaved?(config: AppConfig): Promise<AutoArchiveScanSummary | null>;
@@ -256,13 +253,12 @@ export async function handleConfigIpc(deps: ConfigIpcDeps, raw: unknown): Promis
 async function routeConfig(req: ConfigRequest, deps: ConfigIpcDeps): Promise<ConfigResult> {
   switch (req.channel) {
     case "config:get":
-      return { ok: true, autoArchive: deps.getConfig().autoArchive, lastScan: deps.getLastScan?.() ?? null };
+      return { ok: true, autoArchive: deps.config.get().autoArchive, lastScan: deps.getLastScan?.() ?? null };
     case "config:set": {
-      const current = deps.getConfig();
-      // 先持久化成功再改内存：persist 抛错进 catch（返回明确错误，内存对象未动，新值不生效）；
+      // 统一写入口（LiveConfig.set）：先持久化成功再变异内存，抛错进 catch（返回明确错误，内存对象未动，新值不生效）；
       // 写仅开放 autoArchive 子集 —— 持久化对象由内存配置字段级合并而来，项目/CLI 路径等其余字段不受请求影响
-      deps.persist({ ...current, autoArchive: req.autoArchive });
-      current.autoArchive = req.autoArchive;
+      deps.config.set({ autoArchive: req.autoArchive });
+      const current = deps.config.get();
       // #64：保存成功后触发自动归档扫描（读到的已是新值）。扫描异常不改变「保存已成功」的事实——
       // 记日志、摘要置 null，不落入下方 catch 谎报「保存失败」
       let lastScan: AutoArchiveScanSummary | null = null;

@@ -1,4 +1,4 @@
-// 用途：自动归档引擎（#64 spec #57）—— 判定为纯函数（会话集合 + 配置 + 当前时间 → 待归档 id 列表，便于密封测试）+ 执行器（逐条容错 allSettled 全部尝试，参照退出序列范式；归档编排经 session-lifecycle 唯一写者（#70 C2），与 session:archive 通道共用同一实例，不另起平行实现）+ 扫描摘要（设置区反馈数据源）
+// 用途：自动归档引擎（#64 spec #57）—— 判定为纯函数（会话集合 + 配置 + 当前时间 → 待归档 id 列表，便于密封测试）+ 执行器（逐条容错 allSettled 全部尝试，参照退出序列范式；归档编排经 session-lifecycle 唯一写者（#70 C2），与 session:archive 通道共用同一实例，不另起平行实现）+ 扫描摘要（设置区反馈数据源）+ 触发器（arch C10 自 index.ts 出舱：默认关零动作 + 上次扫描摘要缓存，config:ipc 与启动触发共用）
 import { activityBasisMs, type AutoArchiveConfig, type AutoArchiveScanSummary, type SessionStatus } from "@kanban/ipc-schema";
 import type { LogFn } from "./logger";
 import type { PtyHost } from "./pty-host";
@@ -96,4 +96,32 @@ export async function runAutoArchiveScan(
     deps.log?.("error", "auto-archive", `自动归档扫描异常：${err instanceof Error ? err.message : String(err)}`);
     return { archived: 0, failed: 0 };
   }
+}
+
+/** 触发器依赖：引擎依赖 + 活配置读取（每次触发重读当前值——配置保存后立即生效） */
+export interface AutoArchiveTriggerDeps extends AutoArchiveEngineDeps {
+  getConfig(): AutoArchiveConfig;
+}
+
+/** 自动归档触发器（arch C10 自 index.ts 出舱）：run 触发扫描并持有摘要缓存，getLastScan 供 config:ipc 跨打开周期反馈 */
+export interface AutoArchiveTrigger {
+  /** 触发一次扫描：默认关恒 null 零动作（不扫描不动缓存，老数据不动）；开启则跑扫描、缓存并返回摘要 */
+  run(): Promise<AutoArchiveScanSummary | null>;
+  /** 上次扫描摘要（未扫描或从未开启为 null） */
+  getLastScan(): AutoArchiveScanSummary | null;
+}
+
+/** 构造触发器（触发点 = 应用启动后 + 配置保存成功后，均由 index.ts 调用，无常驻定时器） */
+export function createAutoArchiveTrigger(deps: AutoArchiveTriggerDeps): AutoArchiveTrigger {
+  let lastScan: AutoArchiveScanSummary | null = null;
+  return {
+    run: async () => {
+      const config = deps.getConfig();
+      if (!config.enabled) return null; // 默认关：零动作（不扫描不缓存，老数据不动）
+      const summary = await runAutoArchiveScan(deps, config);
+      lastScan = summary;
+      return summary;
+    },
+    getLastScan: () => lastScan,
+  };
 }

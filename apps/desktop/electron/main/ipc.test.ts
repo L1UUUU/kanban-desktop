@@ -8,7 +8,7 @@ import { AdapterError, FakeAdapter, VirtualClock, type CliAdapter } from "@kanba
 import { trackerChangeSchema } from "@kanban/ipc-schema";
 import { TrackerEngine, type TrackerChange } from "@kanban/tracker";
 import { openDatabase } from "./db";
-import { defaultConfig, loadConfig, saveConfig, type AppConfig } from "./config";
+import { defaultConfig, loadConfig, openLiveConfig, saveConfig, type AppConfig } from "./config";
 import { handleCliStatusIpc, handleConfigIpc, handleDiffIpc, handleIpc, handleModelsIpc, type ConfigIpcDeps, type DiffIpcDeps, type IpcDeps, type ModelsIpcDeps } from "./ipc";
 import { CommandCatalog } from "./command-catalog";
 import { openMemoryService } from "./memory-service";
@@ -1784,20 +1784,23 @@ describe("会话删除通道（#62 spec #57）", () => {
     expect(listed.ok && listed.sessions).toEqual([]);
   });
 });
-describe("config:ipc 通道（#61 spec #57 配置链路：读 autoArchive 子集 / 写字段级合并 + 先持久化成功再改内存）", () => {
-  /** config 专用路由：真实 AppConfig 对象（getConfig 恒返回同一引用 = Main 内存态）+ 可注入抛错的 persist */
-  function makeConfigRouter(opts: { persistThrows?: Error } = {}) {
-    const config: AppConfig = { ...defaultConfig(), currentProjectId: "p-1" };
-    const persisted: AppConfig[] = [];
+describe("config:ipc 通道（#61 spec #57 配置链路：读 autoArchive 子集 / 写经 LiveConfig.set 字段级合并 + 先持久化成功再变异）", () => {
+  /** config 专用路由：真实 openLiveConfig + tmp 文件（内存/磁盘同源 = Main 生产形态）；缺省预置 currentProjectId=p-1；opts.writeFail 时写目标为目录（稳定注入写盘失败） */
+  function makeConfigRouter(opts: { writeFail?: boolean } = {}) {
+    tmpRoot = tmpRoot || mkdtempSync(join(tmpdir(), "kb-config-ipc-"));
+    const configPath = opts.writeFail ? tmpRoot : join(tmpRoot, `config-${randomUUID()}.json`);
+    if (!opts.writeFail) saveConfig(configPath, { ...defaultConfig(), currentProjectId: "p-1" });
+    const live = openLiveConfig(configPath);
     const deps: ConfigIpcDeps = {
-      getConfig: () => config,
-      persist: (c) => {
-        if (opts.persistThrows) throw opts.persistThrows;
-        persisted.push(c);
-      },
+      config: live,
       isShuttingDown: () => false,
     };
-    return { config, persisted, handle: (raw: unknown) => handleConfigIpc(deps, raw) };
+    return {
+      config: live.get(),
+      /** 读回落盘形态（写成功断言用） */
+      persisted: () => (opts.writeFail ? null : loadConfig(configPath)),
+      handle: (raw: unknown) => handleConfigIpc(deps, raw),
+    };
   }
 
   it("非法请求 → E_SCHEMA；退出门闸 → E_INTERNAL（对齐 diff:ipc 门闸惯例）", async () => {
@@ -1815,27 +1818,26 @@ describe("config:ipc 通道（#61 spec #57 配置链路：读 autoArchive 子集
     expect(config.autoArchive).toEqual({ enabled: false, days: 30 }); // 只读不写
   });
 
-  it("config:set 合法值：先持久化再改内存 —— persist 收到完整配置（autoArchive 新值生效、currentProjectId 等其余字段原样保留）", async () => {
+  it("config:set 合法值：先持久化再改内存 —— 落盘收到完整配置（autoArchive 新值生效、currentProjectId 等其余字段原样保留）", async () => {
     const { handle, config, persisted } = makeConfigRouter();
     const res = await handle({ channel: "config:set", autoArchive: { enabled: true, days: 14 } });
     expect(res).toEqual({ ok: true, autoArchive: { enabled: true, days: 14 }, lastScan: null }); // 未注入扫描 → null
-    expect(persisted.length).toBe(1);
-    // persist 收到的是含新 autoArchive 的完整配置：与项目切换的写入互不覆盖（currentProjectId 不被清/不被越权值替换）
-    expect(persisted[0]).toMatchObject({ currentProjectId: "p-1", autoArchive: { enabled: true, days: 14 } });
-    // 写盘成功后内存对象（getConfig 同一引用）才更新
+    // 落盘的是含新 autoArchive 的完整配置：与项目切换的写入互不覆盖（currentProjectId 不被清/不被越权值替换）
+    expect(persisted()).toMatchObject({ currentProjectId: "p-1", autoArchive: { enabled: true, days: 14 } });
+    // 写盘成功后内存对象（get 同一引用）才更新
     expect(config.autoArchive).toEqual({ enabled: true, days: 14 });
   });
 
   it("写盘失败：返回明确错误（E_INTERNAL + message）且新值不生效 —— 内存对象未被改（内存与磁盘不分叉）", async () => {
-    const { handle, config, persisted } = makeConfigRouter({ persistThrows: new Error("EACCES: permission denied") });
+    const { handle, config, persisted } = makeConfigRouter({ writeFail: true });
     const res = await handle({ channel: "config:set", autoArchive: { enabled: true, days: 7 } });
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(res.error.code).toBe("E_INTERNAL");
-      expect(res.error.message).toContain("EACCES");
+      expect(res.error.message.length).toBeGreaterThan(0);
     }
     expect(config.autoArchive).toEqual({ enabled: false, days: 30 }); // 新值不生效
-    expect(persisted.length).toBe(0);
+    expect(persisted()).toBeNull();
   });
 
   it("config:set 携带越权字段（currentProjectId/gitExe）被剥离：持久化值来自内存对象而非请求", async () => {
@@ -1847,15 +1849,15 @@ describe("config:ipc 通道（#61 spec #57 配置链路：读 autoArchive 子集
       gitExe: "C:/evil/git.exe",
     });
     expect(res.ok).toBe(true);
-    expect(persisted[0]?.currentProjectId).toBe("p-1"); // 越权值不落盘
-    expect(persisted[0]?.gitExe).toBeNull();
+    expect(persisted()?.currentProjectId).toBe("p-1"); // 越权值不落盘
+    expect(persisted()?.gitExe).toBeNull();
   });
 
-  it("真实写盘往返（重启后生效）：saveConfig 落 tmp 文件 → loadConfig 读回新 autoArchive 与既有 currentProjectId", async () => {
-    const config: AppConfig = { ...defaultConfig(), currentProjectId: "p-2" };
-    const configPath = join(tmpRoot || (tmpRoot = mkdtempSync(join(tmpdir(), "kb-config-ipc-"))), "config.json");
-    const handle = (raw: unknown) =>
-      handleConfigIpc({ getConfig: () => config, persist: (c) => saveConfig(configPath, c), isShuttingDown: () => false }, raw);
+  it("真实写盘往返（重启后生效）：set 落 tmp 文件 → loadConfig 读回新 autoArchive 与既有 currentProjectId", async () => {
+    tmpRoot = tmpRoot || mkdtempSync(join(tmpdir(), "kb-config-ipc-"));
+    const configPath = join(tmpRoot, `roundtrip-${randomUUID()}.json`);
+    saveConfig(configPath, { ...defaultConfig(), currentProjectId: "p-2" });
+    const handle = (raw: unknown) => handleConfigIpc({ config: openLiveConfig(configPath), isShuttingDown: () => false }, raw);
     const res = await handle({ channel: "config:set", autoArchive: { enabled: true, days: 90 } });
     expect(res.ok).toBe(true);
     // 重启读入侧：autoArchive 新值生效，项目切换写入的 currentProjectId 不被本次写覆盖
@@ -1866,11 +1868,23 @@ describe("config:ipc 通道（#61 spec #57 配置链路：读 autoArchive 子集
 });
 
 describe("config:ipc × 自动归档引擎接线（#64 spec #57：保存成功后扫描 + 摘要反馈）", () => {
+  /** 最小 config 路由（真实 openLiveConfig + tmp 文件；可注入扫描回调/缓存） */
+  function makeConfigRouterWith(over: { onAutoArchiveSaved?: ConfigIpcDeps["onAutoArchiveSaved"]; getLastScan?: ConfigIpcDeps["getLastScan"]; log?: LogFn }) {
+    tmpRoot = tmpRoot || mkdtempSync(join(tmpdir(), "kb-config-ipc-"));
+    const configPath = join(tmpRoot, `config-${randomUUID()}.json`);
+    saveConfig(configPath, { ...defaultConfig() });
+    const deps: ConfigIpcDeps = {
+      config: openLiveConfig(configPath),
+      onAutoArchiveSaved: over.onAutoArchiveSaved,
+      getLastScan: over.getLastScan,
+      log: over.log,
+    };
+    return { config: deps.config.get(), handle: (raw: unknown) => handleConfigIpc(deps, raw) };
+  }
+
   it("config:get 应答携带上次扫描摘要（getLastScan 注入的缓存；未扫描为 null）", async () => {
-    const config: AppConfig = { ...defaultConfig() };
     let cached: { archived: number; failed: number } | null = { archived: 3, failed: 1 };
-    const handle = (raw: unknown) =>
-      handleConfigIpc({ getConfig: () => config, persist: () => undefined, getLastScan: () => cached }, raw);
+    const { handle } = makeConfigRouterWith({ getLastScan: () => cached });
     expect(await handle({ channel: "config:get" })).toEqual({
       ok: true,
       autoArchive: { enabled: false, days: 30 },
@@ -1881,20 +1895,13 @@ describe("config:ipc × 自动归档引擎接线（#64 spec #57：保存成功�
   });
 
   it("config:set 保存成功后触发扫描且读到更新后的新值：应答携带扫描摘要", async () => {
-    const config: AppConfig = { ...defaultConfig() };
     const scans: AppConfig[] = [];
-    const handle = (raw: unknown) =>
-      handleConfigIpc(
-        {
-          getConfig: () => config,
-          persist: () => undefined,
-          onAutoArchiveSaved: async (c) => {
-            scans.push({ ...c });
-            return { archived: 2, failed: 0 };
-          },
-        },
-        raw,
-      );
+    const { handle } = makeConfigRouterWith({
+      onAutoArchiveSaved: async (c) => {
+        scans.push({ ...c });
+        return { archived: 2, failed: 0 };
+      },
+    });
     const res = await handle({ channel: "config:set", autoArchive: { enabled: true, days: 14 } });
     expect(res).toEqual({ ok: true, autoArchive: { enabled: true, days: 14 }, lastScan: { archived: 2, failed: 0 } });
     expect(scans.length).toBe(1);
@@ -1903,42 +1910,29 @@ describe("config:ipc × 自动归档引擎接线（#64 spec #57：保存成功�
   });
 
   it("写盘失败不触发扫描（保存未成功，无扫描副作用）", async () => {
-    const config: AppConfig = { ...defaultConfig() };
+    tmpRoot = tmpRoot || mkdtempSync(join(tmpdir(), "kb-config-ipc-"));
     let scanCalls = 0;
-    const handle = (raw: unknown) =>
-      handleConfigIpc(
-        {
-          getConfig: () => config,
-          persist: () => {
-            throw new Error("EACCES");
-          },
-          onAutoArchiveSaved: async () => {
-            scanCalls += 1;
-            return { archived: 0, failed: 0 };
-          },
-        },
-        raw,
-      );
-    const res = await handle({ channel: "config:set", autoArchive: { enabled: true, days: 7 } });
+    // 写目标为 tmpRoot 目录本身：set 的 writeFileSync 稳定抛错（EISDIR）
+    const deps: ConfigIpcDeps = {
+      config: openLiveConfig(tmpRoot),
+      onAutoArchiveSaved: async () => {
+        scanCalls += 1;
+        return { archived: 0, failed: 0 };
+      },
+    };
+    const res = await handleConfigIpc(deps, { channel: "config:set", autoArchive: { enabled: true, days: 7 } });
     expect(res.ok).toBe(false);
     expect(scanCalls).toBe(0);
   });
 
   it("扫描抛错不改变保存成功的事实：应答仍 ok 且摘要 null、日志可查", async () => {
-    const config: AppConfig = { ...defaultConfig() };
     const entries: Array<{ level: string; message: string }> = [];
-    const handle = (raw: unknown) =>
-      handleConfigIpc(
-        {
-          getConfig: () => config,
-          persist: () => undefined,
-          onAutoArchiveSaved: async () => {
-            throw new Error("扫描炸了");
-          },
-          log: (level, _scope, message) => entries.push({ level, message }),
-        },
-        raw,
-      );
+    const { handle, config } = makeConfigRouterWith({
+      onAutoArchiveSaved: async () => {
+        throw new Error("扫描炸了");
+      },
+      log: (level, _scope, message) => entries.push({ level, message }),
+    });
     const res = await handle({ channel: "config:set", autoArchive: { enabled: true, days: 7 } });
     expect(res).toEqual({ ok: true, autoArchive: { enabled: true, days: 7 }, lastScan: null });
     expect(config.autoArchive).toEqual({ enabled: true, days: 7 }); // 保存仍生效

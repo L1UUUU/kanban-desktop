@@ -8,7 +8,8 @@ import type { MemoryEventWire, TranscriptEvent } from "@kanban/ipc-schema";
 import type { MemoryBatchRecord } from "@kanban/memory";
 import { TrackerEngine } from "@kanban/tracker";
 import { openDatabase } from "../electron/main/db";
-import { handleIpc, handleMemoryIpc, TRACKER_CLI_BY_APP, type IpcDeps } from "../electron/main/ipc";
+import { handleIpc, handleMemoryIpc, type IpcDeps } from "../electron/main/ipc";
+import { createLinkedSessionQueries } from "../electron/main/linked-sessions";
 import { openMemoryService } from "../electron/main/memory-service";
 import type { RunOnceCall, RunOnceOutcome } from "../electron/main/memory-pipeline";
 import { ProjectStore } from "../electron/main/project-store";
@@ -77,25 +78,8 @@ export function assemble(dbPath: string, dataRoot: string, projectDir: string, o
   engine.restore();
   const sessions = new SessionStore(db);
   const projects = new ProjectStore(db);
-  // 与 index.ts 生产装配一致的 tracker 查询闭包（memory 不依赖 tracker，由 Main 查询后传入）
-  const listLinkedStructuredSessions = (requirementId: string): Array<{ sessionId: string; cli: string }> => {
-    const out: Array<{ sessionId: string; cli: string }> = [];
-    for (const [sessionId, reqId] of engine.tracker.sessionToReq) {
-      if (reqId !== requirementId) continue;
-      const s = sessions.get(sessionId);
-      if (s && s.kind === "structured") out.push({ sessionId, cli: TRACKER_CLI_BY_APP[s.cli] ?? "claude-code" });
-    }
-    return out;
-  };
-  const listLinkedPtySessions = (requirementId: string): Array<{ sessionId: string }> => {
-    const out: Array<{ sessionId: string }> = [];
-    for (const [sessionId, reqId] of engine.tracker.sessionToReq) {
-      if (reqId !== requirementId) continue;
-      const s = sessions.get(sessionId);
-      if (s && s.kind === "pty") out.push({ sessionId });
-    }
-    return out;
-  };
+  // 与 index.ts 生产装配一致的 tracker 查询（arch C10 起共用 linked-sessions.ts 同一实现，memory 不依赖 tracker，由 Main 查询后传入）
+  const linkedSessions = createLinkedSessionQueries({ tracker: engine.tracker, sessions });
   // fake 提取双桥（runOnce seam 注入点：无真实 CLI，缺省行为可覆盖；调用记录统一在装配层，覆盖亦可见）
   const runCalls: RunOnceCall[] = [];
   const cancelRunOnceCalls: string[] = [];
@@ -116,8 +100,8 @@ export function assemble(dbPath: string, dataRoot: string, projectDir: string, o
   const { service } = openMemoryService({
     db,
     dataRoot,
-    listLinkedStructuredSessions,
-    listLinkedPtySessions,
+    listLinkedStructuredSessions: linkedSessions.listLinkedStructuredSessions,
+    listLinkedPtySessions: linkedSessions.listLinkedPtySessions,
     getRequirementProjectId: (requirementId) => engine.tracker.req(requirementId)?.projectId ?? null,
     getRequirementTitle: (requirementId) => engine.tracker.req(requirementId)?.title ?? null,
     requirementExists: (requirementId) => engine.tracker.req(requirementId) != null,

@@ -38,7 +38,7 @@
 
 ## 隐藏同步点（改动时一并核对）
 
-- **新增 config 字段**：`apps/desktop/electron/main/config.ts` 的 interface / defaultConfig / loadConfig 白名单 / index 传参，四处同步。
+- **新增 config 字段**：schema 单源在 `packages/ipc-schema/src/config.ts` 的 `appConfigFileSchema`（字段、默认值、逐字段 catch 合并一处定义；main 侧 `defaultConfig`/`loadConfig` 经 parse 自动跟随，无独立 interface/白名单）；另接消费点（main 装配读用 / renderer 设置面）即可——写路径统一经 `apps/desktop/electron/main/config.ts` 的 `LiveConfig.set` 字段级合并全量写回（arch C10），新增字段无需另加写点。
 - **新增 workspace 包**：`apps/desktop/electron.vite.config.ts` 的 `workspacePackages`、`pnpm-workspace.yaml`、各包 `package.json`、`pnpm-lock.yaml`；漏 vite 登记会让 Playwright 启动即崩（`pnpm check:gates` 已拦截）。
 - **新增测试 env 开关**：`docs/testing.md` 门禁协议表 + `scripts/check-gates.mjs`（B 类门控、`workspacePackages`、归档 PNG、文档互链）；测试写入 `docs/acceptance/` 走 `KANBAN_UPDATE_SCREENSHOTS=1`。
 - **新增 CLI adapter**：对照现有三 CLI（claude/codex/opencode）同步登记：`packages/cli-host/src/<cli>/`（exe 探测链）+ `<cli>-adapter.ts`（含同名密封测试）+ `router-adapter.ts` + `host/desktop-adapters.ts`（注册与 Fake/`KANBAN_DISABLE_*` 开关）+ `apps/desktop/electron/main/command-catalog.ts` + `cli-status-service.ts` + `packages/cli-host/tests/e2e/` B 类件 + `docs/cli-compatibility-matrix.md`。

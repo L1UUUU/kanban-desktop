@@ -1,9 +1,9 @@
-// 用途：应用配置加载/保存单元测试 —— 默认值（三 CLI exe 占位 null）、缺失/损坏回退、往返与部分合并
+// 用途：应用配置模块单元测试 —— 默认值（三 CLI exe 占位 null）、缺失/损坏回退、往返与部分合并、活配置统一写入口（arch C10）
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { defaultConfig, loadConfig, resolveEffectiveLevel, saveConfig } from "./config";
+import { defaultConfig, loadConfig, openLiveConfig, resolveEffectiveLevel, saveConfig } from "./config";
 
 const tempDirs: string[] = [];
 
@@ -217,5 +217,41 @@ describe("logging 配置（#53 spec D：级别/字节上限/保留启动数/单�
     saveConfig(path, cfg);
     const persisted = JSON.parse(readFileSync(path, "utf8")) as { logging: { level: string } };
     expect(persisted.logging.level).toBe("warn");
+  });
+});
+
+describe("openLiveConfig 活配置统一写入口（arch C10：先持久化后变异，内存与磁盘不分叉）", () => {
+  it("文件缺失：落默认首写；get 恒返回同一内存引用", () => {
+    const dir = newTempDir();
+    const path = join(dir, "config.json");
+    const live = openLiveConfig(path);
+    expect(loadConfig(path)).toEqual(defaultConfig()); // 首写落盘
+    expect(live.get()).toBe(live.get()); // 同一引用
+    expect(live.get()).toEqual(defaultConfig());
+  });
+
+  it("set 成功：合并值落盘且内存对象原地更新；patch 外字段原样保留（项目切换与设置保存互不覆盖）", () => {
+    const dir = newTempDir();
+    const path = join(dir, "config.json");
+    saveConfig(path, { ...defaultConfig(), currentProjectId: "p-1" });
+    const live = openLiveConfig(path);
+    const before = live.get();
+    live.set({ autoArchive: { enabled: true, days: 14 } });
+    expect(before.autoArchive).toEqual({ enabled: true, days: 14 }); // 原地变异：既有引用可见新值
+    expect(before.currentProjectId).toBe("p-1"); // patch 外字段不动
+    expect(loadConfig(path).autoArchive).toEqual({ enabled: true, days: 14 }); // 落盘可读回
+    expect(loadConfig(path).currentProjectId).toBe("p-1");
+    live.set({ currentProjectId: "p-2" }); // 第二写者：全量写回不清首个写者的值
+    expect(loadConfig(path)).toMatchObject({ autoArchive: { enabled: true, days: 14 }, currentProjectId: "p-2" });
+  });
+
+  it("set 写盘失败：错误冒泡且内存对象未动（内存与磁盘不分叉）——写目标为目录稳定注入 EISDIR", () => {
+    const dir = newTempDir();
+    // 目录作写目标：openLiveConfig 读目录失败回退默认，set 的 writeFileSync 稳定抛 EISDIR
+    const live = openLiveConfig(dir);
+    const config = live.get();
+    expect(() => live.set({ currentProjectId: "p-x" })).toThrow(/EISDIR|illegal operation on a directory/i);
+    expect(config.currentProjectId).toBeNull(); // 缺陷修复回归：旧序「先变异后落盘」此处会留下已分叉的新值
+    expect(config.autoArchive).toEqual({ enabled: false, days: 30 });
   });
 });

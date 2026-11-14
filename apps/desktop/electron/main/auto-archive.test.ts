@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { FakeAdapter } from "@kanban/cli-host";
 import type { AutoArchiveConfig } from "@kanban/ipc-schema";
-import { selectAutoArchiveIds, runAutoArchiveScan, type AutoArchiveCandidate } from "./auto-archive";
+import { selectAutoArchiveIds, runAutoArchiveScan, createAutoArchiveTrigger, type AutoArchiveCandidate } from "./auto-archive";
 import { openDatabase } from "./db";
 import type { LogFn, LogLevel } from "./logger";
 import type { PtyHost } from "./pty-host";
@@ -224,5 +224,63 @@ describe("runAutoArchiveScan 执行器", () => {
     expect(second).toEqual({ archived: 0, failed: 0 });
     // adapter 未因第二次扫描再次 dispose（首次 dispose 已删除句柄；二次无目标）
     expect(sessions.listArchived().length).toBe(1);
+  });
+});
+
+// ============ 触发器（arch C10 自 index.ts 出舱：默认关零动作 + 摘要缓存 + 活配置每次重读） ============
+
+describe("createAutoArchiveTrigger 触发器", () => {
+  /** 触发器夹具：引擎夹具 + 可变活配置（缺省关）+ 读取计数 */
+  function makeTrigger() {
+    const engine = makeEngine();
+    let config: AutoArchiveConfig = { enabled: false, days: 30 };
+    let getConfigCalls = 0;
+    const trigger = createAutoArchiveTrigger({
+      sessions: engine.sessions,
+      pty: engine.pty.host,
+      lifecycle: engine.lifecycle,
+      log: engine.logs.log,
+      getConfig: () => {
+        getConfigCalls += 1;
+        return config;
+      },
+    });
+    return { ...engine, trigger, setConfig: (c: AutoArchiveConfig) => (config = c), getConfigCalls: () => getConfigCalls };
+  }
+
+  it("默认关：run 恒 null 零动作（不归档不动缓存），getLastScan 保持 null", async () => {
+    const { sessions, trigger } = makeTrigger();
+    seed(sessions, { id: "s-old" });
+    expect(await trigger.run()).toBeNull();
+    expect(trigger.getLastScan()).toBeNull();
+    expect(sessions.get("s-old")?.archivedAt).toBeNull(); // 老数据不动
+  });
+
+  it("开启：run 跑扫描并缓存摘要（getLastScan 反馈），返回值即摘要；每次 run 重读活配置", async () => {
+    const { sessions, trigger, setConfig, getConfigCalls } = makeTrigger();
+    // 触发器 run 不暴露 now 注入面（生产也无）：种子行锚定真实时钟 40 天前，cutoff 30 天恒超期（不依赖固定 NOW 常量）
+    seed(sessions, { id: "s-stale", createdAt: new Date(Date.now() - 40 * DAY_MS).toISOString() });
+    setConfig({ enabled: true, days: 30 });
+    const summary = await trigger.run();
+    expect(summary).toEqual({ archived: 1, failed: 0 });
+    expect(trigger.getLastScan()).toEqual({ archived: 1, failed: 0 });
+    expect(getConfigCalls()).toBe(1); // 每次触发读活配置（配置保存后立即生效的数据面）
+    await trigger.run();
+    expect(getConfigCalls()).toBe(2);
+  });
+
+  it("disabled → enabled 转变：同一触发器每次 run 重读活配置读到新值；disabled run 不清既有缓存（跨打开周期反馈语义保持）", async () => {
+    const { sessions, trigger, setConfig } = makeTrigger();
+    seed(sessions, { id: "s-stale", createdAt: new Date(Date.now() - 40 * DAY_MS).toISOString() });
+    setConfig({ enabled: true, days: 30 });
+    const first = await trigger.run();
+    expect(first).toEqual({ archived: 1, failed: 0 });
+    expect(trigger.getLastScan()).toEqual({ archived: 1, failed: 0 });
+    setConfig({ enabled: false, days: 30 });
+    expect(await trigger.run()).toBeNull(); // 关闭后零动作
+    expect(trigger.getLastScan()).toEqual({ archived: 1, failed: 0 }); // 缓存不被 disabled run 清掉
+    setConfig({ enabled: true, days: 30 });
+    expect(await trigger.run()).toEqual({ archived: 0, failed: 0 }); // 已归档行幂等 no-op
+    expect(trigger.getLastScan()).toEqual({ archived: 0, failed: 0 }); // 缓存更新为最新摘要
   });
 });

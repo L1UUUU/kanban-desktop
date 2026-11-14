@@ -4,7 +4,7 @@ import type { IpcDeps } from "../ipc";
 
 /** 应用侧 cli 名（sessions 表：fake/codex/claude/opencode/pty）→ tracker CLIS（claude-code/codex/opencode/pty）；
  *  fake 演示链路的观察信号由 FakeAdapter 以 claude-code 口径上报，故同映射到 claude-code；
- *  #31 起 memory 装配（index.ts）复用本映射把关联会话 cli 归一为 tracker 口径 */
+ *  #31 起 memory 装配复用本映射把关联会话 cli 归一为 tracker 口径（arch C10 起消费方 = linked-sessions.ts） */
 export const TRACKER_CLI_BY_APP: Record<string, Cli> = {
   fake: "claude-code",
   codex: "codex",

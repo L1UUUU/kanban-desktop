@@ -1,4 +1,4 @@
-// 用途：应用配置加载/保存 —— fs 读写 + 一行 parse（schema/边界/默认值单源于 @kanban/ipc-schema appConfigFileSchema，issue #68；spec J/G）
+// 用途：应用配置模块（arch C10 起含活配置统一写入口）—— fs 读写 + 一行 parse（schema/边界/默认值单源于 @kanban/ipc-schema appConfigFileSchema，issue #68；spec J/G）+ LiveConfig（读活配置对象 / 写序先持久化后变异 / 字段级合并全量写回，config:set 与项目切换共用同一写序）
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { LOG_LEVELS, appConfigFileSchema, type AppConfig, type LogLevel } from "@kanban/ipc-schema";
@@ -25,6 +25,28 @@ export function loadConfig(path: string): AppConfig {
 export function saveConfig(path: string, config: AppConfig): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+}
+
+/** 活配置读写器（main 侧统一配置写入口，arch C10）：get 恒返回同一内存引用；set 字段级合并、先持久化成功再变异内存 */
+export interface LiveConfig {
+  get(): AppConfig;
+  /** 字段级合并写：先 saveConfig({...当前, ...patch})，成功后原地变异内存对象；写盘失败抛错且内存不动（内存与磁盘不分叉） */
+  set(patch: Partial<AppConfig>): void;
+}
+
+/** 打开活配置：文件存在读入、缺失用默认并首写落盘（spec J：不硬编码、落应用数据目录）；此后 main 全生命周期读经 get 同一引用、写一律经 set（写序单点：config:set 与项目切换不再各自手抄） */
+export function openLiveConfig(path: string): LiveConfig {
+  const fresh = !existsSync(path);
+  const config = fresh ? defaultConfig() : loadConfig(path);
+  if (fresh) saveConfig(path, config); // 首次启动落默认（下次启动读入同值）
+  return {
+    get: () => config,
+    set: (patch) => {
+      // 写序：先持久化合并结果，成功后才变异内存对象（失败错误冒泡给调用方，内存与磁盘不分叉）
+      saveConfig(path, { ...config, ...patch });
+      Object.assign(config, patch);
+    },
+  };
 }
 
 /** #53（spec #52 D 节）：KANBAN_LOG_LEVEL env 覆盖 config 级别 —— 合法四枚举才覆盖，非法/未设回退 config 值；返回 effectiveLevel，不写进 appConfig（切换项目 saveConfig 全量写回时不误持久化，M11） */

@@ -1,4 +1,4 @@
-// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc/memory:ipc/diff:ipc/residue:ipc/config:ipc/models:ipc/cli:status 路由）、CliHost 托管（utilityProcess 优先，进程内回退）与事件转发/状态落库、TrackerEngine（SkillObservation 落库 + 重启恢复）、PTY 终端宿主（node-pty，main 进程直接使用，t0-03 实证）、有序退出与残留进程检测一次性通知（#49 app:event）、#51 单实例锁（二次启动转发聚焦 + 持锁失败立即退出）、#53 日志地基（Logger 二实例守卫后创建 + 启动横幅 + 崩溃兜底 + 9 处 console 迁移 + log:getPath/log:openDir）、#54 worker {log} 消息与 CLI stderr 汇聚（onWorkerLog→worker source；进程内回退同目标）；#64 自动归档引擎接线（启动后一次 + config:set 成功后经 onAutoArchiveSaved 触发，摘要缓存供设置区反馈）；初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
+// 用途：Electron 主进程入口 —— 创建主窗口、注册 IPC 处理器（app:getInfo + kanban:ipc/memory:ipc/diff:ipc/residue:ipc/config:ipc/models:ipc/cli:status 路由）、CliHost 托管（utilityProcess 优先，进程内回退）与事件转发/状态落库、TrackerEngine（SkillObservation 落库 + 重启恢复）、PTY 终端宿主（node-pty，main 进程直接使用，t0-03 实证）、有序退出与残留进程检测一次性通知（#49 app:event）、#51 单实例锁（二次启动转发聚焦 + 持锁失败立即退出）、#53 日志地基（Logger 二实例守卫后创建 + 启动横幅 + 崩溃兜底 + 9 处 console 迁移 + log:getPath/log:openDir）、#54 worker {log} 消息与 CLI stderr 汇聚（onWorkerLog→worker source；进程内回退同目标）；#64 自动归档引擎接线（启动后一次 + config:set 成功后经 onAutoArchiveSaved 触发，摘要缓存供设置区反馈）；arch C10 起回归纯装配：配置写经 LiveConfig 统一入口，listLinkedSessions/自动归档触发器/残留三态控制器出舱为密封测试模块，chat:event 发送器收编 event-sender 工厂；初始化应用配置与 SQLite（依赖方向：main → cli-host, tracker, ipc-schema，spec A）
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -15,7 +15,7 @@ import {
   shutdownNoticeSchema,
   terminalEventSchema,
   trackerChangeSchema,
-  type AutoArchiveScanSummary,
+  type AdapterEvent,
   type ResidueProcess,
 } from "@kanban/ipc-schema";
 import {
@@ -27,23 +27,24 @@ import {
   type CliAdapter,
 } from "@kanban/cli-host";
 import { TrackerEngine } from "@kanban/tracker";
-import { defaultConfig, loadConfig, resolveEffectiveLevel, saveConfig, type AppConfig } from "./config";
-import { runAutoArchiveScan } from "./auto-archive";
+import { defaultConfig, openLiveConfig, resolveEffectiveLevel, type AppConfig } from "./config";
+import { createAutoArchiveTrigger } from "./auto-archive";
 import { createAdapterEventHandler } from "./adapter-events";
 import { CliHostClient } from "./cli-host-client";
 import { createCliStatusService, createRealCliProbes, createSeededCliProbes } from "./cli-status-service";
 import { SQLITE_ENTRY, openDatabase } from "./db";
-import { createValidatedSender } from "./event-sender";
-import { handleIpc, handleCliStatusIpc, handleConfigIpc, handleDiffIpc, handleMemoryIpc, handleModelsIpc, handleResidueIpc, TRACKER_CLI_BY_APP, type IpcDeps } from "./ipc";
+import { createPassthroughSender, createValidatedSender } from "./event-sender";
+import { handleIpc, handleCliStatusIpc, handleConfigIpc, handleDiffIpc, handleMemoryIpc, handleModelsIpc, handleResidueIpc, type IpcDeps } from "./ipc";
 import { defaultGitDiffDeps, readWorkspaceDiff } from "./git-diff-service";
 import { handleLogWrite } from "./log-write";
 import { createLogger, registerCrashHandlers, resolveKindLog, type Logger } from "./logger";
 import { openMemoryService } from "./memory-service";
 import { createPtyHost } from "./pty-host";
 import { ProjectStore } from "./project-store";
-import { detectResidue, killResidue, type ResidueServiceDeps } from "./residue-service";
+import { createResidueController } from "./residue-controller";
 import { createAdapterSessionProcesses, createSessionLifecycle } from "./session-lifecycle";
 import { SessionStore } from "./session-store";
+import { createLinkedSessionQueries } from "./linked-sessions";
 import { createShutdownOrchestrator } from "./shutdown";
 
 // #53：Main 侧唯一日志深模块实例（whenReady 二实例守卫后创建；模块级因 createHostedAdapter/loadResidueSeed 等闭包引用）
@@ -163,12 +164,11 @@ app.whenReady().then(async () => {
   });
   registerCrashHandlers(process, logger, (code) => app.exit(code));
 
-  // 配置初始化：当前项目 id 持久化在同一 JSON（spec J：不硬编码、落应用数据目录）
+  // 配置初始化与统一写入口（arch C10）：openLiveConfig 读入（缺失落默认首写）并持有内存对象；
+  // 此后读恒经同一引用（appConfig），写一律经 liveConfig.set（先持久化成功再变异内存——config:set 与项目切换共用同一写序，写盘失败内存与磁盘不分叉）
   const configPath = join(app.getPath("userData"), "config.json");
-  const appConfig: AppConfig = existsSync(configPath) ? loadConfig(configPath) : defaultConfig();
-  if (!existsSync(configPath)) {
-    saveConfig(configPath, appConfig);
-  }
+  const liveConfig = openLiveConfig(configPath);
+  const appConfig: AppConfig = liveConfig.get();
 
   // #53（spec #52 D 节）：env 覆盖只进 effectiveLevel 不落 appConfig（M11：切换项目 saveConfig 全量写回不误持久化）；
   // start 应用最终 logging 四项 + 按新 retainRuns 重跑清理 + 写启动横幅（正常路径严格首条 info）
@@ -207,28 +207,13 @@ app.whenReady().then(async () => {
   const sendMemoryEvent = createValidatedSender(memoryEventSchema, "memory:event", getMainWindow);
   const runOnceBridge = adapter.runOnce?.bind(adapter);
   const cancelRunOnceBridge = adapter.cancelRunOnce?.bind(adapter);
-  // 需求当前关联会话查询（两闭包同形遍历的共享形状）：按 kind 过滤收集，structured 附加 CLI 名（pty 侧仅取 sessionId）
-  const listLinkedSessions = (
-    requirementId: string,
-    kind: "structured" | "pty",
-  ): Array<{ sessionId: string; cli: string }> => {
-    const out: Array<{ sessionId: string; cli: string }> = [];
-    for (const [sessionId, reqId] of trackerEngine.tracker.sessionToReq) {
-      if (reqId !== requirementId) continue;
-      const s = sessions.get(sessionId);
-      if (s && s.kind === kind) out.push({ sessionId, cli: TRACKER_CLI_BY_APP[s.cli] ?? "claude-code" });
-    }
-    return out;
-  };
-  const listLinkedStructuredSessions = (requirementId: string): Array<{ sessionId: string; cli: string }> =>
-    listLinkedSessions(requirementId, "structured");
-  const listLinkedPtySessions = (requirementId: string): Array<{ sessionId: string }> =>
-    listLinkedSessions(requirementId, "pty").map(({ sessionId }) => ({ sessionId }));
+  // 需求当前关联会话查询（arch C10 出舱至 linked-sessions.ts：tracker 反查 + kind 分流 + CLI 口径归一收进模块，装配根不再触碰 tracker 内部结构）
+  const linkedSessions = createLinkedSessionQueries({ tracker: trackerEngine.tracker, sessions });
   const memoryService = openMemoryService({
     db,
     dataRoot: join(app.getPath("userData"), "memory"),
-    listLinkedStructuredSessions,
-    listLinkedPtySessions,
+    listLinkedStructuredSessions: linkedSessions.listLinkedStructuredSessions,
+    listLinkedPtySessions: linkedSessions.listLinkedPtySessions,
     getRequirementProjectId: (requirementId) => trackerEngine.tracker.req(requirementId)?.projectId ?? null,
     getRequirementTitle: (requirementId) => trackerEngine.tracker.req(requirementId)?.title ?? null,
     requirementExists: (requirementId) => trackerEngine.tracker.req(requirementId) != null,
@@ -243,15 +228,13 @@ app.whenReady().then(async () => {
   const sendTrackerChange = createValidatedSender(trackerChangeSchema, "tracker:event", getMainWindow);
   // #95（ADR 0003 决策 2 摘要段）：首轮 idle 触发一次性异步摘要，完成经 session:event 轻通道推送刷新侧栏
   const sendSessionEvent = createValidatedSender(sessionEventSchema, "session:event", getMainWindow);
+  // arch C10：chat:event 载荷已在 adapter-events 事件泵出站过 adapterEventSchema 校验（parse 前置），发送器走免二次校验变体
+  const sendChatEvent = createPassthroughSender<AdapterEvent>("chat:event", getMainWindow);
   adapter.subscribe(
     createAdapterEventHandler({
       sessions,
       engine: trackerEngine,
-      send: (event) => {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("chat:event", event);
-        }
-      },
+      send: sendChatEvent,
       sendChange: sendTrackerChange,
       adapter,
       sendSessionEvent,
@@ -350,10 +333,8 @@ app.whenReady().then(async () => {
     emitTrackerChange: sendTrackerChange,
     pickDirectory,
     getCurrentProjectId: () => appConfig.currentProjectId,
-    setCurrentProjectId: (id) => {
-      appConfig.currentProjectId = id;
-      saveConfig(configPath, appConfig);
-    },
+    // arch C10：项目切换写经统一写入口（先持久化成功再变异内存；写盘失败内存与磁盘不分叉，错误冒泡进信封 catch）
+    setCurrentProjectId: (id) => liveConfig.set({ currentProjectId: id }),
     isShuttingDown: () => shutdown.isShuttingDown(),
     // #53：入站校验失败/内部异常记统一日志（业务拒绝不记）
     log: logger.log,
@@ -397,23 +378,22 @@ app.whenReady().then(async () => {
     ),
   );
 
-  // #61（spec #57 配置链路）：config:ipc 单通道 —— 读 autoArchive 子集 / 写仅接受该子集并字段级合并进 appConfig 闭包对象
-  //（先持久化成功再改内存；与 setCurrentProjectId 的全量写回共享同一对象，项目切换与设置保存互不覆盖）
+  // #61（spec #57 配置链路）：config:ipc 单通道 —— 读 autoArchive 子集 / 写经 LiveConfig.set（arch C10：先持久化成功再变异内存，与 setCurrentProjectId 共用同一写序和同一对象，项目切换与设置保存互不覆盖）
   // #64（spec #57）：保存成功后经 onAutoArchiveSaved 触发一次自动归档扫描（handler 不直接耦合引擎）；getLastScan 缓存跨打开周期反馈
-  let lastAutoArchiveScan: AutoArchiveScanSummary | null = null;
-  const runAutoArchive = async (): Promise<AutoArchiveScanSummary | null> => {
-    if (!appConfig.autoArchive.enabled) return null; // 默认关：零动作（不扫描不缓存，老数据不动）
-    const summary = await runAutoArchiveScan({ sessions, pty: ptyHost, lifecycle, log: logger.log }, appConfig.autoArchive);
-    lastAutoArchiveScan = summary;
-    return summary;
-  };
+  // arch C10：触发器 + 摘要缓存出舱至 auto-archive.ts（默认关零动作、活配置每次触发重读）
+  const autoArchiveTrigger = createAutoArchiveTrigger({
+    sessions,
+    pty: ptyHost,
+    lifecycle,
+    log: logger.log,
+    getConfig: () => appConfig.autoArchive,
+  });
   ipcMain.handle(IPC_CHANNELS.config.name, (_event, raw: unknown) =>
     handleConfigIpc(
       {
-        getConfig: () => appConfig,
-        persist: (config) => saveConfig(configPath, config),
-        onAutoArchiveSaved: runAutoArchive,
-        getLastScan: () => lastAutoArchiveScan,
+        config: liveConfig,
+        onAutoArchiveSaved: () => autoArchiveTrigger.run(),
+        getLastScan: () => autoArchiveTrigger.getLastScan(),
         isShuttingDown: () => shutdown.isShuttingDown(),
         log: logger.log,
       },
@@ -438,44 +418,32 @@ app.whenReady().then(async () => {
 
   // #49 残留治理装配（spec #40 A/D/F 节）：检测 = exe 匹配三 CLI 解析链候选并集 + 排除 #44 活跃集合 +
   // 排除注册表核对通过可接管的 OpenCode 孤儿；终止 = 逐 pid 确认式 killed/failed（无自动清理路径）
+  // arch C10：三态装配（E2E 种子 fake / 隔离环境跳过探测 / 真实探测）+ 每启动一次检测缓存出舱至 residue-controller.ts
   // E2E 预置 fake 检测结果（KANBAN_TEST_RESIDUE_JSON 指向残留清单 JSON，参照 memory-seed.ts 预置思路）：
   // 不做真实探测与终止，驱动通知条 Playwright 流程；KANBAN_USER_DATA 隔离环境（整机 e2e）且无种子时跳过
   // 机器级进程枚举——否则开发机上他人打开的真实 CLI 进程会把非密封 banner 带进无关 e2e 断言
-  const residueSeed = loadResidueSeed(process.env.KANBAN_TEST_RESIDUE_JSON);
-  const residueE2eSkip = !residueSeed && !!process.env.KANBAN_USER_DATA;
-  const residueDeps: ResidueServiceDeps = residueSeed
-    ? {
-        listCandidates: () => ({ codex: [], claude: [], opencode: [] }),
-        queryProcesses: () => [],
-        listActivePids: async () => [],
-        registryPath: join(app.getPath("userData"), "opencode-servers.json"),
-        listSessions: () => [],
-        killPid: () => ({ ok: true }), // fake pid 不真实存在：统一回报 killed 驱动 UI 流程
-      }
-    : {
-        listCandidates: () => ({
-          codex: listCodexExeCandidates({ manualOverride: appConfig.cliExe.codex }),
-          claude: listClaudeExeCandidates({ manualOverride: appConfig.cliExe.claude }),
-          opencode: listOpenCodeExeCandidates({ manualOverride: appConfig.cliExe.opencode }),
-        }),
-        // 可选面探测（issue #73）：回退形态 AdapterRouter 实现了 listChildPids——residue 活跃集合如实上报（修复旧 instanceof 探测丢弃回退形态 pid 的少报）
-        listActivePids: () => adapter.listChildPids?.() ?? Promise.resolve([]),
-        registryPath: join(app.getPath("userData"), "opencode-servers.json"),
-        // #58 全量会话记录（含已归档）：残留归属的「最近会话」回落对归档会话仍可归属（spec #57 决策附注）
-        listSessions: () => sessions.listAll(),
-      };
-  // 每次启动只检测一次（spec：就绪后一次、不轮询）；residue:detect 返回同一缓存，renderer 挂载拉取与 app:event 推送同源
-  const detectResidueOnce = (() => {
-    let p: Promise<ResidueProcess[]> | null = null;
-    return () =>
-      (p ??= residueSeed ? Promise.resolve(residueSeed) : residueE2eSkip ? Promise.resolve([]) : detectResidue(residueDeps));
-  })();
+  const residue = createResidueController({
+    seed: loadResidueSeed(process.env.KANBAN_TEST_RESIDUE_JSON),
+    e2eIsolated: !!process.env.KANBAN_USER_DATA,
+    realDeps: {
+      listCandidates: () => ({
+        codex: listCodexExeCandidates({ manualOverride: appConfig.cliExe.codex }),
+        claude: listClaudeExeCandidates({ manualOverride: appConfig.cliExe.claude }),
+        opencode: listOpenCodeExeCandidates({ manualOverride: appConfig.cliExe.opencode }),
+      }),
+      // 可选面探测（issue #73）：回退形态 AdapterRouter 实现了 listChildPids——residue 活跃集合如实上报（修复旧 instanceof 探测丢弃回退形态 pid 的少报）
+      listActivePids: () => adapter.listChildPids?.() ?? Promise.resolve([]),
+      registryPath: join(app.getPath("userData"), "opencode-servers.json"),
+      // #58 全量会话记录（含已归档）：残留归属的「最近会话」回落对归档会话仍可归属（spec #57 决策附注）
+      listSessions: () => sessions.listAll(),
+    },
+  });
   const sendAppEvent = createValidatedSender(appEventSchema, "app:event", getMainWindow);
   ipcMain.handle(IPC_CHANNELS.residue.name, (_event, raw: unknown) =>
     handleResidueIpc(
       {
-        detect: detectResidueOnce,
-        kill: (pids) => killResidue(residueDeps, pids),
+        detect: residue.detectOnce,
+        kill: residue.kill,
         isShuttingDown: () => shutdown.isShuttingDown(),
         log: logger.log,
       },
@@ -498,11 +466,12 @@ app.whenReady().then(async () => {
 
   // #64（spec #57）：启动触发一次自动归档扫描 —— 恢复收养（lifecycle.adoptRestored）与全部依赖就绪后发起；
   // 默认关零动作；不阻塞窗口创建；此后仅配置保存成功时再扫（无常驻定时器）
-  void runAutoArchive();
+  void autoArchiveTrigger.run();
 
   // 残留检测一次性触发（窗口就绪后推送；无结果不推送任何事件 = 不打扰；renderer 挂载时的 residue:detect 拉取兜底覆盖窗口时序）
   mainWindow?.once("ready-to-show", () => {
-    void detectResidueOnce()
+    void residue
+      .detectOnce()
       .then((list) => {
         if (list.length > 0) sendAppEvent({ type: "residue-detected", processes: list });
       })
