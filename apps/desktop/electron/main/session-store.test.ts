@@ -1,11 +1,11 @@
-// 用途：sessions 表 store 测试 —— 落库/列表过滤/状态与活跃时间更新/重启恢复（工单 #7 验收第 4/5 条）；#58 起归档/取消归档/删除与未归档守卫（spec #57 D 节）；#70 起 applyEvent 落库收口（守卫+写入一体）与 insert 缺省 idle 密封钉住
+// 用途：sessions 表 store 测试 —— 落库/列表过滤/状态与活跃时间更新/重启恢复（工单 #7 验收第 4/5 条）；#58 起归档/取消归档/删除与未归档守卫（spec #57 D 节）；#70 起 applyEvent 落库收口（守卫+写入一体）与 insert 缺省 idle 密封钉住；arch C11 起忙态/进程存活谓词单点直测
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ChatEvent } from "@kanban/ipc-schema";
 import { openDatabase, type SqliteDb } from "./db";
-import { SessionStore, type SessionRecord } from "./session-store";
+import { isSessionBusy, isStructuredProcessAlive, SessionStore, type SessionRecord } from "./session-store";
 
 let tmpRoot = "";
 let dbPath = "";
@@ -311,5 +311,24 @@ describe("SessionStore 标题来源门控（#94 / ADR 0003 四态状态机）", 
     const reopened = new SessionStore(reopenedDb);
     expect(reopened.get("s-1")).toMatchObject({ title: "跨重启的手动标题", titleSource: "manual" });
     reopenedDb.close();
+  });
+});
+
+// ============ 忙态/进程存活谓词单点（arch C11）============
+
+describe("isSessionBusy / isStructuredProcessAlive 谓词（arch C11 单点）", () => {
+  it("isSessionBusy：仅 running/waiting 为忙（须有序取消/拒绝切换），idle/interrupted/disconnected/null 均 false", () => {
+    expect(isSessionBusy("running")).toBe(true);
+    expect(isSessionBusy("waiting")).toBe(true);
+    for (const idle of ["idle", "interrupted", "disconnected"] as const) expect(isSessionBusy(idle)).toBe(false);
+    expect(isSessionBusy(null)).toBe(false);
+    expect(isSessionBusy(undefined)).toBe(false);
+  });
+
+  it("isStructuredProcessAlive：状态存在且非 disconnected 即本运行内句柄仍在；disconnected/null/undefined 保守视为不在", () => {
+    for (const alive of ["idle", "running", "waiting", "interrupted"] as const) expect(isStructuredProcessAlive(alive)).toBe(true);
+    expect(isStructuredProcessAlive("disconnected")).toBe(false);
+    expect(isStructuredProcessAlive(null)).toBe(false);
+    expect(isStructuredProcessAlive(undefined)).toBe(false);
   });
 });

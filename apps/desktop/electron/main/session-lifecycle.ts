@@ -1,4 +1,4 @@
-// 用途：会话生命周期唯一编排写者（issue #70 C2，spec #57 D 节）—— 归档/取消归档/删除三编排自 ipc.ts、PTY 终端事件落库自 index.ts sink、启动收养编排自 shutdown.ts 收敛于此，进程能力经 SessionProcesses seam 注入（生产 = adapter/PTY 宿主分派，测试 = fake）；session-store 保持纯数据面（status 流转决策全在此，落库经 store）
+// 用途：会话生命周期唯一编排写者（issue #70 C2，spec #57 D 节）—— 归档/取消归档/删除三编排自 ipc.ts、PTY 终端事件落库自 index.ts sink、启动收养编排自 shutdown.ts 收敛于此，进程能力经 SessionProcesses seam 注入（生产 = adapter/PTY 宿主分派，测试 = fake）；session-store 保持纯数据面（status 流转决策全在此，落库经 store）；arch C11 起 seam 扩全量形态 disposeAll/killAll（退出序列 shutdown 亦经此分派，「structured→adapter / pty→宿主」分派知识单点在此）
 import type { AdoptSessionInput, CliAdapter } from "@kanban/cli-host";
 import type { LogFn } from "./logger";
 import type { PtyHost } from "./pty-host";
@@ -12,10 +12,14 @@ export interface SessionProcesses {
   terminate(rec: { id: string; kind: "structured" | "pty" }): Promise<void>;
   /** 重新登记可恢复句柄；CLI 不支持收养时 reject（错误消息直达调用方，由 ipc 层既有 catch 映射错误形状） */
   adopt(input: AdoptSessionInput): Promise<void>;
+  /** 全量受控终止（arch C11，退出序列第 5 步）：结构化全量 dispose（worker 停新→dispose 全部→有限等待→kill 兜底 / 进程内 router dispose） */
+  disposeAll(): Promise<void>;
+  /** 全量硬停（arch C11，退出序列第 6 步）：PTY 宿主全停（幂等；Job Object 覆盖任何残留兜底） */
+  killAll(): void;
 }
 
-/** 生产 SessionProcesses 装配（index.ts 装配现场与测试夹具共用同一分派）：structured → adapter.interruptTurn/dispose/adoptSession；pty → 宿主 kill（lifecycle 仅对 structured 调 adopt，pty 无进程恢复能力） */
-export function createAdapterSessionProcesses(adapter: CliAdapter, pty: Pick<PtyHost, "kill">): SessionProcesses {
+/** 生产 SessionProcesses 装配（index.ts 装配现场与测试夹具共用同一分派）：structured → adapter.interruptTurn/dispose/adoptSession；pty → 宿主 kill（lifecycle 仅对 structured 调 adopt，pty 无进程恢复能力）；arch C11 起全量形态 disposeAll/killAll 承载退出序列（lifecycle 编排不消费） */
+export function createAdapterSessionProcesses(adapter: CliAdapter, pty: Pick<PtyHost, "kill" | "killAll">): SessionProcesses {
   return {
     interrupt: (sessionId) => adapter.interruptTurn(sessionId),
     terminate: (rec) => (rec.kind === "pty" ? Promise.resolve(pty.kill(rec.id)) : adapter.dispose({ sessionId: rec.id })),
@@ -23,6 +27,8 @@ export function createAdapterSessionProcesses(adapter: CliAdapter, pty: Pick<Pty
       adapter.adoptSession
         ? adapter.adoptSession(input)
         : Promise.reject(new Error(`当前 CLI 不支持会话收养，无法取消归档：${input.cli ?? ""}`)),
+    disposeAll: () => adapter.dispose(),
+    killAll: () => pty.killAll(),
   };
 }
 

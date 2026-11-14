@@ -46,7 +46,7 @@ function makeRecord(partial: Partial<SessionRecord> = {}): SessionRecord {
   };
 }
 
-/** 记录型 fake procs：interrupt/terminate/adopt 全记录，可注入失败与 adopt 不支持 */
+/** 记录型 fake procs：interrupt/terminate/adopt/disposeAll/killAll 全记录，可注入失败与 adopt 不支持 */
 function makeProcs(fails: { interrupt?: boolean; terminate?: boolean; adopt?: boolean; unsupportedAdopt?: boolean } = {}) {
   const calls: string[] = [];
   const adopted: AdoptSessionInput[] = [];
@@ -70,6 +70,13 @@ function makeProcs(fails: { interrupt?: boolean; terminate?: boolean; adopt?: bo
             adopted.push(input);
             if (fails.adopt) throw new Error("登记失败（注入）");
           },
+    // arch C11 全量形态：lifecycle 编排不消费（退出序列专用），fake 仅记录保持接口完整
+    disposeAll: async () => {
+      calls.push("dispose-all");
+    },
+    killAll: () => {
+      calls.push("kill-all");
+    },
   };
   return { procs, calls, adopted };
 }

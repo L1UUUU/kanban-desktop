@@ -5,6 +5,7 @@ import { AdapterError, detectSkillConflicts, resolveUserClaudeDir } from "@kanba
 import { detectDirIdentity } from "../git-identity";
 import type { IpcDeps } from "../ipc";
 import { guiEvent, linkAfterCreate, processAndEmit, TRACKER_CLI_BY_APP } from "./helpers";
+import { isSessionBusy } from "../session-store";
 import { deriveTitle } from "../title-derive";
 import type { SubChannelHandlers } from "./table";
 
@@ -183,14 +184,14 @@ export const sessionHandlers: SubChannelHandlers<SessionRequest, IpcResult, IpcD
   },
   "session:setModel": async (req, deps) => {
     // issue #79 / spec #75：三 CLI 统一「idle 可切、下一轮生效、进行中/断开拒绝」——忙态/断开在 Main 侧以落库状态校验
-    //（session_status 事件驱动更新；running/waiting 均属本轮进行中，interrupted 本轮已结束可切），adapter 侧各自落实生效语义
+    //（session_status 事件驱动更新；running/waiting 均属本轮进行中，interrupted 本轮已结束可切），adapter 侧各自落实生效语义；
+    // 忙态判定经 isSessionBusy 单点（arch C11），断开拒绝的业务理由留在此处
     const rec = deps.sessions.get(req.sessionId);
     if (!rec) return sessionNotFound(req.sessionId);
-    const status = rec.status ?? "idle";
-    if (status === "running" || status === "waiting") {
+    if (isSessionBusy(rec.status)) {
       return { ok: false, error: { code: "E_INTERNAL", message: "本轮进行中，结束后再切换" } };
     }
-    if (status === "disconnected") {
+    if (rec.status === "disconnected") {
       return { ok: false, error: { code: "E_INTERNAL", message: "会话已断开，恢复后可切换" } };
     }
     const r = await deps.adapter.setModel({ sessionId: req.sessionId, model: req.model });

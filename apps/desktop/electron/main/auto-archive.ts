@@ -3,7 +3,7 @@ import { activityBasisMs, type AutoArchiveConfig, type AutoArchiveScanSummary, t
 import type { LogFn } from "./logger";
 import type { PtyHost } from "./pty-host";
 import type { SessionLifecycle } from "./session-lifecycle";
-import type { SessionStore } from "./session-store";
+import { isSessionBusy, isStructuredProcessAlive, type SessionStore } from "./session-store";
 
 /** 判定输入行：store 全量记录的判定面投影（processAlive 由执行器按 kind 计算，判定本身不依赖宿主） */
 export interface AutoArchiveCandidate {
@@ -33,7 +33,7 @@ export function selectAutoArchiveIds(
   const ids: string[] = [];
   for (const s of sessions) {
     if (s.archivedAt != null) continue;
-    if (s.status === "running" || s.status === "waiting") continue;
+    if (isSessionBusy(s.status)) continue;
     if (s.processAlive) continue;
     const basis = activityBasisMs(s.lastActiveAt, s.createdAt);
     if (basis === null) continue; // 基准不可解析保守跳过（单源 activityBasisMs，#86 启动自动选中同口径）
@@ -71,8 +71,8 @@ export async function runAutoArchiveScan(
       lastActiveAt: r.lastActiveAt,
       createdAt: r.createdAt ?? null,
       archivedAt: r.archivedAt,
-      // 底层进程存活判定：PTY 用宿主 isRunning（权威，DB 状态可能滞后）；结构化以 DB 状态投影（disconnected=进程不在，其余=本运行内句柄仍在=使用中）
-      processAlive: r.kind === "pty" ? deps.pty.isRunning(r.id) : r.status != null && r.status !== "disconnected",
+      // 底层进程存活判定（arch C11 谓词单点）：PTY 用宿主 isRunning（权威，DB 状态可能滞后）；结构化以 DB 状态投影（isStructuredProcessAlive：disconnected=进程不在，其余=本运行内句柄仍在=使用中）
+      processAlive: r.kind === "pty" ? deps.pty.isRunning(r.id) : isStructuredProcessAlive(r.status),
     }));
     const targets = selectAutoArchiveIds(candidates, config, now);
     // 逐条容错（参照退出序列 allSettled 范式）：busy/存活已被判定排除，无需 interrupt 后的有限等待

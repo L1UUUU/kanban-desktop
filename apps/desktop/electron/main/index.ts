@@ -298,10 +298,12 @@ app.whenReady().then(async () => {
 
   // #70 C2：会话生命周期唯一编排写者（archive/unarchive/remove/终端事件落库收敛；ipc 路由壳 / 自动归档引擎 / PTY 事件泵共用同一实例），
   // 进程能力经 SessionProcesses seam 分派（structured → adapter；pty → 宿主 kill）；
+  // arch C11：procs 单实例同时供下方退出序列消费（shutdown 的取消/终止/全量 dispose/PTY 全停同走分派单点）；
   // 声明于 ptyHost 之后（procs 引用宿主）——上方 PTY 回调闭包捕获本绑定，同步紧邻赋值后才可能发生首个 spawn，无空窗
+  const procs = createAdapterSessionProcesses(adapter, ptyHost);
   const lifecycle = createSessionLifecycle({
     sessions,
-    procs: createAdapterSessionProcesses(adapter, ptyHost),
+    procs,
     log: logger.log,
   });
 
@@ -313,9 +315,9 @@ app.whenReady().then(async () => {
   // Session 粒度受控终止 → 全量 dispose（worker shutdown/kill 兜底）→ PTY 全停；Job Object 覆盖强杀残留
   // #72 C1 Step3：退出通知经事件发送器工厂（parse 提前到窗口判定之前——reason 恒为内部字符串，该 schema 无失败路径，顺序等价）
   const sendShutdownNotice = createValidatedSender(shutdownNoticeSchema, "app:shutdown", getMainWindow);
+  // arch C11：退出序列进程操作经 SessionProcesses seam（与 lifecycle 共用同一 procs 实例，「structured→adapter / pty→宿主」分派单点）
   const shutdown = createShutdownOrchestrator({
-    adapter,
-    pty: ptyHost,
+    procs,
     sessions,
     graceMs: appConfig.shutdown.graceMs,
     // #32（spec #27 C 节）：退出序列第 7 步停止 memory 提取（running 批次 → cancelled；adapter/PTY 后、DB 关闭前）

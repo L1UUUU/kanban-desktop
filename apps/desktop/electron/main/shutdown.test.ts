@@ -1,4 +1,4 @@
-// 用途：统一退出序列与启动恢复编排单测（#13/spec H）—— 状态机顺序（拒新→有序取消→有限等待→Session 粒度 dispose→全量 dispose→PTY 停止）、幂等、有限等待超时放行、异常不阻断退出；#70 起启动收养经 session-lifecycle.adoptRestored（唯一写者）断言面不变
+// 用途：统一退出序列与启动恢复编排单测（#13/spec H）—— 状态机顺序（拒新→有序取消→有限等待→Session 粒度 dispose→全量 dispose→PTY 停止）、幂等、有限等待超时放行、异常不阻断退出；#70 起启动收养经 session-lifecycle.adoptRestored（唯一写者）断言面不变；arch C11 起退出序列进程操作经 SessionProcesses seam（与生产同装配 createAdapterSessionProcesses），断言面不变（仍记 adapter 调用与 PTY killAll）
 import { describe, expect, it } from "vitest";
 import type { AdoptSessionInput, AdapterEvent, ChatEvent, CliAdapter, DisposeInput } from "@kanban/cli-host";
 import { AdapterError } from "@kanban/cli-host";
@@ -96,8 +96,7 @@ describe("统一退出序列（spec H §6.1）", () => {
     const { pty, killed } = makePty();
     const notices: string[] = [];
     const orch = createShutdownOrchestrator({
-      adapter,
-      pty,
+      procs: createAdapterSessionProcesses(adapter, pty),
       sessions,
       graceMs: 1000,
       notifyShutdown: (r) => notices.push(r),
@@ -123,8 +122,7 @@ describe("统一退出序列（spec H §6.1）", () => {
     const { pty } = makePty();
     let slept = 0;
     const orch = createShutdownOrchestrator({
-      adapter,
-      pty,
+      procs: createAdapterSessionProcesses(adapter, pty),
       sessions,
       graceMs: 120,
       notifyShutdown: () => {},
@@ -153,8 +151,8 @@ describe("统一退出序列（spec H §6.1）", () => {
     };
     const { pty } = makePty();
     const orch = createShutdownOrchestrator({
-      adapter,
-      pty: { ...pty, killAll: () => seq.push("pty") },
+      // arch C11：退出序列经 SessionProcesses seam 分派（同生产装配路径），断言面仍是 adapter 调用记录 + PTY killAll 时序
+      procs: createAdapterSessionProcesses(adapter, { ...pty, killAll: () => seq.push("pty") }),
       sessions,
       graceMs: 100,
       notifyShutdown: () => {},
@@ -171,8 +169,7 @@ describe("统一退出序列（spec H §6.1）", () => {
     const { adapter, calls } = makeFakeAdapter({ failInterrupt: true });
     const { pty } = makePty();
     const orch = createShutdownOrchestrator({
-      adapter,
-      pty,
+      procs: createAdapterSessionProcesses(adapter, pty),
       sessions,
       graceMs: 50,
       notifyShutdown: () => {},

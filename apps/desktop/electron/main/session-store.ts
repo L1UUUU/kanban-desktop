@@ -1,4 +1,4 @@
-// 用途：sessions 表 store（纯数据面，#70 C2 微加深）—— 会话落库/列表/状态与活跃时间更新（C3 表已在 db.ts 建好；重启恢复 = 新实例读同一库文件）；#58 起归档/取消归档/删除与未归档守卫（spec #57 D 节：迟到事件不得复活归档行）；#70 起 ChatEvent 落库收口 applyEvent + insert 缺省 idle（「新建恒 idle」决策收进 store），状态流转编排决策在 session-lifecycle；#94 起标题来源四态门控（ADR 0003：applyDerivedTitle 单向升级 / renameTitle 置 manual 终态 / updateTitle 保持 PTY 无条件写豁免）
+// 用途：sessions 表 store（纯数据面，#70 C2 微加深）—— 会话落库/列表/状态与活跃时间更新（C3 表已在 db.ts 建好；重启恢复 = 新实例读同一库文件）；#58 起归档/取消归档/删除与未归档守卫（spec #57 D 节：迟到事件不得复活归档行）；#70 起 ChatEvent 落库收口 applyEvent + insert 缺省 idle（「新建恒 idle」决策收进 store），状态流转编排决策在 session-lifecycle；#94 起标题来源四态门控（ADR 0003：applyDerivedTitle 单向升级 / renameTitle 置 manual 终态 / updateTitle 保持 PTY 无条件写豁免）；arch C11 起忙态/结构化进程存活谓词单点（isSessionBusy / isStructuredProcessAlive，纯函数直测于 session-store.test.ts）
 import type { ChatEvent, PermMode, SessionStatus, TitleSource } from "@kanban/ipc-schema";
 import type { SqliteDb } from "./db";
 
@@ -24,6 +24,17 @@ export interface SessionRecord {
   archivedAt: string | null;
   /** #64：创建时间（DB 默认生成，SELECT 读出携带；INSERT 可省略走默认。自动归档基准 COALESCE(last_active_at, created_at) 的回落数据源） */
   createdAt?: string | null;
+}
+
+/** 忙态判定单点（arch C11）：running=turn 进行中 / waiting=审批等待——须有序取消/拒绝模型切换的状态；消费方：退出序列（shutdown）/ 自动归档判定 / session:setModel（各自业务策略留在调用处） */
+export function isSessionBusy(status: SessionStatus | null | undefined): boolean {
+  return status === "running" || status === "waiting";
+}
+
+/** 结构化进程存活判定单点（arch C11）：本运行内句柄仍在 = 落库状态存在且非 disconnected（null/undefined 保守视为不在）；
+ *  PTY 存活以宿主 isRunning 为权威，不走此判定；消费方：退出序列受控终止筛选 / 自动归档 processAlive */
+export function isStructuredProcessAlive(status: SessionStatus | null | undefined): boolean {
+  return status != null && status !== "disconnected";
 }
 
 /** INSERT 列（created_at 走 DB 默认值不显式写入） */
