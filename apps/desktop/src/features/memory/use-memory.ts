@@ -1,7 +1,7 @@
-// 用途：记忆视图控制器 hook（#34，US19–21；#38 补总结编辑）—— transport → memory:projectMemory 一次读（知识+总结，服务端口径：query 大小写不敏感子串匹配标题+正文、pending/ignored 不进）+ 知识再编辑动作（memory:editAccepted）+ 总结正文编辑（memory:editSummary）；挂载/切项目/搜索词变化即再拉取（进视图即最新）
+// 用途：记忆视图控制器 hook（#34，US19–21；#38 补总结）—— memory 通道随 ChatTransport 一体（arch D8 双轨合一）→ memory:projectMemory 一次读（知识+总结，服务端口径：query 大小写不敏感子串匹配标题+正文、pending/ignored 不进）+ 知识再编辑动作（memory:editAccepted）+ 总结正文编辑（memory:editSummary）；挂载/切项目/搜索词变化即再拉取（进视图即最新）
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MemoryCandidateRow, MemorySummaryRow } from "@kanban/ipc-schema";
-import type { MemoryTransport } from "./memory-transport";
+import type { ChatTransport } from "../../lib/kanban-api";
 import { createScopedLogger } from "../../lib/logger";
 
 // 本文件日志出口（scope 固定 memory，经 lib/logger 唯一出口发出）
@@ -29,20 +29,22 @@ export interface MemoryController {
   editSummary(requirementId: string, content: string): Promise<string | null>;
 }
 
-/** 记忆控制器 hook：transport 不可用或无项目时保持空态（App 层据此降级/空态引导） */
-export function useMemory(transport: MemoryTransport | null, projectId: string | null): MemoryController {
+/** 记忆控制器 hook：transport 未接 memory 通道（旧 fake）或无项目时保持空态（App 层据此降级/空态引导） */
+export function useMemory(transport: ChatTransport | null, projectId: string | null): MemoryController {
   const [knowledge, setKnowledge] = useState<MemoryCandidateRow[]>([]);
   const [summaries, setSummaries] = useState<MemorySummaryRow[]>([]);
   const [query, setQuery] = useState("");
   // 请求序号：query 连续变化时丢弃过期响应（本地 IPC 快，仅防乱序覆盖）
   const seqRef = useRef(0);
+  // memory 通道窄化（与 use-requirement-memory 同口径）：未接 invokeMemory 时等同不可用
+  const invokeMemory = transport?.invokeMemory;
 
   /** 取数（纯 IPC 调用 + 过期丢弃，不含 setState；供 effect 拉取与编辑后刷新共用） */
   const fetchMemory = useCallback(
     async (q: string): Promise<MemorySnapshot | null> => {
-      if (!transport || projectId == null) return null;
+      if (!invokeMemory || projectId == null) return null;
       const seq = ++seqRef.current;
-      const res = await transport.invoke({
+      const res = await invokeMemory({
         channel: "memory:projectMemory",
         projectId,
         ...(q.trim() ? { query: q.trim() } : {}),
@@ -54,7 +56,7 @@ export function useMemory(transport: MemoryTransport | null, projectId: string |
       }
       return { knowledge: res.knowledge ?? [], summaries: res.summaries ?? [] };
     },
-    [transport, projectId],
+    [invokeMemory, projectId],
   );
 
   /** 快照落态 */
@@ -77,8 +79,8 @@ export function useMemory(transport: MemoryTransport | null, projectId: string |
 
   const editAccepted = useCallback(
     async (candidateId: string, edit: { claim?: string; scope?: string }): Promise<string | null> => {
-      if (!transport) return "记忆服务不可用";
-      const res = await transport.invoke({
+      if (!invokeMemory) return "记忆服务不可用";
+      const res = await invokeMemory({
         channel: "memory:editAccepted",
         candidateId,
         ...(edit.claim != null ? { claim: edit.claim } : {}),
@@ -88,18 +90,18 @@ export function useMemory(transport: MemoryTransport | null, projectId: string |
       await refresh(); // 保存后刷新（有效值即时更新）
       return null;
     },
-    [transport, refresh],
+    [invokeMemory, refresh],
   );
 
   const editSummary = useCallback(
     async (requirementId: string, content: string): Promise<string | null> => {
-      if (!transport) return "记忆服务不可用";
-      const res = await transport.invoke({ channel: "memory:editSummary", requirementId, content });
+      if (!invokeMemory) return "记忆服务不可用";
+      const res = await invokeMemory({ channel: "memory:editSummary", requirementId, content });
       if (!res.ok) return res.detail ? `${res.reason}：${res.detail}` : res.reason;
       await refresh(); // 保存后刷新（总结正文即时更新）
       return null;
     },
-    [transport, refresh],
+    [invokeMemory, refresh],
   );
 
   return { knowledge, summaries, query, setQuery, refresh, editAccepted, editSummary };

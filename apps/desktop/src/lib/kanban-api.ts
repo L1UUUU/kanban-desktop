@@ -1,4 +1,4 @@
-// 用途：preload 桥接的 renderer 侧 transport 工厂 —— 出站开发态 zod 校验（spec E：Renderer 出站 dev 校验，生产零开销）+ chat/terminal/tracker/memory 事件订阅
+// 用途：preload 桥接的 renderer 侧 transport —— 通道经声明表驱动 lib/bridge-factory 生成（arch D8：出站开发态 zod 校验（spec E）+ 事件订阅，新通道 = 声明表加一行）
 import {
   adapterEventSchema,
   ipcRequestSchema,
@@ -20,10 +20,7 @@ import {
   type TerminalEvent,
   type TrackerChangeWire,
 } from "@kanban/ipc-schema";
-import { createScopedLogger } from "./logger";
-
-// 本文件日志出口（scope 固定 transport，经 lib/logger 唯一出口发出）
-const log = createScopedLogger("transport");
+import { bridged, type EventSpec, type InvokeSpec } from "./bridge-factory";
 
 /** 传输 seam：组件测试注入 FakeAdapter 直连实现，生产为 window.api 桥接 */
 export interface ChatTransport {
@@ -42,82 +39,28 @@ export interface ChatTransport {
   onSessionEvent?(handler: (event: SessionEventWire) => void): () => void;
 }
 
-/** dev 态出站校验（#55 迁移）：失败经统一日志记 warn 后原样重抛，保持既有 dev-only throw 语义 */
-function devCheck(parse: () => void, label: string): void {
-  try {
-    parse();
-  } catch (e) {
-    log.warn(`${label}不符合 schema`, { issues: e instanceof Error ? e.message : String(e) });
-    throw e;
-  }
-}
+/**
+ * window.api 桥接声明表（单源）：invoke 段一行 = 一条带 DEV 请求校验的出站通道，
+ * events 段一行 = 一条带 DEV 载荷校验的订阅通道；schema 单源 @kanban/ipc-schema，通道名即 preload 方法名
+ */
+export const windowBridgeSpec = {
+  invoke: {
+    invoke: { channel: "invoke", schema: ipcRequestSchema, label: "出站请求" },
+    invokeMemory: { channel: "invokeMemory", schema: memoryRequestSchema, label: "出站 memory 请求" },
+    invokeModels: { channel: "invokeModels", schema: modelsRequestSchema, label: "出站 models 请求" },
+  },
+  events: {
+    onEvent: { channel: "onChatEvent", schema: adapterEventSchema, message: "入站事件不符合 schema" },
+    onTerminalEvent: { channel: "onTerminalEvent", schema: terminalEventSchema, message: "入站终端事件不符合 schema" },
+    onTrackerEvent: { channel: "onTrackerEvent", schema: trackerChangeSchema, message: "入站 tracker 变更不符合 schema" },
+    onMemoryEvent: { channel: "onMemoryEvent", schema: memoryEventSchema, message: "入站 memory 事件不符合 schema" },
+    onSessionEvent: { channel: "onSessionEvent", schema: sessionEventSchema, message: "入站 session 事件不符合 schema" },
+  },
+} satisfies { invoke: Record<string, InvokeSpec>; events: Record<string, EventSpec> };
 
 /** 从 window.api（contextBridge 暴露）构造 transport；桥接不可用（如 jsdom 测试）返回 null */
 export function createWindowTransport(): ChatTransport | null {
   const api = window.api;
   if (!api) return null;
-  return {
-    invoke: async (req) => {
-      if (import.meta.env.DEV) devCheck(() => ipcRequestSchema.parse(req), "出站请求");
-      return api.invoke(req);
-    },
-    onEvent: (handler) =>
-      api.onChatEvent((event: AdapterEvent) => {
-        if (import.meta.env.DEV) {
-          const parsed = adapterEventSchema.safeParse(event);
-          if (!parsed.success) {
-            log.warn("入站事件不符合 schema", { issues: JSON.stringify(parsed.error.issues) });
-          }
-        }
-        handler(event);
-      }),
-    onTerminalEvent: (handler) =>
-      api.onTerminalEvent((event: TerminalEvent) => {
-        if (import.meta.env.DEV) {
-          const parsed = terminalEventSchema.safeParse(event);
-          if (!parsed.success) {
-            log.warn("入站终端事件不符合 schema", { issues: JSON.stringify(parsed.error.issues) });
-          }
-        }
-        handler(event);
-      }),
-    onTrackerEvent: (handler) =>
-      api.onTrackerEvent((change: TrackerChangeWire) => {
-        if (import.meta.env.DEV) {
-          const parsed = trackerChangeSchema.safeParse(change);
-          if (!parsed.success) {
-            log.warn("入站 tracker 变更不符合 schema", { issues: JSON.stringify(parsed.error.issues) });
-          }
-        }
-        handler(change);
-      }),
-    invokeMemory: async (req) => {
-      if (import.meta.env.DEV) devCheck(() => memoryRequestSchema.parse(req), "出站 memory 请求");
-      return api.invokeMemory(req);
-    },
-    invokeModels: async (req) => {
-      if (import.meta.env.DEV) devCheck(() => modelsRequestSchema.parse(req), "出站 models 请求");
-      return api.invokeModels(req);
-    },
-    onMemoryEvent: (handler) =>
-      api.onMemoryEvent((event: MemoryEventWire) => {
-        if (import.meta.env.DEV) {
-          const parsed = memoryEventSchema.safeParse(event);
-          if (!parsed.success) {
-            log.warn("入站 memory 事件不符合 schema", { issues: JSON.stringify(parsed.error.issues) });
-          }
-        }
-        handler(event);
-      }),
-    onSessionEvent: (handler) =>
-      api.onSessionEvent((event: SessionEventWire) => {
-        if (import.meta.env.DEV) {
-          const parsed = sessionEventSchema.safeParse(event);
-          if (!parsed.success) {
-            log.warn("入站 session 事件不符合 schema", { issues: JSON.stringify(parsed.error.issues) });
-          }
-        }
-        handler(event);
-      }),
-  };
+  return bridged(api, windowBridgeSpec);
 }

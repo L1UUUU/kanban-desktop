@@ -9,7 +9,6 @@ import { useArchivedSessions } from "./features/chat/use-archived-sessions";
 import { KanbanEntryButton } from "./features/kanban/KanbanWorkspace";
 import { useKanban } from "./features/kanban/use-kanban";
 import { MemoryEntryButton, MemoryWorkspace } from "./features/memory/MemoryWorkspace";
-import { createWindowMemoryTransport, type MemoryTransport } from "./features/memory/memory-transport";
 import { useMemory } from "./features/memory/use-memory";
 import { DiffEntryButton, DiffWorkspace } from "./features/diff/DiffWorkspace";
 import { createWindowDiffTransport, type DiffTransport } from "./features/diff/diff-transport";
@@ -82,7 +81,6 @@ export function AppShell({
   onDismissResidue,
   sidebarFooter,
   onChatController,
-  memoryTransport = null,
   diffTransport = null,
 }: {
   transport: ChatTransport | null;
@@ -101,8 +99,6 @@ export function AppShell({
   sidebarFooter?: ReactNode;
   /** 暴露 chat controller（测试驱动用；生产不传） */
   onChatController?: (controller: ChatController) => void;
-  /** memory 传输 seam（#34；缺省经 window.api 桥接，测试注入 fake） */
-  memoryTransport?: MemoryTransport | null;
   /** diff 传输 seam（#43；缺省经 window.api 桥接，测试注入 fake） */
   diffTransport?: DiffTransport | null;
 }) {
@@ -114,10 +110,9 @@ export function AppShell({
   const chatRef = useRef<ChatController | null>(null);
   // #74 已归档会话控制器（归档三通道单执行路径 transport.invoke，错误面自持）：设置面板经 TopBar 消费；取消归档成功回 store.registerRestored
   const archived = useArchivedSessions(transport, (row) => chatRef.current?.registerRestored(row));
-  // #34：memory transport 缺省走 preload 桥接（window.api 缺失时为 null → 视图降级）；useState 初始化器保证实例稳定
-  const [memoryTransport_] = useState(() => memoryTransport ?? createWindowMemoryTransport());
-  const memory = useMemory(memoryTransport_, projects.currentProjectId);
-  // #43：diff transport 同款缺省桥接；控制器常挂（视图切换不卸载），读取由视图挂载触发
+  // #34 + arch D8：memory 通道并入 transport（双轨合一后无独立 factory）；transport 未接 invokeMemory（旧 fake/桥接缺失）→ 视图降级
+  const memory = useMemory(transport, projects.currentProjectId);
+  // #43：diff transport 缺省桥接；控制器常挂（视图切换不卸载），读取由视图挂载触发
   const [diffTransport_] = useState(() => diffTransport ?? createWindowDiffTransport());
   const diff = useWorkspaceDiff(diffTransport_, projects.currentProjectId);
 
@@ -150,12 +145,12 @@ export function AppShell({
         kanban={kanban}
         onSetView={setView}
         memory={
-          memoryTransport_ ? (
+          transport?.invokeMemory ? (
             <MemoryWorkspace memory={memory} projectName={projects.currentProject?.name ?? null} />
           ) : (
-            // 记忆服务不可用降级（window.api 未暴露，与聊天区降级同口径）
+            // 记忆服务不可用降级（transport 未接 memory 通道，与聊天区降级同口径）
             <section data-testid="memory-unavailable" className="flex items-center justify-center bg-background p-6 text-xs text-fg-faint">
-              记忆服务不可用（window.api 未暴露）
+              记忆服务不可用（memory 通道未接入）
             </section>
           )
         }

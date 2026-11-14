@@ -11,7 +11,6 @@ import { handleMemoryIpc } from "../../../electron/main/ipc";
 import { openMemoryService, type MemoryService } from "../../../electron/main/memory-service";
 import { AppShell } from "../../App";
 import type { ChatTransport } from "../../lib/kanban-api";
-import type { MemoryTransport } from "./memory-transport";
 
 // 未关闭的 db 连接（afterEach 统一关，避免 Windows 上临时目录删除 EPERM）
 const openDbs: Array<{ close(): void }> = [];
@@ -26,7 +25,7 @@ const PROJECT: ProjectRow = {
 };
 
 /**
- * 真实 MemoryService 直连 memory transport（#31 通道全链路：handleMemoryIpc zod 校验 + 业务路由）：
+ * 真实 MemoryService 直连的 memory 通道成员（arch D8 双轨合一后并入 ChatTransport）：
  * 种子经 service.store / service.summaries 落库；calls 记录 renderer 发出的全部 memory 请求
  */
 function makeMemoryFixture(dataRoot: string, titles: Record<string, string> = {}) {
@@ -40,12 +39,12 @@ function makeMemoryFixture(dataRoot: string, titles: Record<string, string> = {}
   });
   const calls: MemoryRequest[] = [];
   const listeners = new Set<(event: MemoryEventWire) => void>();
-  const transport: MemoryTransport = {
-    invoke: (req) => {
+  const transport: Pick<ChatTransport, "invokeMemory" | "onMemoryEvent"> = {
+    invokeMemory: (req) => {
       calls.push(req);
       return handleMemoryIpc({ memory: service }, req);
     },
-    onEvent: (handler) => {
+    onMemoryEvent: (handler) => {
       listeners.add(handler);
       return () => {
         listeners.delete(handler);
@@ -73,9 +72,9 @@ function makeChatStub(project: ProjectRow | null): ChatTransport {
   };
 }
 
-/** 挂载 AppShell（App 的可注入骨架：三态视图 + 侧栏双入口 + memory 控制器） */
-function mountApp(chat: ChatTransport, memory: MemoryTransport | null) {
-  render(<AppShell transport={chat} memoryTransport={memory} />);
+/** 挂载 AppShell（arch D8 双轨合一后单一注入面：chat 桩 + memory 通道成员并入同一 transport） */
+function mountApp(chat: ChatTransport, memory: Pick<ChatTransport, "invokeMemory" | "onMemoryEvent"> | null) {
+  render(<AppShell transport={memory ? { ...chat, ...memory } : chat} />);
 }
 
 const flush = async (): Promise<void> => {
@@ -157,7 +156,7 @@ describe("记忆入口与三态视图切换（#34；原型一致项 1）", () =>
     }
   });
 
-  it("memory transport 不可用（window.api 缺失）：入口可见，视图降级提示不崩溃", async () => {
+  it("memory 通道不可用（transport 未接 invokeMemory）：入口可见，视图降级提示不崩溃", async () => {
     mountApp(makeChatStub(PROJECT), null);
     await flush();
     expect(screen.getByTestId("memory-entry").textContent).toContain("记忆");

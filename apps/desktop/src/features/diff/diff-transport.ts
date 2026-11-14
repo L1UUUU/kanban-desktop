@@ -1,5 +1,6 @@
-// 用途：diff 传输 seam（#43）—— renderer 侧经 preload 暴露的 window.api.invokeDiff 桥接；组件测试注入 fake（本文件不含业务逻辑）
-import type { DiffRequest, DiffResult } from "@kanban/ipc-schema";
+// 用途：diff 传输 seam（#43）—— 经 lib/bridge-factory 声明驱动从 window.api 生成带 DEV 校验的 invoke 面（arch D8 收敛到统一生成路径）；组件测试注入 fake（本文件不含业务逻辑）
+import { diffRequestSchema, type DiffRequest, type DiffResult } from "@kanban/ipc-schema";
+import { bridged } from "../../lib/bridge-factory";
 
 /** diff 传输 seam：生产为 window.api 桥接，测试注入 fake */
 export interface DiffTransport {
@@ -10,5 +11,7 @@ export interface DiffTransport {
 export function createWindowDiffTransport(): DiffTransport | null {
   const api = window.api;
   if (!api?.invokeDiff) return null;
-  return { invoke: (req) => api.invokeDiff!(req) };
+  return bridged(api, {
+    invoke: { invoke: { channel: "invokeDiff", schema: diffRequestSchema, label: "出站 diff 请求" } },
+  });
 }
