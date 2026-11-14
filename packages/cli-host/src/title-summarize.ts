@@ -1,7 +1,7 @@
-// 用途：一次性标题摘要基建（#95 / ADR 0003 决策 3）—— claude -p / codex exec 共用的 spawn 直连执行器（run-once.ts 同款 Windows 坑位清单：shell:false + windowsHide + stdin 注入后 end + 超时 kill + close 收口）+ 摘要 prompt 构造 + 产出整形纯函数；CLI 命令行差异留在各 adapter，本模块只承载两 CLI 共性
-import { spawn, type ChildProcess } from "node:child_process";
+// 用途：一次性标题摘要基建（#95 / ADR 0003 决策 3）—— 摘要 prompt 构造 + 产出整形纯函数 + 对 one-shot 执行器（./one-shot，arch C3 合并的 Windows 坑位清单单源）的薄消费面；CLI 命令行差异留在各 adapter，本模块只承载两 CLI 共性
 import type { LogKind, TranscriptEvent } from "@kanban/ipc-schema";
 import { AdapterError } from "./adapter";
+import { OneShotSpawnError, spawnOneShot, type OneShotOutcome } from "./one-shot";
 
 /** 摘要一次性执行超时缺省（独立设定，不沿用 run-once 300s：标题生成是轻量单轮任务；量级对齐 claude setModel ack 15s 起放宽到 60s 真实模型裕量） */
 export const DEFAULT_SUMMARIZE_TIMEOUT_MS = 60_000;
@@ -33,64 +33,31 @@ export interface TitleOneShotResult {
   stderr: string;
 }
 
-/** 一次性 CLI 执行：进程启动失败/超时抛 AdapterError；正常退出按 {exitCode, stdout, stderr} 交调用方判定 */
+/** 一次性 CLI 执行（one-shot 执行器薄消费方）：进程启动失败/超时抛 AdapterError；正常退出按 {exitCode, stdout, stderr} 交调用方判定 */
 export async function runTitleOneShot(options: TitleOneShotOptions): Promise<TitleOneShotResult> {
-  return new Promise<TitleOneShotResult>((resolve, reject) => {
-    let child: ChildProcess;
-    try {
-      child = spawn(options.exe, options.args, {
-        cwd: options.cwd,
-        stdio: ["pipe", "pipe", "pipe"],
-        windowsHide: true,
-        shell: false, // 直连真实 exe，不经 shell（Windows/MSYS 参数与 env 改写坑，run-once 同款）
-        env: { ...process.env }, // 认证 env（用户级 settings 注入的网关配置）不切断
-      });
-    } catch (e) {
-      reject(new AdapterError("E_INTERNAL", `标题摘要进程启动失败：${e instanceof Error ? e.message : String(e)}`));
-      return;
-    }
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    let verdict: "timeout" | null = null;
-    const timer = setTimeout(() => {
-      verdict = "timeout";
-      try {
-        child.kill();
-      } catch {
-        /* 已退出 */
-      }
-    }, options.timeoutMs);
-    // stdin 注入后关闭（子进程早死时写入失败不影响 close 收口）
-    child.stdin?.on("error", () => {});
-    child.stdin?.end(options.stdin);
-    child.stdout?.setEncoding("utf8");
-    child.stdout?.on("data", (d: string) => {
-      stdout += d;
-    });
-    child.stderr?.setEncoding("utf8");
-    child.stderr?.on("data", (d: string) => {
-      stderr += d;
-      options.log?.("stderr", `title-summarize ${d.trimEnd().slice(0, 400)}`);
-    });
-    child.on("error", (e) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(new AdapterError("E_INTERNAL", `标题摘要进程启动失败：${e.message}`));
-    });
-    // close（而非 exit）：等 stdio 流冲刷完毕，确保输出完整回收
-    child.on("close", (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (verdict === "timeout") {
-        reject(new AdapterError("E_INTERNAL", `标题摘要超时（${options.timeoutMs}ms，已终止一次性进程）`));
-        return;
-      }
-      resolve({ exitCode: code, stdout, stderr });
-    });
+  const { done } = spawnOneShot({
+    exe: options.exe,
+    args: options.args,
+    cwd: options.cwd,
+    stdin: options.stdin,
+    timeoutMs: options.timeoutMs, // 独立超时设定（不沿用 run-once 300s 缺省），值由 adapter 层注入
+    log: options.log,
+    logTag: "title-summarize",
   });
+  let r: OneShotOutcome;
+  try {
+    r = await done;
+  } catch (e) {
+    // 启动失败（spawn 同步抛错与异步 error 事件同路）统一映射既有文案
+    if (e instanceof OneShotSpawnError) {
+      throw new AdapterError("E_INTERNAL", `标题摘要进程启动失败：${e.message}`);
+    }
+    throw e;
+  }
+  if (r.verdict === "timeout") {
+    throw new AdapterError("E_INTERNAL", `标题摘要超时（${options.timeoutMs}ms，已终止一次性进程）`);
+  }
+  return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr };
 }
 
 /** 喂给摘要模型的最近对话文本：user/assistant 文本行（工具调用折叠为一行标注）；超长截尾 */
