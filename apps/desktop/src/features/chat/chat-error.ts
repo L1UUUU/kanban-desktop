@@ -3,12 +3,13 @@
 // 草稿错误槽 store.setDraftSubmitError=CreateErrorCard）；行内提示（重命名）复用同一错误表示，仅展示位置不同。
 // 归档行不在 ChatStore，use-archived-sessions 自持错误面是合理设计，仅对齐错误表示、不经此出口写 store。
 import type { IpcResult } from "@kanban/ipc-schema";
+import { transportUnavailableError } from "../../lib/transport-error";
 import type { ChatStore } from "./chat-store";
 import type { ChatActionError } from "./session-view";
 
-/** transport 缺席兜底（arch C7：use-chat 内三处同款字面量归一）：统一 E_INTERNAL「transport 不可用」（code 为字面量类型，可直接满足各 IpcResult 错误形态） */
+/** transport 缺席兜底（arch C7：use-chat 内三处同款字面量归一；arch D10 起载体构造上移 lib/transport-error 单源）：统一 E_INTERNAL「transport 不可用」（code 为字面量类型，可直接满足各 IpcResult 错误形态） */
 export function transportUnavailable(): { code: "E_INTERNAL"; message: string } {
-  return { code: "E_INTERNAL", message: "transport 不可用" };
+  return transportUnavailableError("transport 不可用");
 }
 
 /** 失败归一：形如 {code,message} 的 IPC 错误载荷（含派发 blocked 动作）取原值；其余（invoke 抛出的异常等）兜底 E_INTERNAL + message 原文（不静默） */

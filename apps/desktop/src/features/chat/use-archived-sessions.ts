@@ -1,10 +1,12 @@
 // 用途：已归档会话管理控制器（issue #74）—— archivedList/unarchive/delete 单执行路径（全部经 ChatTransport.invoke，DEV 出站 zod 校验随 transport 生效）；rows/error 状态内聚，SettingsModal 只剩展示与纯视图态。
 // 不进 use-chat controller：归档行不在 ChatStore，setError/removeSession 对不存在会话是 no-op（会静默吞掉失败），归档动作须自持错误面（行保留可重试）；
-// arch C7 错误表示对齐统一形态（ChatActionError，文案逐字保持）——自持错误面与重试语义保留，不并入 chat-error 出口写 store
+// arch C7 错误表示对齐统一形态（ChatActionError，文案逐字保持）——自持错误面与重试语义保留，不并入 chat-error 出口写 store；
+// arch D10 起 transport/IPC 兜底载体经 lib/transport-error 单源构造
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { SessionRow } from "@kanban/ipc-schema";
 import type { ChatTransport } from "../../lib/kanban-api";
 import { createScopedLogger } from "../../lib/logger";
+import { transportUnavailableError } from "../../lib/transport-error";
 import type { ChatActionError } from "./session-view";
 
 // 本文件日志出口（scope 固定 chat：归档会话动作属会话域，与 use-chat 同 scope）
@@ -53,7 +55,7 @@ export function useArchivedSessions(
           setError({ code: r.error.code, message: `读取已归档会话失败：${r.error.message}` });
         }
       })
-      .catch(() => setError({ code: "E_INTERNAL", message: "读取已归档会话失败：IPC 调用异常" }));
+      .catch(() => setError(transportUnavailableError("读取已归档会话失败：IPC 调用异常")));
   }, [transport]);
 
   const unarchive = useCallback(
@@ -72,7 +74,7 @@ export function useArchivedSessions(
             log.error("取消归档失败", { sessionId: row.id });
           }
         } catch {
-          setError({ code: "E_INTERNAL", message: "取消归档失败：IPC 服务不可用" });
+          setError(transportUnavailableError("取消归档失败：IPC 服务不可用"));
           log.error("取消归档失败", { sessionId: row.id });
         }
       })();
@@ -95,7 +97,7 @@ export function useArchivedSessions(
             log.error("删除已归档会话失败", { sessionId: row.id });
           }
         } catch {
-          setError({ code: "E_INTERNAL", message: "删除失败：IPC 服务不可用" });
+          setError(transportUnavailableError("删除失败：IPC 服务不可用"));
           log.error("删除已归档会话失败", { sessionId: row.id });
         }
       })();

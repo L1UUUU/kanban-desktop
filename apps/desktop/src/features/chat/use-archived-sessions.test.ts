@@ -96,11 +96,11 @@ describe("useArchivedSessions：拉取（session:archivedList）", () => {
     expect(result.current.error).toBeNull();
   });
 
-  it("拉取异常（reject）→ 错误文案「IPC 调用异常」，rows 不动", async () => {
+  it("拉取异常（reject）→ 统一兜底 code=E_INTERNAL（arch D10 按 code 断言，文案由载体单源保证），rows 不动", async () => {
     const { transport } = makeTransport({ throws: { "session:archivedList": 1 } });
     const { result } = renderHook(() => useArchivedSessions(transport));
     act(() => result.current.refresh());
-    await waitFor(() => expect(result.current.error?.message).toBe("读取已归档会话失败：IPC 调用异常"));
+    await waitFor(() => expect(result.current.error?.code).toBe("E_INTERNAL"));
     expect(result.current.rows).toBeNull();
   });
 
@@ -157,7 +157,7 @@ describe("useArchivedSessions：取消归档（session:unarchive）", () => {
     }
   });
 
-  it("异常（reject）：「IPC 服务不可用」文案 + 留痕，行保留", async () => {
+  it("异常（reject）：统一兜底 code=E_INTERNAL（arch D10 按 code 断言）+ 留痕，行保留", async () => {
     const sink = logSink();
     try {
       const { transport } = makeTransport({
@@ -168,7 +168,7 @@ describe("useArchivedSessions：取消归档（session:unarchive）", () => {
       act(() => result.current.refresh());
       await waitFor(() => expect(result.current.rows).toHaveLength(1));
       act(() => result.current.unarchive(R1));
-      await waitFor(() => expect(result.current.error?.message).toBe("取消归档失败：IPC 服务不可用"));
+      await waitFor(() => expect(result.current.error?.code).toBe("E_INTERNAL"));
       expect(result.current.rows?.map((r) => r.id)).toEqual(["r1"]);
       expect(sink.entries).toEqual([{ level: "error", scope: "chat", message: "取消归档失败", ctx: { sessionId: "r1" } }]);
     } finally {

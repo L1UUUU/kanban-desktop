@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { MemoryCandidateRow, MemorySummaryRow } from "@kanban/ipc-schema";
 import type { ChatTransport } from "../../lib/kanban-api";
 import { createScopedLogger } from "../../lib/logger";
+import { transportUnavailableError } from "../../lib/transport-error";
 
 // 本文件日志出口（scope 固定 memory，经 lib/logger 唯一出口发出）
 const log = createScopedLogger("memory");
@@ -79,7 +80,8 @@ export function useMemory(transport: ChatTransport | null, projectId: string | n
 
   const editAccepted = useCallback(
     async (candidateId: string, edit: { claim?: string; scope?: string }): Promise<string | null> => {
-      if (!invokeMemory) return "记忆服务不可用";
+      // memory 通道未接兜底：载体经 lib/transport-error 单源（arch D10），文案直达 UI 行内提示
+      if (!invokeMemory) return transportUnavailableError("记忆服务不可用").message;
       const res = await invokeMemory({
         channel: "memory:editAccepted",
         candidateId,
@@ -95,7 +97,8 @@ export function useMemory(transport: ChatTransport | null, projectId: string | n
 
   const editSummary = useCallback(
     async (requirementId: string, content: string): Promise<string | null> => {
-      if (!invokeMemory) return "记忆服务不可用";
+      // memory 通道未接兜底：同 editAccepted（arch D10 单源载体）
+      if (!invokeMemory) return transportUnavailableError("记忆服务不可用").message;
       const res = await invokeMemory({ channel: "memory:editSummary", requirementId, content });
       if (!res.ok) return res.detail ? `${res.reason}：${res.detail}` : res.reason;
       await refresh(); // 保存后刷新（总结正文即时更新）

@@ -11,6 +11,7 @@ import type {
   MemoryReviewAction,
 } from "@kanban/ipc-schema";
 import type { ChatTransport } from "../../lib/kanban-api";
+import { transportUnavailableError } from "../../lib/transport-error";
 
 /** 详情面板一次读载荷（wire memoryOkSchema 投影） */
 export interface RequirementMemoryData {
@@ -122,7 +123,12 @@ export function useRequirementMemory(requirementId: string | null, transport: Ch
   /** 通用动作包装：成功（ok:true）后 refresh 当前需求，业务拒绝原样返回由 UI 呈现 */
   const invokeThenRefresh = useCallback(
     async (req: MemoryRequest): Promise<MemoryResult> => {
-      if (!mt) return { ok: false, reason: "transport-unavailable", detail: "memory 通道不可用" };
+      // transport 缺席兜底（防御分支，mt 空时控制器整体返回 null 不暴露动作面）：载体经 lib/transport-error 单源（arch D10），
+      // 映射为 wire 拒绝形（reason=code、detail=文案；MemoryArea 呈现 detail，用户可见文案不变）
+      if (!mt) {
+        const unavailable = transportUnavailableError("memory 通道不可用");
+        return { ok: false, reason: unavailable.code, detail: unavailable.message };
+      }
       const r = await mt.invokeMemory(req);
       if (r.ok) await refresh(currentIdRef.current);
       return r;

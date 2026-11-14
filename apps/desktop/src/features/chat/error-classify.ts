@@ -31,3 +31,11 @@ export function authLoginCommand(cli: string): string[] {
   if (cli === "opencode") return ["opencode auth login"];
   return [];
 }
+
+/**
+ * spawn_not_found 指引文案单源（arch D10）：「确认已安装并在 PATH 中，或在配置文件（configPath）手动指定 cliExe.<cli> 路径」——
+ * 会话内错误卡（ErrorBanner）与创建失败卡（CreateErrorCard）共用同一模板；configPath 空时省略路径括注。
+ */
+export function spawnNotFoundGuidance(cli: string, configPath?: string | null): string {
+  return `确认已安装并在 PATH 中，或在配置文件${configPath ? `（${configPath}）` : ""}手动指定 cliExe.${cli} 路径。`;
+}

@@ -16,6 +16,11 @@ export type ApprovalDecision = z.infer<typeof approvalDecisionSchema>;
 export const sessionStatusSchema = z.enum(["idle", "running", "waiting", "interrupted", "disconnected"]);
 export type SessionStatus = z.infer<typeof sessionStatusSchema>;
 
+/** 会话忙判定单源（arch D10）：running（turn 执行中）或 waiting（审批待决）为忙 —— composer 禁用与主仓库冲突判据共用，语义演进只改此处 */
+export function isSessionBusy(status: SessionStatus): boolean {
+  return status === "running" || status === "waiting";
+}
+
 // 会话错误码六成员闭枚举（#41 C1 演进，spec #40 B 节）：AUTH_EXPIRED 认证失效（Adapter 协议级检测）/
 // SPAWN_NOT_FOUND 找不到 CLI 可执行（IPC 侧映射）/ PROTOCOL_DISCONNECT 协议传输断连 / CLI_EXIT 进程退出 /
 // INTERNAL 已知来源错误 / UNKNOWN 未识别兜底。renderer 合成码与 IPC 错误码不进本枚举（归 S4-02 classify 输入域）。

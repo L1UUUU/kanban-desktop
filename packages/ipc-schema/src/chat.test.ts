@@ -1,6 +1,6 @@
 // 用途：ChatEvent 全成员 zod 往返测试 —— 13 成员（spec B 冻结清单）逐个合法样例等值 parse、非法形状被拒（spec Testing seam 3）
 import { describe, expect, it } from "vitest";
-import { adapterEventSchema, chatEventSchema, sessionErrorCodeSchema, skillObservationSchema } from "./chat";
+import { adapterEventSchema, chatEventSchema, isSessionBusy, sessionErrorCodeSchema, skillObservationSchema } from "./chat";
 
 // 独立于实现的期望来源：spec B 的成员清单与合并键语义（itemId/partId/seq）
 const base = { sessionId: "s-1", seq: 3, at: "2026-11-05T10:00:00.000Z" };
@@ -67,6 +67,15 @@ describe("chatEventSchema 全成员往返（spec B 13 成员）", () => {
 
   it("session_status 枚举外取值被拒", () => {
     expect(() => chatEventSchema.parse({ ...validSamples.session_status_running, status: "paused" })).toThrow();
+  });
+
+  // arch D10 忙态谓词单源：五种状态逐一钉死（running/waiting 忙，其余闲）
+  it("isSessionBusy：running/waiting 为忙，idle/interrupted/disconnected 为闲", () => {
+    expect(isSessionBusy("running")).toBe(true);
+    expect(isSessionBusy("waiting")).toBe(true);
+    expect(isSessionBusy("idle")).toBe(false);
+    expect(isSessionBusy("interrupted")).toBe(false);
+    expect(isSessionBusy("disconnected")).toBe(false);
   });
 
   // #41 C1 演进：code 收紧为六成员闭枚举（AUTH_EXPIRED/SPAWN_NOT_FOUND/PROTOCOL_DISCONNECT/CLI_EXIT/INTERNAL/UNKNOWN）

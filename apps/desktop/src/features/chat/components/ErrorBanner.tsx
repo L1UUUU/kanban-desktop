@@ -1,6 +1,6 @@
 // 用途：会话内错误卡 ErrorBanner（#46 / spec I 一致项 2、原型 d2 五卡信息结构）—— 按 classify 结果渲染四类 + 未知兜底：
 // 卡式布局（图标+标题头 / 原因区含原始信息 / 指引命令块（认证）/ 动作按钮区右对齐）；动作仅编排不执行破坏性操作（恢复=ResumeBanner 同一动作 D4，重试/开终端/复制）
-import { authLoginCommand, classifyError } from "../error-classify";
+import { authLoginCommand, classifyError, spawnNotFoundGuidance } from "../error-classify";
 import { sessionCliLabel } from "../../../lib/cli-catalog";
 import { copyText } from "../../../lib/copy-text";
 
@@ -63,7 +63,7 @@ export function ErrorBanner(props: ErrorBannerProps) {
     why = `原始信息：${message}。可在应用的 PTY 终端会话中直接运行上面的命令；完成后点「重试」继续本会话。`;
   } else if (kind === "spawn_not_found") {
     lead = `未找到 ${label} 可执行文件，会话无法继续。已探测的常见安装位置均无结果。`;
-    why = `原始信息：${message}。确认已安装并在 PATH 中，或在配置文件${configPath ? `（${configPath}）` : ""}手动指定 cliExe.${cli} 路径。`;
+    why = `原始信息：${message}。${spawnNotFoundGuidance(cli, configPath)}`;
   } else if (kind === "protocol_disconnect") {
     lead = `与 ${label} 服务的连接断开，消息流已停止。工作区文件保持当前状态。`;
     why = `原始信息：${message}。常见原因：server 进程退出、端口被占用或网络抖动。可尝试恢复会话；恢复时将按需重新拉起 server。`;

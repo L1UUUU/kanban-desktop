@@ -1,7 +1,7 @@
 // 用途：会话创建失败卡（#46 / spec #40 F1 + 原型 d2 卡 3 形态；#59 起渲染在草稿面板 composer 上方）——
 // spawn 失败（E_SPAWN_NOT_FOUND）显示配置路径指引；其余保留 code/message 原文 +「复制错误详情」；动作仅编排不执行破坏性操作
 import type { CreateFailure } from "../chat-store";
-import { classifyError } from "../error-classify";
+import { classifyError, spawnNotFoundGuidance } from "../error-classify";
 import { CLI_LABELS } from "../../../lib/cli-catalog";
 import { copyText } from "../../../lib/copy-text";
 
@@ -45,7 +45,7 @@ export function CreateErrorCard({
           <>
             <p className="text-xs text-foreground">未找到 {label} 可执行文件，会话创建失败。已探测的常见安装位置均无结果。</p>
             <p className="break-all text-[11px] leading-relaxed text-muted-foreground">
-              确认已安装并在 PATH 中，或在配置文件{configPath ? `（${configPath}）` : ""}手动指定 cliExe.{failure.cli} 路径。原始信息：{failure.message}
+              {spawnNotFoundGuidance(failure.cli, configPath)}原始信息：{failure.message}
             </p>
           </>
         ) : (

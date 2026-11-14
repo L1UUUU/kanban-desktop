@@ -1,4 +1,5 @@
-// 用途：主仓库并行会话冲突判据（spec I-4/#13 一致项 4）—— 当前会话属主仓库且同目录活跃（running/waiting）结构化会话 ≥2 时返回会话名列表；worktree/断开/空闲/PTY 不计入
+// 用途：主仓库并行会话冲突判据（spec I-4/#13 一致项 4）—— 当前会话属主仓库且同目录活跃（running/waiting）结构化会话 ≥2 时返回会话名列表；worktree/断开/空闲/PTY 不计入；忙态判定经 ipc-schema isSessionBusy 单源（arch D10）
+import { isSessionBusy } from "@kanban/ipc-schema";
 import type { SessionView } from "./chat-store";
 
 /** cwd 归一化比较键：小写 + 正斜杠 + 去尾部分隔符（同项目会话 cwd 来自同一 canonicalPath，防大小写/分隔符形态差异漏判） */
@@ -23,8 +24,7 @@ export function detectMainRepoConflict(sessions: SessionView[], activeId: string
       s.kind === "structured" &&
       s.dirIdentity === "main" &&
       !!s.cwd &&
-      normalizeCwdKey(s.cwd) === key &&
-      (s.status === "running" || s.status === "waiting"),
+      normalizeCwdKey(s.cwd) === key && isSessionBusy(s.status),
   );
   return group.length >= 2 ? group.map((s) => s.title) : null;
 }

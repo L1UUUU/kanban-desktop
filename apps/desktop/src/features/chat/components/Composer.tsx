@@ -1,6 +1,6 @@
 // 用途：composer 输入区 —— 统一容器聚焦高亮、权限档位 chip（三档带说明）+ 模型 combobox（真实目录/恢复会话派生显示）、发送 ↔ 停止态切换（原型一致项 6/7；文案硬约束；#59 起权限/模型控件与草稿面板共享 ComposerControls；#85 起上缘可拖拽调高（与 DraftPane 共享同一持久化偏好）；#90 输入框带斜杠补全菜单）
 import { useState } from "react";
-import type { PermMode } from "@kanban/ipc-schema";
+import { isSessionBusy, type PermMode } from "@kanban/ipc-schema";
 import type { StructuredSessionView } from "../chat-store";
 import type { ModelCatalog } from "../model-catalog";
 import type { ComposerCommandSource } from "../composer-command-source";
@@ -34,8 +34,8 @@ export function Composer({
   // #85 输入框高度（与草稿 DraftPane 共享 key：两态联动为预期行为）
   const composer = useComposerPanelHeight();
   const running = session.status === "running";
-  // #79：模型切换在 turn 进行中（含审批待决 waiting）被禁用——main 侧同语义校验拒绝
-  const busy = running || session.status === "waiting";
+  // #79：模型切换在 turn 进行中（含审批待决 waiting）被禁用——main 侧同语义校验拒绝；忙态经 isSessionBusy 单源（arch D10）
+  const busy = isSessionBusy(session.status);
 
   // #92：发送编排含斜杠派发（await 展开完成后再决定是否清空；fail-closed/展开失败返回 false 保留输入可重试）
   const send = async (): Promise<void> => {

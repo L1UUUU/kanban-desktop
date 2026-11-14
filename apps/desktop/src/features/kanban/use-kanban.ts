@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import type { KanbanStageInput, RequirementCardRow } from "@kanban/ipc-schema";
 import type { ChatTransport } from "../../lib/kanban-api";
 import { createScopedLogger } from "../../lib/logger";
+import { transportUnavailableError } from "../../lib/transport-error";
 import { KanbanStore } from "./kanban-store";
 import { useRequirementMemory, type RequirementMemoryController } from "./use-requirement-memory";
 
@@ -84,7 +85,8 @@ export function useKanban(transport: ChatTransport | null): KanbanController {
 
   const rename = useCallback(
     async (requirementId: string, title: string): Promise<string | null> => {
-      if (!transport) return "transport 不可用";
+      // transport 缺席兜底：载体经 lib/transport-error 单源（arch D10），文案直达 UI 行内提示
+      if (!transport) return transportUnavailableError("transport 不可用").message;
       const r = await transport.invoke({ channel: "kanban:rename", requirementId, title });
       // 错误码结果（如 E_REQUIREMENT_NOT_FOUND）以文案形式直达 UI 行内提示（#84 不再静默）
       if (!r.ok) {
@@ -116,7 +118,8 @@ export function useKanban(transport: ChatTransport | null): KanbanController {
 
   const link = useCallback(
     async (sessionId: string, requirementId: string) => {
-      if (!transport) return "transport 不可用";
+      // transport 缺席兜底：同 rename（arch D10 单源载体）
+      if (!transport) return transportUnavailableError("transport 不可用").message;
       const r = await transport.invoke({ channel: "kanban:link", sessionId, requirementId });
       // 错误码结果（如 E_REQUIREMENT_NOT_FOUND）同样以原因形式呈现给用户
       if (!r.ok) return r.error.message;
