@@ -84,20 +84,19 @@ export function npmGlobalExeStep(input: {
   };
 }
 
-/** PATH 兜底步工厂（where/which 只用于「找到路径」，spawn 仍直连该绝对路径）：resolve 取首个 adoptFirst 行、并集全收 adoptAll 行——两过滤独立声明（claude 在 posix 上 resolve 只认 .exe、并集收非 .cmd 的现行差异保持） */
+/** PATH 兜底步工厂（where/which 只用于「找到路径」，spawn 仍直连该绝对路径）：resolve 取首个 adopt 行、并集全收 adopt 行——单一采纳谓词，resolve 与并集出口条件天然一致（arch D4：双过滤器分叉坍缩） */
 export function pathLookupExeStep(input: {
   name: string;
-  adoptFirst: (line: string) => boolean;
-  adoptAll: (line: string) => boolean;
+  adopt: (line: string) => boolean;
 }): ExeChainStep {
   const lines = (injection: ExeCandidateProbes): string[] =>
     (injection.pathLookup ?? ((name: string) => lookupAllPathLines(name)))(input.name);
   return {
     resolveFirst: (injection) => ({
-      hit: lines(injection).find(input.adoptFirst) ?? null,
+      hit: lines(injection).find(input.adopt) ?? null,
       miss: `where/which 未解析到 ${input.name} 可执行文件（.cmd shim 不采用）`,
     }),
-    listAll: (injection) => lines(injection).filter(input.adoptAll),
+    listAll: (injection) => lines(injection).filter(input.adopt),
   };
 }
 

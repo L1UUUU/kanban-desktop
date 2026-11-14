@@ -10,8 +10,17 @@ export interface ClaudeExeOptions {
 }
 
 /**
+ * claude PATH 行采纳谓词（arch D4 单源，纯函数）：win32 只采纳 .exe；posix 采纳非 .cmd（无扩展名原生可执行可被 resolve 采纳）。
+ * 平台作显式入参：表驱动直测可在 win32 本机钉住 posix 分支；链内接线传 process.platform。
+ */
+export function adoptClaudePathLine(platform: NodeJS.Platform, line: string): boolean {
+  const lower = line.toLowerCase();
+  return platform === "win32" ? lower.endsWith(".exe") : !lower.endsWith(".cmd");
+}
+
+/**
  * claude 解析链声明：候选并集与 resolve 从同一条链派生（采纳条件天然一致）。
- * PATH 兜底：resolve 只采纳真实 .exe（posix 无扩展名结果不采纳——现行行为保持）；并集 win32 只收 .exe、posix 收非 .cmd。
+ * PATH 兜底采纳谓词平台感知单源（adoptClaudePathLine，arch D4）：win32 只认 .exe、posix 认非 .cmd。
  */
 export const CLAUDE_EXE_CHAIN: ExeChainSpec = {
   cli: "claude",
@@ -24,9 +33,7 @@ export const CLAUDE_EXE_CHAIN: ExeChainSpec = {
     }),
     pathLookupExeStep({
       name: "claude",
-      adoptFirst: (line) => line.toLowerCase().endsWith(".exe"),
-      adoptAll: (line) =>
-        process.platform === "win32" ? line.toLowerCase().endsWith(".exe") : !line.toLowerCase().endsWith(".cmd"),
+      adopt: (line) => adoptClaudePathLine(process.platform, line),
     }),
   ],
 };

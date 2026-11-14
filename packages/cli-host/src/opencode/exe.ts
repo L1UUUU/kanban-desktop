@@ -36,8 +36,7 @@ export const OPENCODE_EXE_CHAIN: ExeChainSpec = {
     probeExeStep({ probe: () => nativeInstallPath(), miss: "原生安装目录 %LOCALAPPDATA%\\Programs\\opencode\\opencode.exe 不存在" }),
     pathLookupExeStep({
       name: "opencode",
-      adoptFirst: (line) => !line.toLowerCase().endsWith(".cmd"),
-      adoptAll: (line) => !line.toLowerCase().endsWith(".cmd"),
+      adopt: (line) => !line.toLowerCase().endsWith(".cmd"),
     }),
   ],
 };

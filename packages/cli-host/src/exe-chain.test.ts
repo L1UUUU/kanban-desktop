@@ -44,8 +44,7 @@ function chainA(): ExeChainSpec {
       }),
       pathLookupExeStep({
         name: "fake",
-        adoptFirst: (line) => line.toLowerCase().endsWith(".exe"),
-        adoptAll: (line) => line.toLowerCase().endsWith(".exe"),
+        adopt: (line) => line.toLowerCase().endsWith(".exe"),
       }),
     ],
   };
@@ -155,15 +154,14 @@ describe("listExeChainCandidates（并集与 resolve 同链派生）", () => {
 });
 
 describe("步工厂（探测注入与过滤）", () => {
-  it("pathLookupExeStep：resolve 取首个 adoptFirst 行、并集全收 adoptAll 行（两过滤独立）", () => {
+  it("pathLookupExeStep：resolve 取首个 adopt 行、并集全收 adopt 行（单一谓词，两出口条件一致——arch D4）", () => {
     const step = pathLookupExeStep({
       name: "fake",
-      adoptFirst: (line) => line.toLowerCase().endsWith(".exe"),
-      adoptAll: (line) => !line.toLowerCase().endsWith(".cmd"),
+      adopt: (line) => !line.toLowerCase().endsWith(".cmd"),
     });
     const lines = ["/bin/fake", "/bin/fake.exe", "/bin/fake.cmd"];
     const inj = { pathLookup: () => lines };
-    expect(step.resolveFirst(inj)).toEqual({ hit: "/bin/fake.exe", miss: "where/which 未解析到 fake 可执行文件（.cmd shim 不采用）" });
+    expect(step.resolveFirst(inj)).toEqual({ hit: "/bin/fake", miss: "where/which 未解析到 fake 可执行文件（.cmd shim 不采用）" });
     expect(step.listAll(inj)).toEqual(["/bin/fake", "/bin/fake.exe"]);
   });
 
