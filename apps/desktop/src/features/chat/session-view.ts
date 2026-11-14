@@ -1,5 +1,5 @@
 // 用途：会话视图类型单源（issue #71 搬移自 chat-store；arch C6 判别联合）—— SessionView 及其条目/审批/恢复态类型与
-// wire→view 单点转换，供 chat/terminal/kanban/components 各渲染面共享；chat-store 过渡期 re-export 保持既有 import 不变
+// wire→view 单点转换（arch C8 增 blankStructuredView 空白工厂：字段默认值唯一字面量），供 chat/terminal/kanban/components 各渲染面共享；chat-store 过渡期 re-export 保持既有 import 不变
 import { cliKindSchema, type ApprovalSuggestion, type CliKind, type PermMode, type SessionRow, type SessionStatus } from "@kanban/ipc-schema";
 import { createScopedLogger } from "../../lib/logger";
 
@@ -139,18 +139,37 @@ export function sessionViewFromWire(init: WireSessionInit): SessionView {
     worktreeName: init.worktreeName,
   };
   if (wire.kind === "pty") return { kind: "pty", ...common };
+  return blankStructuredView({ ...init, cli: wire.cli });
+}
+
+/** blankStructuredView 入参：必填身份字段 + 差异覆盖（其余走占位默认值） */
+export type BlankStructuredOverrides = { sessionId: string; cli: CliKind } & Partial<
+  Pick<WireSessionInit, "title" | "status" | "permMode" | "model" | "projectId" | "cwd" | "dirIdentity" | "worktreeName" | "skillConflicts">
+>;
+
+/**
+ * 结构化会话视图空白工厂（arch C8）：全部字段默认值的唯一字面量——加字段只改本处，
+ * 登记（wire 转换）与事件先至占位各处只写差异字段，不再各自铺 16 字段字面量。
+ */
+export function blankStructuredView(o: BlankStructuredOverrides): StructuredSessionView {
   return {
     kind: "structured",
-    ...common,
-    cli: wire.cli,
-    permMode: init.permMode,
-    model: init.model,
+    sessionId: o.sessionId,
+    cli: o.cli,
+    title: o.title ?? "未知会话",
+    status: o.status ?? "idle",
+    permMode: o.permMode ?? "auto",
+    model: o.model,
+    projectId: o.projectId ?? null,
+    cwd: o.cwd ?? null,
+    dirIdentity: o.dirIdentity ?? "none",
+    worktreeName: o.worktreeName ?? null,
+    skillConflicts: o.skillConflicts ?? [],
     modelChangePending: false,
     items: [],
     pendingApproval: null,
     lastTurnInterrupted: false,
     lastError: null,
-    skillConflicts: init.skillConflicts,
     skillConflictDismissed: false,
     resumeState: { phase: "idle" },
   };

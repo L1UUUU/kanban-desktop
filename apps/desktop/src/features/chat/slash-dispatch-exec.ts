@@ -107,8 +107,11 @@ export async function dispatchDraftSubmit(
   env: SlashDispatchEnv,
   submit: (firstMessage?: string) => Promise<boolean>,
 ): Promise<boolean> {
-  const d = env.store.getSnapshot().draft;
-  if (!d || d.input.trim().length === 0) return false;
+  const current = env.store.getSnapshot().draft;
+  // 草稿态提交为结构化草稿专属（PTY 草稿无 composer/提交链）——kind 收窄
+  if (!current || current.kind !== "structured") return false;
+  const d = current.data;
+  if (d.input.trim().length === 0) return false;
   const action = resolveSlashDispatch({ text: d.input, cli: d.cli, commands: snapshotCommands(env, d.cli, d.cwd) });
   switch (action.action) {
     case "send-text":

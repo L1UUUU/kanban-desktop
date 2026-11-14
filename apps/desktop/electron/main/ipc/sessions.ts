@@ -1,6 +1,6 @@
 // 用途：session 子通道路由表 —— session:list/archivedList/archive/unarchive/delete/create/send/interrupt/setModel/resolveApproval/readHistory/resume/rename 十三个 handler（#72 C1 Step2 自 ipc.ts route switch 原样迁入；归档/取消归档/删除编排主体在 session-lifecycle，#70 C2 唯一写者；#94 起标题派生挂 create/send 两 IPC + rename 手动主权，ADR 0003）
 import { homedir } from "node:os";
-import type { IpcRequest, IpcResult, SessionRow } from "@kanban/ipc-schema";
+import { defaultSessionTitle, type IpcRequest, type IpcResult, type SessionRow } from "@kanban/ipc-schema";
 import { AdapterError, detectSkillConflicts, resolveUserClaudeDir } from "@kanban/cli-host";
 import { detectDirIdentity } from "../git-identity";
 import type { IpcDeps } from "../ipc";
@@ -10,14 +10,6 @@ import type { SubChannelHandlers } from "./table";
 
 /** session:* 请求子集 */
 export type SessionRequest = Extract<IpcRequest, { channel: `session:${string}` }>;
-
-// CLI 显示名（新建会话默认标题「新会话 · {名}」，原型 §3.6）
-const CLI_LABELS: Record<string, string> = {
-  fake: "Fake",
-  codex: "Codex",
-  claude: "Claude",
-  opencode: "OpenCode",
-};
 
 /** DB 记录 → wire 行（cwd 存在时附带目录身份判定） */
 function toSessionRow(rec: ReturnType<IpcDeps["sessions"]["list"]>[number]): SessionRow {
@@ -101,9 +93,10 @@ export const sessionHandlers: SubChannelHandlers<SessionRequest, IpcResult, IpcD
       cli: req.cli,
     });
     // #94 / ADR 0003 决策 2：firstMessage 携带时标题随行原子派生（insert 前算好，发送失败回滚整行天然一致；
-    // 请求显式 title 仅为 renderer 草稿占位名「新会话 · {CLI}」，非用户意图命名，派生优先提供可辨识性；
-    // 派生为空（纯空白消息）回退默认标题，不落空标题）
-    let title = req.title ?? `新会话 · ${CLI_LABELS[req.cli] ?? req.cli}`;
+    // 请求显式 title 仅为 renderer 显式草稿名（boot 演示），非用户意图命名，派生优先提供可辨识性；
+    // 默认占位名经 defaultSessionTitle 单源构造（arch C8：与 renderer 草稿提示行同源）；
+    // 派生为空（纯空白消息）回退默认标题，不落空标题
+    let title = req.title ?? defaultSessionTitle(req.cli);
     let titleSource: "default" | "derived" = "default";
     if (req.firstMessage !== undefined) {
       const derived = deriveTitle(req.firstMessage);

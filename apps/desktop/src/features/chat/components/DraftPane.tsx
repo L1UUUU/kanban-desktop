@@ -1,6 +1,6 @@
 // 用途：结构化会话草稿面板（#59 / spec #57 原型演示①）—— 点「＋」后的中央区草稿态：提示行（不落库、未启 CLI）+ 首条消息 composer（权限/模型可改、输入失败保留；#77 起模型为真实目录 combobox：就绪前阻塞首条发送）+ 提交失败卡（重试=重新执行创建+发送）；#85 起上缘可拖拽调高（与会话 Composer 共享同一持久化偏好）；#90 输入框带斜杠补全菜单
 import { useState } from "react";
-import type { PermMode } from "@kanban/ipc-schema";
+import { defaultSessionTitle, type PermMode } from "@kanban/ipc-schema";
 import type { DraftSession } from "../chat-store";
 import type { ModelCatalog } from "../model-catalog";
 import type { ComposerCommandSource } from "../composer-command-source";
@@ -53,9 +53,10 @@ export function DraftPane({
 
   return (
     <section data-testid="draft-pane" className="flex min-h-0 min-w-0 flex-col bg-background">
-      {/* 草稿提示行（原型 .draft-hint）：明确「不落库、不启 CLI、发首条消息才创建会话」；替换提示为全局单草稿的明确反馈 */}
+      {/* 草稿提示行（原型 .draft-hint）：明确「不落库、不启 CLI、发首条消息才创建会话」；替换提示为全局单草稿的明确反馈；
+          占位名显示层即时派生（arch C8 标题单源：defaultSessionTitle 与 Main 入库兜底同源，草稿态不落库无需存储） */}
       <div data-testid="draft-hint" className="flex-none border-b border-warn/40 bg-warn/10 px-6 py-2 text-xs text-warn">
-        ✎ 草稿 · <b>{draft.title}</b> — 尚未保存、未启动 CLI，发出第一条消息后才创建会话
+        ✎ 草稿 · <b>{draft.title ?? defaultSessionTitle(draft.cli)}</b> — 尚未保存、未启动 CLI，发出第一条消息后才创建会话
         {draft.replacedHint ? "（已替换上一个草稿：全局仅一个）" : ""}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">

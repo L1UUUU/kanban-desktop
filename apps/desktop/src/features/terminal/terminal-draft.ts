@@ -1,4 +1,5 @@
-// 用途：PTY 终端草稿控制器（#60，spec #57）—— 点「＋」只开草稿（不落库、不进侧栏、不起进程）；草稿态输入不直写 terminal:write，首个输入触发 terminal:create（渲染端预生成终端 id + 首输入缓冲）；启动失败草稿与缓冲保留可重试；external store 模式供 useSyncExternalStore 消费
+// 用途：PTY 终端草稿机制（#60，spec #57）—— 点「＋」只开草稿（不落库、不进侧栏、不起进程）；草稿态输入不直写 terminal:write，首个输入触发 terminal:create（渲染端预生成终端 id + 首输入缓冲）；启动失败草稿与缓冲保留可重试。
+// arch C8：本类为 ChatStore 私有协作对象（草稿单属主的 PTY 机制实现细节）——生命周期写入口（open/discard）与互斥判定在 ChatStore，迟到登记经 onCreated 回流 store；对外仅快照类型被渲染面消费
 import type { IpcOk, IpcRequest, IpcResult, TerminalCommand } from "@kanban/ipc-schema";
 
 /** 草稿快照（终端面板渲染数据源；null=无草稿） */
@@ -49,7 +50,7 @@ export interface OpenDraftOptions {
   cwd: string;
   command?: TerminalCommand;
   requirementId?: string;
-  /** 替换提示单源（issue #71 S4）：openSessionDraft 判定「两类任一草稿被替换」后显式传入；缺省自算（仅本类） */
+  /** 替换提示（arch C8 单源：ChatStore 判定「两类任一草稿被替换」后显式传入；机制层不自算互斥） */
   replacedHint?: boolean;
 }
 

@@ -1,11 +1,15 @@
-// 用途：聊天会话视图 store —— ChatEvent 按合并键归并成每会话 items（不变量 3/4 的 renderer 侧），useSyncExternalStore 兼容（快照引用稳定）；#59 起承载结构化会话草稿态
-// 行数评估（~547 行，超 500 行阈值）：主体是 applyEvent 的 ChatEvent 归并 switch（各 case 独立低交织），与会话登记/CRUD、#59 草稿态共享同一快照通知骨架（changed + 引用稳定 snapshot + 订阅），拆开只复制骨架不减耦合，本次不拆；触发条件：再承载一类独立状态域（如草稿态膨胀出独立面板状态）时按域拆分（草稿独立 store）。
+// 用途：聊天会话视图 store —— ChatEvent 按合并键归并成每会话 items（不变量 3/4 的 renderer 侧），useSyncExternalStore 兼容（快照引用稳定）；
+// #59 起承载结构化会话草稿态，arch C8 起为草稿唯一属主：判别联合草稿（structured/pty）的替换、切会话/切项目丢弃、PTY 迟到登记的互斥判定全部内聚于此，
+// PTY 草稿的缓冲/在途机制（TerminalDraftController）收编为 store 私有协作对象，外部写者只有 openDraft/openPtyDraft/discardAllDrafts 一类一个入口
+// 行数评估（~640 行，超 500 行阈值）：主体是 applyEvent 的 ChatEvent 归并 switch（各 case 独立低交织），与会话登记/CRUD、草稿单属主域共享同一快照通知骨架
+// （changed + 引用稳定 snapshot + 订阅），拆开只复制骨架不减耦合，本次不拆；触发条件：草稿域膨胀出独立面板状态或事件归并需要独立演进时按域拆分。
 // issue #71 搭车：SessionView 族类型已 type-only 搬移 session-view.ts（单源），此处 re-export 保持既有 import 不变（过渡期）
 // arch C6：SessionView 为判别联合（kind=structured/pty），wire→view 转换单点在 session-view.ts（parseWireCli/sessionViewFromWire）
-import type { ChatEvent, CliKind, PermMode, SessionRow, SessionStatus } from "@kanban/ipc-schema";
-import { CLI_LABELS } from "../../lib/cli-catalog";
+import type { ChatEvent, CliKind, IpcRequest, IpcResult, PermMode, SessionRow, SessionStatus } from "@kanban/ipc-schema";
+import { createScopedLogger } from "../../lib/logger";
+import { TerminalDraftController, type OpenDraftOptions, type TerminalDraftCreated, type TerminalDraftSnapshot } from "../terminal/terminal-draft";
 import type { AssistantItem, SessionView, StructuredSessionView, ToolItem } from "./session-view";
-import { parseWireCli, sessionViewFromWire } from "./session-view";
+import { blankStructuredView, parseWireCli, sessionViewFromWire } from "./session-view";
 
 export type {
   AssistantItem,
@@ -18,6 +22,9 @@ export type {
   ToolItem,
   UserItem,
 } from "./session-view";
+
+// PTY 草稿链路日志出口（scope terminal 保持过滤语义；arch C8 随迟到登记/失败留痕一并收编进 store）
+const termLog = createScopedLogger("terminal");
 
 /** #46 会话创建失败信息（session:create 失败的错误形状：错误卡数据源；#59 起由草稿 submitError 构造） */
 export interface CreateFailure {
@@ -35,20 +42,19 @@ export interface DraftMeta {
   cli: CliKind;
   cwd: string;
   projectId?: string | null;
+  /** 显式草稿名（仅 boot 演示草稿「演示会话 · Fake」传入；缺省占位名由显示层经 defaultSessionTitle 派生，arch C8 标题单源） */
   title?: string;
   permMode?: PermMode;
   model?: string;
   /** 看板卡片进入草稿的需求关联（随首条消息落到新会话） */
   requirementId?: string;
-  /** 替换提示单源（issue #71 S4）：openSessionDraft 判定「两类任一草稿被替换」后显式传入；缺省自算（仅本类） */
-  replacedHint?: boolean;
 }
 
 /** #59 结构化会话草稿（点「＋」后的中央区草稿态：不落库、不进侧栏、不启 CLI；发出首条消息才创建会话） */
 export interface DraftSession {
   cli: CliKind;
-  /** 草稿标题（提示行显示；提交时作为会话 title 下发） */
-  title: string;
+  /** 显式草稿名（boot 演示）；undefined = 未命名，提示行占位名由显示层 defaultSessionTitle(cli) 即时派生 */
+  title: string | undefined;
   cwd: string;
   projectId: string | null;
   /** 权限档位/模型：随首条消息一并下发（model undefined = 未选择/未就绪，就绪后由 combobox 默认选中） */
@@ -61,6 +67,17 @@ export interface DraftSession {
   replacedHint: boolean;
   /** 首条消息提交失败（创建+发送原子链错误；null=无） */
   submitError: { code: string; message: string } | null;
+}
+
+/** 中央区草稿判别联合（issue #71 S4 / arch C8 单属主）：全局任一时刻至多一个，两类互相替换（ChatStore 为唯一写者） */
+export type SessionDraft = { kind: "structured"; data: DraftSession } | { kind: "pty"; data: TerminalDraftSnapshot };
+
+/** ChatStore 构造依赖（arch C8）：PTY 草稿机制的对外副作用单点注入；结构化草稿与会话归并不依赖 */
+export interface ChatStoreDeps {
+  /** IPC 出口（PTY 草稿 terminal:create 与创建成功后剩余输入补写） */
+  invoke(req: IpcRequest): Promise<IpcResult>;
+  /** 丢弃/替换 PTY 草稿时释放其 xterm 实例（TerminalManager.dispose；在途创建不取消，迟到成功仍登记） */
+  disposeTerminal(terminalId: string): void;
 }
 
 export interface SessionMeta {
@@ -82,8 +99,8 @@ export interface ChatSnapshot {
   sessions: SessionView[];
   activeId: string | null;
   version: number;
-  /** #59：当前结构化会话草稿（null=无草稿；全局仅一个） */
-  draft: DraftSession | null;
+  /** 当前草稿（判别联合，arch C8 单属主；null=无；全局仅一个） */
+  draft: SessionDraft | null;
 }
 
 let userItemSeq = 0;
@@ -91,20 +108,34 @@ let userItemSeq = 0;
 export class ChatStore {
   private sessions = new Map<string, SessionView>();
   private activeId: string | null = null;
-  /** #59：结构化会话草稿（全局仅一个；切会话/项目/重启丢弃） */
+  /** #59：结构化会话草稿（与 PTY 草稿互斥，写入口保证全局至多一个；切会话/项目/重启丢弃） */
   private draft: DraftSession | null = null;
+  /** PTY 草稿机制（arch C8 store 私有协作对象）：缓冲/在途/迟到结果机制为实现细节，外部经 store 写入口与 io 门闸触达 */
+  private readonly pty: TerminalDraftController;
   private listeners = new Set<() => void>();
   private version = 0;
   private snapshot: ChatSnapshot | null = null;
 
+  constructor(private readonly deps: ChatStoreDeps) {
+    this.pty = new TerminalDraftController({
+      invoke: (req) => this.deps.invoke(req),
+      onCreated: (ev) => this.onPtyCreated(ev),
+      onFailed: (ev) => termLog.error("终端创建失败", { terminalId: ev.terminalId, code: ev.code, message: ev.message }),
+    });
+    // 机制状态变化并入 store 快照通知（PTY 草稿数据经 ChatSnapshot.draft 单一出口）
+    this.pty.subscribe(() => this.changed());
+  }
+
   /** useSyncExternalStore 数据源：变更间引用稳定（箭头属性保证 this 绑定） */
   getSnapshot = (): ChatSnapshot => {
     if (!this.snapshot) {
+      const pty = this.pty.getSnapshot();
       this.snapshot = {
         sessions: [...this.sessions.values()],
         activeId: this.activeId,
         version: this.version,
-        draft: this.draft,
+        // 草稿判别联合派生：结构化槽与 PTY 机制互斥（写入口保证至多一个非空），此处并作单一草稿
+        draft: this.draft ? { kind: "structured", data: this.draft } : pty ? { kind: "pty", data: pty } : null,
       };
     }
     return this.snapshot;
@@ -192,8 +223,8 @@ export class ChatStore {
     if (!this.sessions.has(id)) return;
     const wasActive = this.activeId === id;
     this.activeId = id;
-    // #59：切会话丢弃草稿（不弹确认、输入不保留）——点当前激活行同样回到会话视图（草稿让位）
-    this.discardDraft();
+    // #59/#60 切会话 = 离开草稿（两类齐丢、不弹确认、输入不保留；PTY 含 xterm 释放）——arch C8 内聚于 store 单点
+    this.discardAllDrafts();
     if (!wasActive) this.changed(); // 激活变化必通知；点已激活行时仅草稿丢弃自身按需通知
   }
 
@@ -206,36 +237,75 @@ export class ChatStore {
     this.changed();
   }
 
-  /** #59：打开草稿（全局仅一个：已有草稿则替换并置 replacedHint；replacedHint 可显式传入——跨类替换由 openSessionDraft 单源判定） */
-  openDraft(meta: DraftMeta): boolean {
-    const replaced = meta.replacedHint ?? this.draft !== null;
+  /**
+   * #59 打开结构化草稿（arch C8 唯一写入口）：已有任一类草稿则替换（PTY 含 xterm 释放）并置 replacedHint
+   * （跨类替换同样提示——「全局仅一个」的用户感知）。模型继承为视图编排策略（openSessionDraftAction
+   * 计算后经 meta.model 传入），store 不做草稿内容默认值。返回被替换的草稿种类（null=无替换）。
+   */
+  openDraft(meta: DraftMeta): "structured" | "pty" | null {
+    const prev = this.getSnapshot().draft;
+    // PTY 草稿让位：释放 xterm 后丢弃（在途创建不取消，迟到成功仍登记）
+    const pty = this.pty.getSnapshot();
+    if (pty) {
+      this.deps.disposeTerminal(pty.terminalId);
+      this.pty.discard();
+    }
     this.draft = {
       cli: meta.cli,
-      title: meta.title ?? `新会话 · ${CLI_LABELS[meta.cli]}`,
+      title: meta.title,
       cwd: meta.cwd,
       projectId: meta.projectId ?? null,
       permMode: meta.permMode ?? "auto",
       model: meta.model,
       requirementId: meta.requirementId,
       input: "",
-      replacedHint: replaced,
+      replacedHint: prev !== null,
       submitError: null,
     };
     this.changed();
-    return replaced;
+    return prev?.kind ?? null;
+  }
+
+  /**
+   * #60 打开 PTY 终端草稿（arch C8 唯一写入口）：已有任一类草稿则替换（结构化静默丢弃；旧 PTY 含 xterm 释放），
+   * 缓冲/首输入创建机制见 TerminalDraftController。返回被替换的草稿种类（null=无替换）。
+   */
+  openPtyDraft(opts: Omit<OpenDraftOptions, "replacedHint">): "structured" | "pty" | null {
+    const prev = this.getSnapshot().draft;
+    // pty→pty：释放旧草稿的 xterm 实例（在途创建不取消，迟到成功仍登记）
+    const pty = this.pty.getSnapshot();
+    if (pty) this.deps.disposeTerminal(pty.terminalId);
+    // 结构化让位（静默；由 openDraft 的对向分支保证双向替换）
+    const hadStructured = this.draft !== null;
+    this.draft = null;
+    this.pty.open({ ...opts, replacedHint: prev !== null });
+    if (hadStructured) this.changed();
+    return prev?.kind ?? null;
+  }
+
+  /** 两类草稿齐丢（切会话经 setActive / 切项目 effect 单调用；不弹确认、输入不保留；PTY 含 xterm 释放，在途创建不取消） */
+  discardAllDrafts(): void {
+    const hadStructured = this.draft !== null;
+    this.draft = null;
+    const pty = this.pty.getSnapshot();
+    if (pty) {
+      this.deps.disposeTerminal(pty.terminalId);
+      this.pty.discard(); // 机制自身经订阅桥通知
+    }
+    if (hadStructured) this.changed();
+  }
+
+  /** #59：丢弃结构化草稿（提交成功后；PTY 草稿不受影响——互斥下两者不同时存在，提交在途被替换时天然 no-op） */
+  discardDraft(): void {
+    if (!this.draft) return;
+    this.draft = null;
+    this.changed();
   }
 
   /** #59：草稿本地编辑（首条消息输入/权限档位/模型） */
   updateDraft(patch: Partial<Pick<DraftSession, "input" | "permMode" | "model">>): void {
     if (!this.draft) return;
     Object.assign(this.draft, patch);
-    this.changed();
-  }
-
-  /** #59：丢弃草稿（切会话/切项目/提交成功后；输入随之消失不保留） */
-  discardDraft(): void {
-    if (!this.draft) return;
-    this.draft = null;
     this.changed();
   }
 
@@ -251,6 +321,39 @@ export class ChatStore {
     if (!this.draft?.submitError) return;
     this.draft.submitError = null;
     this.changed();
+  }
+
+  /** PTY 草稿态输入门闸（TerminalManager io.write 路由）：命中=进草稿缓冲不直写通道（首输入触发创建，失败保留缓冲） */
+  handlePtyDraftInput(terminalId: string, data: string): boolean {
+    return this.pty.handleInput(terminalId, data);
+  }
+
+  /** PTY 草稿面板尺寸记录（TerminalManager io.resize 路由；草稿无进程可 resize，创建请求携带最新尺寸） */
+  recordPtyDraftSize(terminalId: string, cols: number, rows: number): boolean {
+    return this.pty.recordSize(terminalId, cols, rows);
+  }
+
+  /** PTY 创建成功登记（含草稿已丢弃的迟到成功——Main 已落库，行仍须登记；arch C8 迟到登记单点） */
+  private onPtyCreated(ev: TerminalDraftCreated): void {
+    // #20：卡片建终端的自动关联由 Main 原子完成（session_linked 推送回流看板 store）；拒绝仅报告不阻断终端
+    if (ev.ok.linked === false)
+      termLog.error("终端创建后自动关联被拒绝", {
+        sessionId: ev.terminalId,
+        ...(ev.ok.reason ? { reason: ev.ok.reason } : {}),
+      });
+    this.registerSession({
+      sessionId: ev.terminalId,
+      cli: "pty",
+      title: ev.ok.title ?? "终端",
+      permMode: "auto",
+      // PTY 无模型概念：model 保持 undefined（issue #77 清理，不写占位串）
+      projectId: ev.opts.projectId,
+      cwd: ev.opts.cwd,
+      dirIdentity: ev.ok.dirIdentity ?? "none",
+      worktreeName: ev.ok.worktreeName ?? null,
+    });
+    // 创建在途期间到达的输入补写（首输入已由 Main 在启动成功后重放，此处保持顺序补剩余）
+    if (ev.remainder) void this.deps.invoke({ channel: "terminal:write", terminalId: ev.terminalId, data: ev.remainder });
   }
 
   /** #58/#62 移除会话行（归档/删除编排的 renderer 侧）：移除的是激活会话时切到排序中的下一条，无则上一条，全无则空态；
@@ -476,27 +579,8 @@ export class ChatStore {
   private ensureView(sessionId: string): StructuredSessionView {
     const existing = this.sessions.get(sessionId);
     if (existing?.kind === "structured") return existing;
-    const s: StructuredSessionView = {
-      kind: "structured",
-      sessionId,
-      cli: "fake",
-      title: "未知会话",
-      status: "idle",
-      permMode: "auto",
-      model: undefined, // 事件先至占位：模型未知（注册后回填，issue #77）
-      modelChangePending: false,
-      projectId: null,
-      cwd: null,
-      dirIdentity: "none",
-      worktreeName: null,
-      items: [],
-      pendingApproval: null,
-      lastTurnInterrupted: false,
-      lastError: null,
-      skillConflicts: [],
-      skillConflictDismissed: false,
-      resumeState: { phase: "idle" },
-    };
+    // 占位差异字段仅身份与「未知会话」标题，其余默认值走 blankStructuredView 单点（arch C8）
+    const s = blankStructuredView({ sessionId, cli: "fake" });
     this.sessions.set(sessionId, s);
     return s;
   }

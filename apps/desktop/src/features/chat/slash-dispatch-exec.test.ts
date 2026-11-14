@@ -2,9 +2,22 @@
 import { describe, expect, it } from "vitest";
 import type { CliKind, CommandEntry, IpcRequest, IpcResult } from "@kanban/ipc-schema";
 import type { ChatTransport } from "../../lib/kanban-api";
-import { ChatStore } from "./chat-store";
+import { ChatStore, type ChatStoreDeps } from "./chat-store";
 import { ComposerCommandSource } from "./composer-command-source";
 import { dispatchDraftSubmit, dispatchSessionSend, type SlashDispatchEnv } from "./slash-dispatch-exec";
+
+/** 最小构造依赖（本套不驱动 PTY 草稿 IPC 链路） */
+const MIN_DEPS: ChatStoreDeps = {
+  invoke: () => Promise.resolve({ ok: false, error: { code: "E_INTERNAL", message: "stub" } } satisfies IpcResult),
+  disposeTerminal: () => undefined,
+};
+
+/** 取结构化草稿数据（收窄断言辅助：快照草稿为判别联合，arch C8） */
+function structuredDraft(store: ChatStore) {
+  const d = store.getSnapshot().draft;
+  if (!d || d.kind !== "structured") throw new Error("结构化草稿不在位");
+  return d.data;
+}
 
 /** 记录调用并按通道回放结果的 fake transport */
 function makeTransport(results: Partial<Record<string, IpcResult>> = {}): ChatTransport & { calls: IpcRequest[] } {
@@ -56,7 +69,7 @@ interface EnvHarness {
 
 /** 装配执行环境：注册 codex 会话（cwd 固定）；ADR 0004 零内置后 env 仅剩 store/transport/commands */
 async function makeHarness(commands: CommandEntry[] | null): Promise<EnvHarness> {
-  const store = new ChatStore();
+  const store = new ChatStore(MIN_DEPS);
   store.registerSession({ sessionId: "s1", cli: "codex", title: "会话", permMode: "auto", cwd: "C:\\proj", projectId: "p1" });
   store.setActive("s1");
   const transport = makeTransport({
@@ -73,7 +86,7 @@ async function makeHarness(commands: CommandEntry[] | null): Promise<EnvHarness>
 
 describe("dispatchSessionSend（会话态发送编排）", () => {
   it("透传（claude 匹配/未匹配一致）：用户气泡与 session:send 载荷均为原文；返回消费", async () => {
-    const store = new ChatStore();
+    const store = new ChatStore(MIN_DEPS);
     store.registerSession({ sessionId: "s1", cli: "claude", title: "会话", permMode: "auto", cwd: "C:\\proj", projectId: "p1" });
     store.setActive("s1");
     const transport = makeTransport();
@@ -142,14 +155,14 @@ describe("dispatchDraftSubmit（草稿态提交编排）", () => {
     const before = t.submitted.length;
     expect(await dispatchDraftSubmit({ ...t.env, transport: failing }, async (m) => (t.submitted.push(m), true))).toBe(false);
     expect(t.submitted.length).toBe(before); // 原子链未触发
-    expect(t.store.getSnapshot().draft?.submitError).toMatchObject({ code: "E_INTERNAL", message: "斜杠命令文件不可读" });
-    expect(t.store.getSnapshot().draft?.input).toBe("/commit 修登录 bug"); // 输入保留
+    expect(structuredDraft(t.store).submitError).toMatchObject({ code: "E_INTERNAL", message: "斜杠命令文件不可读" });
+    expect(structuredDraft(t.store).input).toBe("/commit 修登录 bug"); // 输入保留
   });
 });
 
 describe("session:send 响应 title 消费（#94：派生标题即时刷新侧栏）", () => {
   it("响应带 title：本地回写会话标题（无需事件推送）", async () => {
-    const store = new ChatStore();
+    const store = new ChatStore(MIN_DEPS);
     store.registerSession({ sessionId: "s1", cli: "claude", title: "新会话 · Claude", permMode: "auto", cwd: "C:\\proj", projectId: "p1" });
     store.setActive("s1");
     const transport = makeTransport({ "session:send": { ok: true, title: "第一条正经消息" } });
@@ -160,7 +173,7 @@ describe("session:send 响应 title 消费（#94：派生标题即时刷新侧�
   });
 
   it("响应不带 title（已派生/manual 门控未生效）：标题保持不动", async () => {
-    const store = new ChatStore();
+    const store = new ChatStore(MIN_DEPS);
     store.registerSession({ sessionId: "s1", cli: "claude", title: "我起的名字", permMode: "auto", cwd: "C:\\proj", projectId: "p1" });
     store.setActive("s1");
     const transport = makeTransport({ "session:send": { ok: true } });

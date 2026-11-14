@@ -1,8 +1,15 @@
-// 用途：chat-store 归并器单测 —— ChatEvent 按合并键归并成会话视图（不变量 3/4 的 renderer 侧效果：无重复无丢失）
+// 用途：chat-store 归并器单测 —— ChatEvent 按合并键归并成会话视图（不变量 3/4 的 renderer 侧效果：无重复无丢失）；
+// arch C8 起另测草稿单属主（判别联合互斥、setActive/discardAllDrafts 两类齐丢、PTY 迟到登记单点）
 import { describe, expect, it } from "vitest";
-import type { ChatEvent, ChatEventSeed } from "@kanban/ipc-schema";
-import { ChatStore } from "./chat-store";
+import type { ChatEvent, ChatEventSeed, IpcRequest, IpcResult } from "@kanban/ipc-schema";
+import { ChatStore, type ChatStoreDeps } from "./chat-store";
 import type { StructuredSessionView } from "./session-view";
+
+/** 最小构造依赖（本套事件归并/结构化草稿用例不驱动 PTY 草稿 IPC 链路） */
+const MIN_DEPS: ChatStoreDeps = {
+  invoke: () => Promise.resolve({ ok: false, error: { code: "E_INTERNAL", message: "stub" } } satisfies IpcResult),
+  disposeTerminal: () => undefined,
+};
 
 /** 构造 ChatEvent 字面量（seq 递增），作为独立于实现的输入源 */
 function ev(seq: number, e: ChatEventSeed): ChatEvent {
@@ -10,7 +17,7 @@ function ev(seq: number, e: ChatEventSeed): ChatEvent {
 }
 
 function makeStore() {
-  const store = new ChatStore();
+  const store = new ChatStore(MIN_DEPS);
   store.registerSession({ sessionId: "s-1", cli: "fake", title: "演示会话", permMode: "auto" });
   return store;
 }
@@ -24,7 +31,7 @@ function structured(store: ChatStore, id: string): StructuredSessionView {
 
 describe("chat-store 恢复会话登记（#7 重启恢复）", () => {
   it("registerRestored：按 DB 行登记，状态强制 disconnected、项目/目录身份带齐", () => {
-    const store = new ChatStore();
+    const store = new ChatStore(MIN_DEPS);
     store.registerRestored({
       id: "s-old",
       kind: "structured",
@@ -51,7 +58,7 @@ describe("chat-store 恢复会话登记（#7 重启恢复）", () => {
   });
 
   it("registerSession 携带项目与目录身份（新建会话行徽标数据）", () => {
-    const store = new ChatStore();
+    const store = new ChatStore(MIN_DEPS);
     store.registerSession({
       sessionId: "s-9",
       cli: "codex",
@@ -150,7 +157,7 @@ describe("chat-store 事件归并", () => {
   });
 
   it("用户消息为 renderer 本地回显（ChatEvent 无 user 成员）；未知会话事件自动建占位会话", () => {
-    const store = new ChatStore();
+    const store = new ChatStore(MIN_DEPS);
     store.registerSession({ sessionId: "s-1", cli: "fake", title: "A", permMode: "auto" });
     store.appendUserMessage("s-1", "帮我拆类型");
     expect(structured(store, "s-1").items[0]).toMatchObject({ kind: "user", text: "帮我拆类型" });
@@ -161,7 +168,7 @@ describe("chat-store 事件归并", () => {
   });
 
   it("快照稳定性：无变更时 getSnapshot 引用不变；active 会话切换生效", () => {
-    const store = new ChatStore();
+    const store = new ChatStore(MIN_DEPS);
     store.registerSession({ sessionId: "s-1", cli: "fake", title: "A", permMode: "auto" });
     const snap1 = store.getSnapshot();
     const snap2 = store.getSnapshot();
@@ -192,7 +199,7 @@ describe("chat-store 断开会话恢复（#9：readHistory 快照 + 实时增量
 
   /** 断开会话登记（registerRestored 最小行） */
   function makeRestored(): ChatStore {
-    const store = new ChatStore();
+    const store = new ChatStore(MIN_DEPS);
     store.registerRestored({
       id: "s-1",
       kind: "structured",
@@ -255,7 +262,7 @@ describe("chat-store 断开会话恢复（#9：readHistory 快照 + 实时增量
 describe("chat-store 恢复引导三态（#42：banner 状态机 idle/resuming/failed）", () => {
   /** 断开会话登记（恢复引导条的数据源） */
   function makeDisconnected(): ChatStore {
-    const store = new ChatStore();
+    const store = new ChatStore(MIN_DEPS);
     store.registerRestored({
       id: "s-1",
       kind: "structured",
@@ -302,7 +309,7 @@ describe("chat-store 恢复引导三态（#42：banner 状态机 idle/resuming/f
   });
 
   it("未登记会话 markResuming/markResumeFailed 安全无操作", () => {
-    const store = new ChatStore();
+    const store = new ChatStore(MIN_DEPS);
     expect(() => store.markResuming("s-none")).not.toThrow();
     expect(() => store.markResumeFailed("s-none", "E_INTERNAL", "x")).not.toThrow();
   });
@@ -352,13 +359,20 @@ describe("chat-store 会话内错误清除（#46）", () => {
 describe("chat-store 草稿生命周期（#59：点「＋」只开草稿不落库；单草稿；失败保留；切走即丢）", () => {
   const META = { cli: "claude" as const, cwd: "C:\\repo", projectId: "p-1" };
 
-  it("openDraft：草稿就位（不进 sessions、不改 activeId）+ 标题缺省归一「新会话 · CLI 名」", () => {
+  /** 取结构化草稿数据（收窄断言辅助：快照草稿为判别联合，arch C8） */
+  function structuredDraft(store: ChatStore) {
+    const d = store.getSnapshot().draft;
+    if (!d || d.kind !== "structured") throw new Error("结构化草稿不在位");
+    return d.data;
+  }
+
+  it("openDraft：草稿就位（不进 sessions、不改 activeId；占位名不在状态层构造——显示层 defaultSessionTitle 派生，arch C8）", () => {
     const store = makeStore();
     const before = store.getSnapshot().sessions.length;
     const replaced = store.openDraft(META);
-    expect(replaced).toBe(false);
-    const d = store.getSnapshot().draft;
-    expect(d).toMatchObject({ cli: "claude", cwd: "C:\\repo", projectId: "p-1", title: "新会话 · Claude", input: "", submitError: null });
+    expect(replaced).toBe(null);
+    const d = structuredDraft(store);
+    expect(d).toMatchObject({ cli: "claude", cwd: "C:\\repo", projectId: "p-1", title: undefined, input: "", submitError: null });
     // 不落库不进列表：sessions 不变、activeId 保持原会话
     expect(store.getSnapshot().sessions).toHaveLength(before);
     expect(store.getSnapshot().activeId).toBe("s-1");
@@ -369,8 +383,8 @@ describe("chat-store 草稿生命周期（#59：点「＋」只开草稿不落�
     store.openDraft(META);
     store.updateDraft({ input: "没发出去的话" });
     const replaced = store.openDraft({ cli: "codex", cwd: "C:\\repo2", projectId: null });
-    expect(replaced).toBe(true);
-    const d = store.getSnapshot().draft;
+    expect(replaced).toBe("structured");
+    const d = structuredDraft(store);
     expect(d).toMatchObject({ cli: "codex", cwd: "C:\\repo2", projectId: null, replacedHint: true, input: "" });
   });
 
@@ -393,7 +407,7 @@ describe("chat-store 草稿生命周期（#59：点「＋」只开草稿不落�
     const store = makeStore();
     store.openDraft(META);
     store.updateDraft({ input: "首条消息草稿", permMode: "ask", model: "gpt-5.6-luna" });
-    expect(store.getSnapshot().draft).toMatchObject({ input: "首条消息草稿", permMode: "ask", model: "gpt-5.6-luna" });
+    expect(structuredDraft(store)).toMatchObject({ input: "首条消息草稿", permMode: "ask", model: "gpt-5.6-luna" });
   });
 
   it("提交失败：setDraftSubmitError 记录错误且草稿与输入保留；clearDraftSubmitError 清除", () => {
@@ -401,18 +415,140 @@ describe("chat-store 草稿生命周期（#59：点「＋」只开草稿不落�
     store.openDraft(META);
     store.updateDraft({ input: "要重试的首条" });
     store.setDraftSubmitError("E_SPAWN_NOT_FOUND", "未找到 claude 可执行文件");
-    const d = store.getSnapshot().draft;
-    expect(d?.submitError).toMatchObject({ code: "E_SPAWN_NOT_FOUND", message: "未找到 claude 可执行文件" });
-    expect(d?.input).toBe("要重试的首条"); // 失败保留输入
+    const d = structuredDraft(store);
+    expect(d.submitError).toMatchObject({ code: "E_SPAWN_NOT_FOUND", message: "未找到 claude 可执行文件" });
+    expect(d.input).toBe("要重试的首条"); // 失败保留输入
     expect(store.getSnapshot().sessions).toHaveLength(1); // 无空会话行
     store.clearDraftSubmitError();
-    expect(store.getSnapshot().draft?.submitError).toBeNull();
+    expect(structuredDraft(store).submitError).toBeNull();
   });
 
   it("requirementId 随草稿携带（看板卡片进入草稿：随首条消息落到新会话的数据源）", () => {
     const store = makeStore();
     store.openDraft({ ...META, requirementId: "REQ-001" });
-    expect(store.getSnapshot().draft?.requirementId).toBe("REQ-001");
+    expect(structuredDraft(store).requirementId).toBe("REQ-001");
+  });
+});
+
+// ========== arch C8 草稿单属主（判别联合互斥 / 两类齐丢 / PTY 机制内聚与迟到登记） ==========
+describe("chat-store 草稿单属主（arch C8：替换/丢弃/迟到登记互斥判定单点）", () => {
+  /** PTY 链路可编程依赖：记录 invoke 与 xterm 释放，terminal:create 应答可注入（缺省成功） */
+  function makePtyDeps(replies: Array<IpcResult | Promise<IpcResult>> = []) {
+    const invokes: IpcRequest[] = [];
+    const disposed: string[] = [];
+    let seq = 0;
+    const deps: ChatStoreDeps = {
+      invoke: (req) => {
+        invokes.push(req);
+        const r = replies[seq++];
+        return Promise.resolve(r ?? { ok: true, sessionId: "sid", cli: "pty", title: "终端 · pwsh" });
+      },
+      disposeTerminal: (terminalId) => disposed.push(terminalId),
+    };
+    return { deps, invokes, disposed };
+  }
+
+  /** 冲刷微任务链（terminal:create 应答落定；ms>0 用于迟到应答） */
+  const flush = (ms = 0) => new Promise((r) => setTimeout(r, ms));
+
+  /** 取 PTY 草稿快照（收窄断言辅助） */
+  function ptyDraft(store: ChatStore) {
+    const d = store.getSnapshot().draft;
+    if (!d || d.kind !== "pty") throw new Error("PTY 草稿不在位");
+    return d.data;
+  }
+
+  const PTY_OPTS = { projectId: null, cwd: "C:\\repo" };
+
+  it("structured↔pty 双向替换：被替方丢弃且 replacedHint 置位；PTY 被替换时 xterm 释放", () => {
+    const { deps, disposed } = makePtyDeps();
+    const store = new ChatStore(deps);
+    expect(store.openPtyDraft(PTY_OPTS)).toBe(null); // 首开无替换
+    expect(ptyDraft(store).replacedHint).toBe(false);
+    expect(store.openDraft({ cli: "claude", cwd: "C:\\repo" })).toBe("pty"); // PTY → 结构化
+    const d = store.getSnapshot().draft;
+    expect(d?.kind).toBe("structured");
+    if (d?.kind !== "structured") throw new Error("结构化草稿不在位");
+    expect(d.data.replacedHint).toBe(true);
+    expect(disposed).toHaveLength(1); // PTY 草稿的 xterm 释放
+    expect(store.openPtyDraft(PTY_OPTS)).toBe("structured"); // 结构化 → PTY（#65 反向替换）
+    expect(ptyDraft(store).replacedHint).toBe(true);
+  });
+
+  it("pty→pty 同类替换：新终端 id 且旧 xterm 释放，replacedHint=true", () => {
+    const { deps, disposed } = makePtyDeps();
+    const store = new ChatStore(deps);
+    store.openPtyDraft(PTY_OPTS);
+    const first = ptyDraft(store).terminalId;
+    expect(store.openPtyDraft({ projectId: null, cwd: "C:\\new" })).toBe("pty");
+    const second = ptyDraft(store);
+    expect(second.terminalId).not.toBe(first);
+    expect(second.cwd).toBe("C:\\new");
+    expect(second.replacedHint).toBe(true);
+    expect(disposed).toEqual([first]);
+  });
+
+  it("setActive 切会话 = 离开草稿：两类齐丢（PTY 含 xterm 释放）并激活目标", () => {
+    const { deps, disposed } = makePtyDeps();
+    const store = new ChatStore(deps);
+    store.registerSession({ sessionId: "s-a", cli: "claude", title: "A", permMode: "auto" });
+    store.openPtyDraft(PTY_OPTS);
+    const id = ptyDraft(store).terminalId;
+    store.setActive("s-a");
+    expect(store.getSnapshot().draft).toBeNull();
+    expect(store.getSnapshot().activeId).toBe("s-a");
+    expect(disposed).toEqual([id]);
+    store.openDraft({ cli: "claude", cwd: "C:\\repo" });
+    store.setActive("s-a"); // 再切：结构化同样被丢
+    expect(store.getSnapshot().draft).toBeNull();
+  });
+
+  it("discardAllDrafts 两类齐丢（切项目 effect 单调用；PTY 含 xterm 释放）", () => {
+    const { deps, disposed } = makePtyDeps();
+    const store = new ChatStore(deps);
+    store.openDraft({ cli: "claude", cwd: "C:\\repo" });
+    store.discardAllDrafts();
+    expect(store.getSnapshot().draft).toBeNull();
+    store.openPtyDraft(PTY_OPTS);
+    const id = ptyDraft(store).terminalId;
+    store.discardAllDrafts();
+    expect(store.getSnapshot().draft).toBeNull();
+    expect(disposed).toEqual([id]);
+  });
+
+  it("PTY 首输入经门闸触发创建（不直写通道）；成功后登记会话行并补写在途剩余输入", async () => {
+    const { deps, invokes } = makePtyDeps();
+    const store = new ChatStore(deps);
+    store.openPtyDraft(PTY_OPTS);
+    const id = ptyDraft(store).terminalId;
+    expect(store.handlePtyDraftInput(id, "a")).toBe(true); // 首输入 → terminal:create
+    store.handlePtyDraftInput(id, "b"); // 创建在途的输入进缓冲
+    expect(store.handlePtyDraftInput("ghost", "x")).toBe(false); // 非草稿 id 不拦截（调用方直写通道）
+    const create = invokes.find((r) => r.channel === "terminal:create");
+    expect(create).toMatchObject({ terminalId: id, firstInput: "a" });
+    await flush();
+    // 成功：会话行登记（pty 行 + 激活）、草稿清空、剩余输入经 terminal:write 补写
+    expect(store.getSession(id)).toMatchObject({ kind: "pty", title: "终端 · pwsh" });
+    expect(store.getSnapshot().activeId).toBe(id);
+    expect(store.getSnapshot().draft).toBeNull();
+    expect(
+      invokes.filter((r) => r.channel === "terminal:write").map((r) => (r.channel === "terminal:write" ? r.data : "")),
+    ).toEqual(["b"]);
+  });
+
+  it("丢弃后迟到的创建成功仍登记会话行（不复活草稿、不干扰后续草稿）", async () => {
+    const { deps } = makePtyDeps([
+      new Promise<IpcResult>((r) => setTimeout(() => r({ ok: true, sessionId: "sid", cli: "pty", title: "终端 · pwsh" }), 10)),
+    ]);
+    const store = new ChatStore(deps);
+    store.openPtyDraft(PTY_OPTS);
+    const id = ptyDraft(store).terminalId;
+    store.handlePtyDraftInput(id, "a");
+    store.discardAllDrafts(); // 草稿丢弃，创建在途不取消
+    store.openDraft({ cli: "claude", cwd: "C:\\repo" }); // 用户已开新草稿
+    await flush(20);
+    expect(store.getSession(id)).toMatchObject({ kind: "pty" }); // Main 已落库，行仍登记
+    expect(store.getSnapshot().draft?.kind).toBe("structured"); // 新草稿不被迟到结果打扰
   });
 });
 
@@ -423,7 +559,7 @@ describe("removeSession（#58）", () => {
   }
 
   it("移除行；激活会话被移除时切到下一条，无则上一条，全无则空态", () => {
-    const store = new ChatStore();
+    const store = new ChatStore(MIN_DEPS);
     reg(store, "s-1");
     reg(store, "s-2");
     reg(store, "s-3");
@@ -442,7 +578,7 @@ describe("removeSession（#58）", () => {
   });
 
   it("移除非激活会话不动激活；未知 id no-op", () => {
-    const store = new ChatStore();
+    const store = new ChatStore(MIN_DEPS);
     reg(store, "s-1");
     reg(store, "s-2");
     store.setActive("s-2");
@@ -455,7 +591,7 @@ describe("removeSession（#58）", () => {
 
 describe("chat-store updateSession 扩 title（#94 / ADR 0003：派生/重命名标题的本地刷新出口）", () => {
   it("patch 携带 title 即更新会话行标题；未知 id no-op", () => {
-    const store = new ChatStore();
+    const store = new ChatStore(MIN_DEPS);
     store.registerSession({ sessionId: "s-1", cli: "claude", title: "默认演示", permMode: "auto" });
     store.updateSession("s-1", { title: "我起的名字" });
     expect(store.getSession("s-1")?.title).toBe("我起的名字");
