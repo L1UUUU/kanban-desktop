@@ -2,7 +2,7 @@
 import type { IpcRequest, IpcResult } from "@kanban/ipc-schema";
 import { formatRequirementId, type TrackerEngine } from "@kanban/tracker";
 import type { IpcDeps } from "../ipc";
-import { guiEvent, processAndEmit, processLink, TRACKER_CLI_BY_APP } from "./helpers";
+import { guiEvent, linkRejectionMessage, processAndEmit, processLink, TRACKER_CLI_BY_APP } from "./helpers";
 import type { SubChannelHandlers } from "./table";
 
 /** kanban:* 请求子集 */
@@ -61,30 +61,19 @@ export const kanbanBoardHandlers: SubChannelHandlers<KanbanBoardRequest, IpcResu
     return { ok: true };
   },
   "kanban:link": async (req, deps) => {
-    // 业务拒绝（已关联他卡/跨项目/无项目会话）是合法结果：linked=false + reason，不走错误码（spec #15 C 节）
-    const r = deps.engine.tracker.req(req.requirementId);
-    if (!r) return requirementNotFound(req.requirementId);
+    // 业务拒绝（已关联他卡/跨项目/无项目会话）是合法结果：linked=false + reason，不走错误码（spec #15 C 节）；
+    // arch D1：三条规则判定收进 tracker.linkVerdict 单源（与创建后原子关联共用同一判定），handler 只做存在性校验与转发
     const session = deps.sessions.get(req.sessionId);
+    const verdict = deps.engine.tracker.linkVerdict(req.sessionId, req.requirementId, session?.projectId ?? null);
+    if (verdict.outcome === "rejected" && verdict.reason.kind === "requirement_absent") return requirementNotFound(req.requirementId);
     if (!session) {
       return { ok: false, error: { code: "E_SESSION_NOT_FOUND", message: `会话不存在：${req.sessionId}` } };
     }
-    const existing = deps.engine.tracker.sessionToReq.get(req.sessionId);
-    if (existing === req.requirementId) return { ok: true, linked: true }; // 幂等：已关联同一需求
-    if (existing) return { ok: true, linked: false, reason: `会话已关联需求 ${existing}，请先解除关联` };
-    if (session.projectId == null) {
-      return { ok: true, linked: false, reason: "会话未归属项目，无法关联需求（请先在项目中创建会话）" };
-    }
-    if (session.projectId !== r.projectId) {
-      return {
-        ok: true,
-        linked: false,
-        reason: `跨项目关联被拒绝：会话属项目 ${session.projectId}，需求属项目 ${r.projectId}`,
-      };
-    }
-    const changes = processLink(deps, req.sessionId, req.requirementId, session.projectId, TRACKER_CLI_BY_APP[session.cli] ?? "claude-code");
-    if (changes.some((c) => c.type === "session_linked")) return { ok: true, linked: true };
-    // 预检通过但状态机拒绝（并发态漂移，理论不至）：仍按业务拒绝返回原因
-    return { ok: true, linked: false, reason: "关联被拒绝（会话或需求状态已变化，请刷新看板重试）" };
+    if (verdict.outcome === "rejected") return { ok: true, linked: false, reason: linkRejectionMessage(verdict.reason) };
+    if (verdict.outcome === "idempotent") return { ok: true, linked: true }; // 幂等：已关联同一需求
+    const changes = processLink(deps, req.sessionId, req.requirementId, verdict.projectId, TRACKER_CLI_BY_APP[session.cli] ?? "claude-code");
+    // 判定与 onLink 兜底共用同一规则，proceed 后必产生 session_linked；some 仅防御 eventId 同毫秒碰撞被幂等忽略
+    return changes.some((c) => c.type === "session_linked") ? { ok: true, linked: true } : { ok: true, linked: false, reason: "关联被拒绝（会话或需求状态已变化，请刷新看板重试）" };
   },
   "kanban:unlink": async (req, deps) => {
     const session = deps.sessions.get(req.sessionId);

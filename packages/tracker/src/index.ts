@@ -20,6 +20,8 @@ export {
   parseRequirementId,
   transformHookEvents,
   type DecisionLogEntry,
+  type LinkRejectionReason,
+  type LinkVerdict,
   type RequirementSnapshot,
   type RequirementState,
   type StageBasis,

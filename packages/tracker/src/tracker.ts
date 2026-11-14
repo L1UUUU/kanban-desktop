@@ -1,4 +1,4 @@
-// 用途：多 CLI Requirement Tracker 状态机（演进自 poc-4 tracker.mjs，规则基线 poc-2；#16 起 spec #15 B 节演进：create/rename/delete、需求归属 projectId、sessionProject 记忆、跨项目 link 拒绝、墓碑）—— 纯内存，持久化由 engine 负责
+// 用途：多 CLI Requirement Tracker 状态机（演进自 poc-4 tracker.mjs，规则基线 poc-2；#16 起 spec #15 B 节演进：create/rename/delete、需求归属 projectId、sessionProject 记忆、跨项目 link 拒绝、墓碑；arch D1 起 link 拒绝策略经 linkVerdict 单源判定，onLink 兜底与 IPC 前置查询共用同一规则）—— 纯内存，持久化由 engine 负责
 import { EVIDENCE_EFFECT, SKILL_STAGE, type Cli, type EvidenceLevel, type NormalizedEvent, type Stage } from "./schema";
 
 /** 阶段依据：skill 事件（实际发生时间）或用户手动修正 */
@@ -42,6 +42,33 @@ export interface RequirementSnapshot {
 export interface DecisionLogEntry {
   decision: string;
   [key: string]: unknown;
+}
+
+/** link 拒绝原因（arch D1 判别联合）：tracker 单源判定的结构化结果，IPC 层据此派生用户可读文案，不再各自重建规则 */
+export type LinkRejectionReason =
+  | { kind: "requirement_absent"; requirementId: string }
+  | { kind: "session_conflict"; sessionId: string; requirementId: string; currentRequirementId: string }
+  | { kind: "session_unprojected"; sessionId: string; requirementId: string }
+  | { kind: "project_mismatch"; sessionId: string; requirementId: string; sessionProjectId: string; requirementProjectId: string | null };
+
+/** link 前置判定结果：proceed=可落 link 事件（projectId=通过校验的会话项目）；idempotent=已关联同一需求（免落事件）；rejected=结构化拒绝原因 */
+export type LinkVerdict =
+  | { outcome: "proceed"; projectId: string }
+  | { outcome: "idempotent" }
+  | { outcome: "rejected"; reason: LinkRejectionReason };
+
+/** 拒绝原因 → decision log 行（arch D1：字段名保持既有审计口径 currentRequirement/requested/sessionProject/requirementProject） */
+function linkRejectionLog(reason: LinkRejectionReason): DecisionLogEntry {
+  switch (reason.kind) {
+    case "requirement_absent":
+      return { decision: "link_no_requirement", requirementId: reason.requirementId };
+    case "session_conflict":
+      return { decision: "link_conflict_rejected", sessionId: reason.sessionId, currentRequirement: reason.currentRequirementId, requested: reason.requirementId };
+    case "session_unprojected":
+      return { decision: "link_unprojected_rejected", sessionId: reason.sessionId, requirementId: reason.requirementId };
+    case "project_mismatch":
+      return { decision: "link_project_mismatch", sessionId: reason.sessionId, requirementId: reason.requirementId, sessionProject: reason.sessionProjectId, requirementProject: reason.requirementProjectId };
+  }
 }
 
 function parseTs(ts: string | null): number | null {
@@ -214,34 +241,38 @@ export class RequirementTracker {
     return changes;
   }
 
+  /** link 规则单源判定（arch D1）：需求存在 / 会话未关联他卡 / 会话有项目 / 项目一致 → proceed；只读查询不改状态不落日志。
+   *  sessionProjectId 传会话项目（IPC 侧为 sessions 表权威值；事件路径为 sessionProjectOf 口径）；onLink 兜底拦截与 IPC
+   *  两个入口（kanban:link、创建后原子关联）共用本判定，拒绝原因类型化供调用方派生文案 */
+  linkVerdict(sessionId: string, requirementId: string, sessionProjectId: string | null): LinkVerdict {
+    const r = this.requirements.get(requirementId);
+    if (!r) return { outcome: "rejected", reason: { kind: "requirement_absent", requirementId } };
+    const existing = this.sessionToReq.get(sessionId);
+    if (existing === requirementId) return { outcome: "idempotent" };
+    if (existing) {
+      return { outcome: "rejected", reason: { kind: "session_conflict", sessionId, requirementId, currentRequirementId: existing } };
+    }
+    if (sessionProjectId === null) return { outcome: "rejected", reason: { kind: "session_unprojected", sessionId, requirementId } };
+    if (sessionProjectId !== r.projectId) {
+      return { outcome: "rejected", reason: { kind: "project_mismatch", sessionId, requirementId, sessionProjectId, requirementProjectId: r.projectId } };
+    }
+    return { outcome: "proceed", projectId: sessionProjectId };
+  }
+
   private onLink(ev: NormalizedEvent): TrackerChange[] {
     // 规则 §3/§4：关联 session 到需求；同一 session 同一时刻最多归属一个需求；阶段按已见 skill 事件的「实际发生时间」同步
     const changes: TrackerChange[] = [];
-    const r = this.req(ev.requirementId!);
-    if (!r) {
-      this.log.push({ decision: "link_no_requirement", requirementId: ev.requirementId });
+    // arch D1：拒绝/幂等判定走 linkVerdict 单源（与 IPC 前置查询同一规则）；拒绝原因仍落 decision log 供审计
+    const verdict = this.linkVerdict(ev.sessionId!, ev.requirementId!, this.sessionProjectOf(ev));
+    if (verdict.outcome === "rejected") {
+      this.log.push(linkRejectionLog(verdict.reason));
       return changes;
     }
-    const existing = this.sessionToReq.get(ev.sessionId!);
-    if (existing === ev.requirementId) {
+    if (verdict.outcome === "idempotent") {
       this.log.push({ decision: "link_already_associated", sessionId: ev.sessionId, requirementId: ev.requirementId });
       return changes;
     }
-    if (existing) {
-      // 一个 session 同一时刻最多归属一个需求（§3）
-      this.log.push({ decision: "link_conflict_rejected", sessionId: ev.sessionId, currentRequirement: existing, requested: ev.requirementId });
-      return changes;
-    }
-    // #16（S2-08）：项目归属校验——会话无项目拒绝；跨项目拒绝（原因进决策日志供 IPC 透出）
-    const sessionProject = this.sessionProjectOf(ev);
-    if (sessionProject === null) {
-      this.log.push({ decision: "link_unprojected_rejected", sessionId: ev.sessionId, requirementId: ev.requirementId });
-      return changes;
-    }
-    if (sessionProject !== r.projectId) {
-      this.log.push({ decision: "link_project_mismatch", sessionId: ev.sessionId, requirementId: ev.requirementId, sessionProject, requirementProject: r.projectId });
-      return changes;
-    }
+    const r = this.req(ev.requirementId!)!; // verdict=proceed 已保证需求存在（类型收窄守卫）
     r.sessions.add(ev.sessionId!);
     this.sessionToReq.set(ev.sessionId!, r.id);
     changes.push({ type: "session_linked", requirementId: r.id, sessionId: ev.sessionId! });

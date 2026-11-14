@@ -1,4 +1,4 @@
-// 用途：#16（spec #15 B 节）状态机演进单测 —— 手动 create/rename/delete、需求归属 projectId（sessionProject 记忆/无项目不建卡/跨项目 link 拒绝）、manual none 归一、uncertain 确认与转正
+// 用途：#16（spec #15 B 节）状态机演进单测 —— 手动 create/rename/delete、需求归属 projectId（sessionProject 记忆/无项目不建卡/跨项目 link 拒绝）、manual none 归一、uncertain 确认与转正；arch D1 起 link 规则单源判定 linkVerdict 在此覆盖
 import { describe, expect, it } from "vitest";
 import { validateEvent } from "./schema";
 import { RequirementTracker } from "./tracker";
@@ -125,6 +125,61 @@ describe("S2-需求归属项目", () => {
     const chPty = tr.process(mkLink("s-pty", "REQ-001", T.t3, "pty", "p-1"));
     expect(chPty.some((c) => c.type === "session_linked"), "pty 终端会话可关联（S2-12）").toBe(true);
     expect(tr.sessionCli.get("s-pty")).toBe("pty");
+  });
+});
+
+// ========== link 规则单源判定（arch D1：IPC 前置查询） ==========
+describe("linkVerdict（arch D1 单源判定）", () => {
+  it("同项目 → proceed 并回传会话项目；判定只读——不落 decision log、不建立关联", () => {
+    const tr = new RequirementTracker();
+    tr.process(mkSkill({ sessionId: "cs-1", skill: "design-feature", at: T.t1, projectId: "p-1" })); // REQ-001
+    const logLen = tr.log.length;
+    expect(tr.linkVerdict("cx-1", "REQ-001", "p-1")).toEqual({ outcome: "proceed", projectId: "p-1" });
+    expect(tr.log.length).toBe(logLen);
+    expect(tr.sessionToReq.has("cx-1")).toBe(false);
+  });
+
+  it("已关联同一需求 → idempotent；已关联他卡 → session_conflict（携带当前归属）", () => {
+    const tr = new RequirementTracker();
+    tr.process(mkSkill({ sessionId: "cs-1", skill: "design-feature", at: T.t1, projectId: "p-1" })); // REQ-001
+    tr.process(mkLink("cx-1", "REQ-001", T.t2, "codex", "p-1"));
+    tr.process(mkCreate("REQ-002", "p-1", T.t3, "他卡"));
+    expect(tr.linkVerdict("cx-1", "REQ-001", "p-1")).toEqual({ outcome: "idempotent" });
+    expect(tr.linkVerdict("cx-1", "REQ-002", "p-1")).toEqual({
+      outcome: "rejected",
+      reason: { kind: "session_conflict", sessionId: "cx-1", requirementId: "REQ-002", currentRequirementId: "REQ-001" },
+    });
+  });
+
+  it("需求不存在 / 会话无项目 / 跨项目 → 对应结构化拒绝原因", () => {
+    const tr = new RequirementTracker();
+    tr.process(mkSkill({ sessionId: "cs-1", skill: "design-feature", at: T.t1, projectId: "p-1" })); // REQ-001
+    expect(tr.linkVerdict("cx-1", "REQ-404", "p-1")).toEqual({
+      outcome: "rejected",
+      reason: { kind: "requirement_absent", requirementId: "REQ-404" },
+    });
+    expect(tr.linkVerdict("cx-1", "REQ-001", null)).toEqual({
+      outcome: "rejected",
+      reason: { kind: "session_unprojected", sessionId: "cx-1", requirementId: "REQ-001" },
+    });
+    expect(tr.linkVerdict("cx-1", "REQ-001", "p-2")).toEqual({
+      outcome: "rejected",
+      reason: { kind: "project_mismatch", sessionId: "cx-1", requirementId: "REQ-001", sessionProjectId: "p-2", requirementProjectId: "p-1" },
+    });
+  });
+
+  it("判定与 onLink 兜底同规则：proceed 的 link 事件必关联，跨项目事件直进状态机仍被拒且决策日志保留", () => {
+    const tr = new RequirementTracker();
+    tr.process(mkSkill({ sessionId: "cs-1", skill: "design-feature", at: T.t1, projectId: "p-1" })); // REQ-001
+    const verdict = tr.linkVerdict("cx-1", "REQ-001", "p-1");
+    if (verdict.outcome !== "proceed") throw new Error("同项目应放行");
+    const ch = tr.process(mkLink("cx-1", "REQ-001", T.t2, "codex", verdict.projectId));
+    expect(ch.some((c) => c.type === "session_linked")).toBe(true);
+    tr.process(mkCreate("REQ-002", "p-1", T.t3, "同项目他卡"));
+    const chReject = tr.process(mkLink("cx-9", "REQ-002", T.t4, "codex", "p-2")); // cx-9 属 p-2，直进状态机仍拦
+    expect(chReject).toEqual([]);
+    const entry = tr.log.find((l) => l.decision === "link_project_mismatch");
+    expect(entry).toMatchObject({ sessionId: "cx-9", requirementId: "REQ-002", sessionProject: "p-2", requirementProject: "p-1" });
   });
 });
 

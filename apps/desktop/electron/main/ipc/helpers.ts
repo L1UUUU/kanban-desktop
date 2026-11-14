@@ -1,5 +1,5 @@
-// 用途：kanban:ipc 子通道 handler 跨 feature 共享辅助 —— CLI 口径映射 / GUI 事件工厂 / 事件流落库与推送 / 创建后原子关联 / 会话行目录身份投影（#72 C1 Step2 自 ipc.ts 原样迁入；会话编排主体在 session-lifecycle，#70 C2；arch C12 起目录身份 wire 形状单点在此）
-import { type Cli, type NormalizedEvent, type TrackerChange } from "@kanban/tracker";
+// 用途：kanban:ipc 子通道 handler 跨 feature 共享辅助 —— CLI 口径映射 / GUI 事件工厂 / 事件流落库与推送 / 创建后原子关联 / 会话行目录身份投影（#72 C1 Step2 自 ipc.ts 原样迁入；会话编排主体在 session-lifecycle，#70 C2；arch C12 起目录身份 wire 形状单点、arch D1 起 link 拒绝文案单点在此）
+import { type Cli, type LinkRejectionReason, type NormalizedEvent, type TrackerChange } from "@kanban/tracker";
 import type { SessionRow } from "@kanban/ipc-schema";
 import type { IpcDeps } from "../ipc";
 import { detectDirIdentity } from "../git-identity";
@@ -54,7 +54,21 @@ export function guiEvent(
   };
 }
 
-/** 创建会话后的原子关联（session:create / terminal:create + requirementId 共用）：需求须存在且与会话同项目；
+/** link 拒绝文案单源（arch D1）：tracker 结构化拒绝原因 → 用户可读中文；kanban:link 与创建后原子关联共用（替代两处逐字手抄） */
+export function linkRejectionMessage(reason: LinkRejectionReason): string {
+  switch (reason.kind) {
+    case "requirement_absent":
+      return `需求不存在：${reason.requirementId}`;
+    case "session_conflict":
+      return `会话已关联需求 ${reason.currentRequirementId}，请先解除关联`;
+    case "session_unprojected":
+      return "会话未归属项目，无法关联需求（请先在项目中创建会话）";
+    case "project_mismatch":
+      return `跨项目关联被拒绝：会话属项目 ${reason.sessionProjectId}，需求属项目 ${reason.requirementProjectId}`;
+  }
+}
+
+/** 创建会话后的原子关联（session:create / terminal:create + requirementId 共用）：规则判定经 tracker.linkVerdict 单源（arch D1）；
  *  业务拒绝是合法结果——返回 {linked:false, reason} 直达调用方，不落 link 事件 */
 export function linkAfterCreate(
   deps: IpcDeps,
@@ -63,14 +77,10 @@ export function linkAfterCreate(
   projectId: string | null,
   cli: Cli,
 ): { linked: boolean; reason?: string } {
-  const r = deps.engine.tracker.req(requirementId);
-  if (!r) return { linked: false, reason: `需求不存在：${requirementId}` };
-  if (!projectId) return { linked: false, reason: "会话未归属项目，无法关联需求（请先在项目中创建会话）" };
-  if (r.projectId !== projectId) {
-    return { linked: false, reason: `跨项目关联被拒绝：会话属项目 ${projectId}，需求属项目 ${r.projectId}` };
-  }
-  processLink(deps, sessionId, requirementId, projectId, cli);
-  return { linked: true };
+  const verdict = deps.engine.tracker.linkVerdict(sessionId, requirementId, projectId);
+  if (verdict.outcome === "rejected") return { linked: false, reason: linkRejectionMessage(verdict.reason) };
+  if (verdict.outcome === "proceed") processLink(deps, sessionId, requirementId, verdict.projectId, cli);
+  return { linked: true }; // proceed 落链成功；idempotent（新建会话理论不至）免落事件直接视为已关联
 }
 
 /** 构造 link 事件经 engine 落事件流并推送变更（kanban:link 与 session:create/terminal:create+requirementId 共用原子路径） */
