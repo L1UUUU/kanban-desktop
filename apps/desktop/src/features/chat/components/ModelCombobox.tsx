@@ -1,13 +1,17 @@
 // 用途：模型选择 combobox（issue #77 / spec #75，替代旧 ModelSelect 硬编码下拉）—— 输入框 + 自定义下拉（形态对齐权限 chip）：就绪（isDefault 项带「默认」角标）/ 过滤（displayName·id 不分大小写）/ 加载中（只读提示）/ 拉取失败（原因行 + 手输 id 兜底）四状态；挂载即经模型目录预取；原型 docs/prototypes/model-combobox.prototype.html 五状态为一致项
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import type { CliKind } from "@kanban/ipc-schema";
-import { findDefaultModel, type ModelCatalog, type ModelsState } from "../model-catalog";
+import { findDefaultModel, MODELS_IDLE, type ModelCatalog, type ModelsState } from "../model-catalog";
 import { useClosableOverlay } from "./use-closable-overlay";
 
 /** 目录状态订阅 + 挂载预取（草稿面板与已建会话 composer 挂载即拉取；StrictMode 双挂载经目录 in-flight 去重只发一次） */
 export function useModelsState(catalog: ModelCatalog, cli: CliKind, cwd: string | null): ModelsState {
-  const subscribe = useCallback((listener: () => void) => catalog.subscribe(cli, listener), [catalog, cli]);
-  const getSnapshot = useCallback(() => catalog.getState(cli), [catalog, cli]);
+  // cwd null（事件先至占位会话过渡态）：不订阅不预取恒 idle——键含 cwd，无 cwd 无从取该项目的目录（与 use-slash-menu null 门控同款）
+  const subscribe = useCallback(
+    (listener: () => void) => (cwd ? catalog.subscribe(cli, cwd, listener) : () => undefined),
+    [catalog, cli, cwd],
+  );
+  const getSnapshot = useCallback(() => (cwd ? catalog.getState(cli, cwd) : MODELS_IDLE), [catalog, cli, cwd]);
   const state = useSyncExternalStore(subscribe, getSnapshot);
   useEffect(() => {
     if (cwd) catalog.prefetch(cli, cwd);
